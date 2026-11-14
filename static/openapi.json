@@ -1,0 +1,2120 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Proxmate API",
+    "version": "0.4.0",
+    "description": "Single-admin LAN API. Configuration writes are immediate; infrastructure actions run in a serialized durable queue. Guest management requires reviewing a frozen plan, then confirming its ID. No automatic retries or rollback."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "linux-template": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "vmid",
+          "name",
+          "storage",
+          "bridge"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "linux-template"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9000,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "name": {
+            "type": "string",
+            "example": "ubuntu-template"
+          },
+          "storage": {
+            "type": "string",
+            "example": "local-lvm"
+          },
+          "bridge": {
+            "type": "string",
+            "example": "vmbr0"
+          },
+          "cores": {
+            "type": "integer",
+            "example": 2,
+            "minimum": 1,
+            "maximum": 128
+          },
+          "memory": {
+            "type": "integer",
+            "example": 2048,
+            "minimum": 512,
+            "maximum": 1048576
+          },
+          "disk": {
+            "type": "integer",
+            "example": 32,
+            "minimum": 8,
+            "maximum": 4096
+          },
+          "username": {
+            "type": "string",
+            "example": "ubuntu"
+          },
+          "ssh_key": {
+            "type": "string",
+            "description": "SSH public key for cloud-init enabled templates."
+          },
+          "profile": {
+            "type": "string"
+          },
+          "network_mode": {
+            "type": "string",
+            "enum": [
+              "dhcp",
+              "static"
+            ]
+          },
+          "address": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "dns": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "vm",
+              "template"
+            ]
+          }
+        }
+      },
+      "installer": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "vmid",
+          "name",
+          "storage",
+          "bridge",
+          "iso",
+          "os"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "installer"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9001,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "name": {
+            "type": "string",
+            "example": "windows-installer"
+          },
+          "storage": {
+            "type": "string",
+            "example": "local-lvm"
+          },
+          "bridge": {
+            "type": "string",
+            "example": "vmbr0"
+          },
+          "iso": {
+            "type": "string",
+            "example": "local:iso/windows_server_2022.iso"
+          },
+          "os": {
+            "type": "string",
+            "example": "windows",
+            "enum": [
+              "linux",
+              "windows"
+            ]
+          },
+          "memory": {
+            "type": "integer",
+            "example": 4096,
+            "minimum": 512,
+            "maximum": 1048576
+          },
+          "cores": {
+            "type": "integer",
+            "example": 2,
+            "minimum": 1,
+            "maximum": 128
+          },
+          "disk": {
+            "type": "integer",
+            "example": 64,
+            "minimum": 8,
+            "maximum": 4096
+          }
+        }
+      },
+      "clone": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "source",
+          "vmid",
+          "name",
+          "storage"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "clone"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "source": {
+            "type": "integer",
+            "example": 9000,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9002,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "name": {
+            "type": "string",
+            "example": "my-vm"
+          },
+          "storage": {
+            "type": "string",
+            "example": "local-lvm"
+          },
+          "ssh_key": {
+            "type": "string",
+            "description": "SSH public key for cloud-init enabled templates."
+          },
+          "start": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "backup": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "vmid",
+          "backup_storage"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "backup"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9002,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "backup_storage": {
+            "type": "string",
+            "example": "local"
+          }
+        }
+      },
+      "convert-template": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "vmid",
+          "prepared"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "convert-template"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9001,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "prepared": {
+            "type": "boolean",
+            "example": true
+          }
+        }
+      },
+      "start": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "vmid"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9002,
+            "minimum": 100,
+            "maximum": 999999999
+          }
+        }
+      },
+      "upload-iso": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "storage",
+          "filename"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "upload-iso"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "storage": {
+            "type": "string",
+            "example": "local"
+          },
+          "filename": {
+            "type": "string",
+            "example": "windows_server_2022.iso"
+          }
+        }
+      },
+      "ansible": {
+        "type": "object",
+        "required": [
+          "action",
+          "node",
+          "playbook"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "ansible"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "inventory": {
+            "type": "string",
+            "example": "localhost ansible_connection=local"
+          },
+          "playbook": {
+            "type": "string",
+            "example": "- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:"
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "custom",
+              "proxmox"
+            ],
+            "default": "custom",
+            "description": "custom requires inventory; proxmox uses configured host credentials and pinned SSH key."
+          },
+          "host_confirmed": {
+            "type": "boolean"
+          }
+        },
+        "description": "Advanced administrator execution. target=proxmox requires host_confirmed=true; this runs on the hypervisor itself. Guest library runs use /api/manage/plan instead."
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "status",
+          "created",
+          "updated",
+          "log",
+          "target"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "created": {
+            "type": "number",
+            "description": "Unix timestamp in seconds"
+          },
+          "updated": {
+            "type": "number",
+            "description": "Unix timestamp in seconds"
+          },
+          "log": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
+          }
+        }
+      },
+      "Target": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          }
+        },
+        "required": [
+          "node",
+          "vmid"
+        ]
+      },
+      "TaskSelection": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "Credential": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Omit to create; supply existing ID to rotate."
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "windows",
+              "linux"
+            ]
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Blank on update retains existing material."
+          },
+          "private_key": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Blank on update retains existing material."
+          },
+          "become_password": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Blank on update retains existing material."
+          },
+          "ca_pem": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Blank on update retains existing material."
+          }
+        },
+        "required": [
+          "name",
+          "platform",
+          "username"
+        ]
+      },
+      "Connection": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "windows",
+              "linux"
+            ]
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string",
+            "description": "Guest address, not the Proxmox host"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "default": true
+          },
+          "become": {
+            "type": "boolean",
+            "default": true
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Required Linux SSH SHA256 host key fingerprint"
+          },
+          "ca_pem": {
+            "type": "string",
+            "description": "Optional per-VM public TLS certificate; takes precedence over credential CA. Blank retains saved certificate."
+          },
+          "clear_ca": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node",
+          "vmid",
+          "platform",
+          "credential_id",
+          "host"
+        ]
+      },
+      "SavedTask": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "windows",
+              "linux"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "powershell",
+              "shell",
+              "ansible"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 100000,
+            "description": "Trusted administrator script; Ansible format is a restricted list of guest tasks, not a full playbook."
+          }
+        },
+        "required": [
+          "name",
+          "platform",
+          "kind",
+          "body"
+        ]
+      },
+      "Group": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            }
+          },
+          "credential_id": {
+            "type": "string",
+            "description": "Optional group credential override when the group is selected"
+          }
+        },
+        "required": [
+          "name",
+          "targets"
+        ]
+      },
+      "Recipe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "config": {
+            "type": "object",
+            "description": "A valid provision payload, omitting vmid and Windows admin_password."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskSelection"
+            }
+          },
+          "credential_id": {
+            "type": "string",
+            "description": "Suggested guest credential reference"
+          }
+        },
+        "required": [
+          "name",
+          "config"
+        ]
+      },
+      "Schedule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "Required on creation; recently reviewed management plan ID."
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "minimum": 15,
+            "maximum": 525600
+          },
+          "window_start": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "window_end": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 24
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "risk_confirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "interval_minutes",
+          "confirmed"
+        ]
+      },
+      "ManagementPlanRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "tasks",
+              "readiness",
+              "start",
+              "shutdown",
+              "stop",
+              "resize",
+              "backup",
+              "snapshot",
+              "restore"
+            ]
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Target"
+            }
+          },
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskSelection"
+            }
+          },
+          "snapshot_before": {
+            "type": "boolean"
+          },
+          "cores": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128
+          },
+          "memory": {
+            "type": "integer",
+            "minimum": 512,
+            "maximum": 1048576
+          },
+          "backup_storage": {
+            "type": "string"
+          },
+          "snapshot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "RunPlan": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "risk_confirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plan_id",
+          "confirmed"
+        ]
+      },
+      "WindowsSettings": {
+        "type": "object",
+        "properties": {
+          "ui_language": {
+            "type": "string"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "keyboard": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "image_index": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "admin_password": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "rdp": {
+            "type": "boolean"
+          },
+          "accept_eula": {
+            "type": "boolean"
+          },
+          "wipe_disk": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "image_index",
+          "accept_eula",
+          "wipe_disk"
+        ]
+      },
+      "provision": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "provision"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "example": "pve"
+          },
+          "vmid": {
+            "type": "integer",
+            "example": 9001,
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "name": {
+            "type": "string",
+            "example": "windows-installer"
+          },
+          "storage": {
+            "type": "string",
+            "example": "local-lvm"
+          },
+          "bridge": {
+            "type": "string",
+            "example": "vmbr0"
+          },
+          "iso": {
+            "type": "string",
+            "example": "local:iso/windows_server_2022.iso"
+          },
+          "os": {
+            "type": "string",
+            "example": "windows",
+            "enum": [
+              "linux",
+              "windows"
+            ]
+          },
+          "memory": {
+            "type": "integer",
+            "example": 4096,
+            "minimum": 512,
+            "maximum": 1048576
+          },
+          "cores": {
+            "type": "integer",
+            "example": 2,
+            "minimum": 1,
+            "maximum": 128
+          },
+          "disk": {
+            "type": "integer",
+            "example": 64,
+            "minimum": 8,
+            "maximum": 4096
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "windows",
+              "linux-cloud",
+              "linux-iso"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "vm",
+              "template"
+            ]
+          },
+          "source_kind": {
+            "type": "string",
+            "enum": [
+              "local",
+              "proxmox"
+            ]
+          },
+          "filename": {
+            "type": "string"
+          },
+          "iso_storage": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "ssh_key": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "network_mode": {
+            "type": "string",
+            "enum": [
+              "dhcp",
+              "static"
+            ]
+          },
+          "address": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "dns": {
+            "type": "string"
+          },
+          "windows": {
+            "$ref": "#/components/schemas/WindowsSettings"
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "start": {
+            "type": "boolean"
+          },
+          "bootstrap": {
+            "$ref": "#/components/schemas/Bootstrap"
+          }
+        },
+        "required": [
+          "action",
+          "kind",
+          "node",
+          "vmid",
+          "name",
+          "storage",
+          "bridge"
+        ]
+      },
+      "finish-setup": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "finish-setup"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "prepared": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "action",
+          "node",
+          "vmid",
+          "prepared"
+        ]
+      },
+      "Bootstrap": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "verify": {
+            "type": "boolean"
+          },
+          "management_cidr": {
+            "type": "string",
+            "description": "Windows: specific client IP/CIDR allowed to connect to HTTPS WinRM; /0 forbidden"
+          },
+          "agent_iso": {
+            "type": "string",
+            "description": "Windows: attached trusted VirtIO ISO with signed guest-agent MSI and matching vioserial driver"
+          },
+          "snippet_storage": {
+            "type": "string",
+            "description": "Linux cloud: active snippets storage for vendor data"
+          },
+          "credential_id": {
+            "type": "string",
+            "description": "Saved matching guest credential for optional authentication verification"
+          },
+          "host": {
+            "type": "string",
+            "description": "Optional explicit guest endpoint; otherwise exactly one guest IPv4 is required"
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 3600
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "LifecyclePlan": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "backup-restore",
+              "backup-retention",
+              "version-build",
+              "version-register",
+              "template-test",
+              "version-promote",
+              "version-clone"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "vmid": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "storage": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "archive": {
+            "type": "string",
+            "description": "Exact archive volid returned in inventory"
+          },
+          "boot_test": {
+            "type": "boolean"
+          },
+          "disconnected": {
+            "type": "boolean",
+            "default": true
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 1800
+          },
+          "source_vmid": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "backup_storage": {
+            "type": "string"
+          },
+          "keep": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "older_than_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 36500
+          },
+          "family_id": {
+            "type": "string"
+          },
+          "recipe_id": {
+            "type": "string"
+          },
+          "version_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "prepared": {
+            "type": "boolean"
+          },
+          "start": {
+            "type": "boolean"
+          },
+          "accept_eula": {
+            "type": "boolean"
+          },
+          "wipe_disk": {
+            "type": "boolean"
+          },
+          "admin_password": {
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "BackupPolicy": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "restore-check",
+              "retention"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "backup_storage": {
+            "type": "string"
+          },
+          "source_vmid": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "storage": {
+            "type": "string",
+            "description": "Restore-check disk destination"
+          },
+          "range_start": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "range_end": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 1800
+          },
+          "keep": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "older_than_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 36500
+          },
+          "auto_delete": {
+            "type": "boolean",
+            "default": false
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "minimum": 15,
+            "maximum": 525600
+          },
+          "window_start": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "window_end": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 24
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "risk_confirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "mode",
+          "node",
+          "backup_storage",
+          "source_vmid",
+          "confirmed"
+        ]
+      }
+    }
+  },
+  "paths": {
+    "/api/state": {
+      "get": {
+        "summary": "Live node, guest, storage, bridge and ISO inventory",
+        "responses": {
+          "200": {
+            "description": "Live node, guest, storage, bridge and ISO inventory"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "summary": "Latest 100 jobs with logs",
+        "responses": {
+          "200": {
+            "description": "Latest 100 jobs with logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      },
+      "post": {
+        "summary": "Queue an operation",
+        "description": "States: queued, running, succeeded, failed, interrupted. No automatic retry. Inspect partial resources before retrying failed/interrupted jobs. Ansible is arbitrary administrator code execution. Generalization must precede template conversion.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/linux-template"
+                  },
+                  {
+                    "$ref": "#/components/schemas/installer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/clone"
+                  },
+                  {
+                    "$ref": "#/components/schemas/backup"
+                  },
+                  {
+                    "$ref": "#/components/schemas/convert-template"
+                  },
+                  {
+                    "$ref": "#/components/schemas/start"
+                  },
+                  {
+                    "$ref": "#/components/schemas/upload-iso"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ansible"
+                  },
+                  {
+                    "$ref": "#/components/schemas/provision"
+                  },
+                  {
+                    "$ref": "#/components/schemas/finish-setup"
+                  }
+                ]
+              },
+              "examples": {
+                "linux-template": {
+                  "value": {
+                    "action": "linux-template",
+                    "node": "pve",
+                    "vmid": 9000,
+                    "name": "ubuntu-template",
+                    "storage": "local-lvm",
+                    "bridge": "vmbr0",
+                    "cores": 2,
+                    "memory": 2048,
+                    "disk": 32,
+                    "username": "ubuntu"
+                  }
+                },
+                "installer": {
+                  "value": {
+                    "action": "installer",
+                    "node": "pve",
+                    "vmid": 9001,
+                    "name": "windows-installer",
+                    "storage": "local-lvm",
+                    "bridge": "vmbr0",
+                    "iso": "local:iso/windows_server_2022.iso",
+                    "os": "windows",
+                    "memory": 4096,
+                    "cores": 2,
+                    "disk": 64
+                  }
+                },
+                "clone": {
+                  "value": {
+                    "action": "clone",
+                    "node": "pve",
+                    "source": 9000,
+                    "vmid": 9002,
+                    "name": "my-vm",
+                    "storage": "local-lvm"
+                  }
+                },
+                "backup": {
+                  "value": {
+                    "action": "backup",
+                    "node": "pve",
+                    "vmid": 9002,
+                    "backup_storage": "local"
+                  }
+                },
+                "convert-template": {
+                  "value": {
+                    "action": "convert-template",
+                    "node": "pve",
+                    "vmid": 9001,
+                    "prepared": true
+                  }
+                },
+                "start": {
+                  "value": {
+                    "action": "start",
+                    "node": "pve",
+                    "vmid": 9002
+                  }
+                },
+                "upload-iso": {
+                  "value": {
+                    "action": "upload-iso",
+                    "node": "pve",
+                    "storage": "local",
+                    "filename": "windows_server_2022.iso"
+                  }
+                },
+                "ansible": {
+                  "value": {
+                    "action": "ansible",
+                    "node": "pve",
+                    "inventory": "localhost ansible_connection=local",
+                    "playbook": "- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.ping:"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted: {id, url}. This is not a success result; poll url.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "url"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string",
+                      "example": "/api/jobs/0123456789abcdef"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "409": {
+            "description": "Idempotency key payload conflict"
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "summary": "One job and its log",
+        "responses": {
+          "200": {
+            "description": "One job and its log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/session": {
+      "get": {
+        "summary": "Current browser session",
+        "responses": {
+          "200": {
+            "description": "Current browser session"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Service liveness",
+        "responses": {
+          "200": {
+            "description": "Service liveness"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/login": {
+      "post": {
+        "security": [],
+        "summary": "Create browser session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session cookie set; response contains csrf token."
+          },
+          "401": {
+            "description": "Incorrect password"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/api/logout": {
+      "post": {
+        "summary": "End browser session",
+        "responses": {
+          "200": {
+            "description": "Session cleared"
+          }
+        }
+      }
+    },
+    "/api/catalog": {
+      "get": {
+        "summary": "Windows locales/timezones and verified Linux image profiles",
+        "responses": {
+          "200": {
+            "description": "Catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/provision/plan": {
+      "post": {
+        "summary": "Validate and preview a provisioning flow",
+        "description": "Pure validation; no Proxmox calls. Returned XML preview redacts password. POST /api/jobs with action=provision and confirmed=true to execute. Optional bootstrap prepares SSH/WinRM and guest-agent installation; the response includes a bootstrap_preview. verify=true requires VM purpose, start=true and a matching credential reference. Verification reads only public trust material through authenticated Proxmox guest-agent APIs, then authenticates with TLS/SSH checks enabled and saves a connection.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/provision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validate and preview a provisioning flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/windows/answer-file": {
+      "post": {
+        "summary": "Download Autounattend.xml",
+        "description": "Explicitly requested answer XML can contain the administrator password. Never attach to an existing VM. Response is no-store.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WindowsSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answer file XML",
+            "content": {
+              "application/xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/manage/{kind}": {
+      "parameters": [
+        {
+          "name": "kind",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "connections",
+              "tasks",
+              "groups",
+              "recipes",
+              "schedules"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "summary": "List saved records (tasks includes built-ins)",
+        "description": "Credential secrets are never returned. Schedules include last_status/last_job and public plan summary. Saved script bodies are visible to authenticated administrators.",
+        "responses": {
+          "200": {
+            "description": "Record list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create or update a record",
+        "description": "Updates use the existing id. Connections are keyed by node:vmid. Secrets and records are encrypted at rest. Schedules default disabled; first due occurrence is interval-based and aligned to the UTC maintenance window. No missed-run catch-up.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Credential"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Connection"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SavedTask"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Group"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Recipe"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Schedule"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Create or update a record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/manage/{kind}/{id}/delete": {
+      "parameters": [
+        {
+          "name": "kind",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Delete an unreferenced saved record",
+        "description": "Does not delete VMs, snapshots or job history. Referenced records cannot be deleted.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delete an unreferenced saved record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/manage/plan": {
+      "post": {
+        "summary": "Resolve exact targets and freeze a reviewed operation",
+        "description": "Read-only Proxmox inspection. Returns id, exact targets, tasks, settings, notes and dangerous flag. Plan expires after 30 minutes. Saved tasks and group membership are frozen; later edits do not change this plan. Credentials are referenced and rotation invalidates execution. CPU/RAM and restore require stopped VMs.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagementPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolve exact targets and freeze a reviewed operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/manage/run": {
+      "post": {
+        "summary": "Queue the reviewed plan once",
+        "description": "confirmed=true is mandatory. dangerous plans additionally require risk_confirmed=true. Repeated submission of the same plan ID returns the same job, even if it previously failed; create a fresh reviewed plan to retry. Poll /api/jobs/{id} for per-VM results.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queue the reviewed plan once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/manage/snapshots/{node}/{vmid}": {
+      "parameters": [
+        {
+          "name": "node",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "vmid",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999
+          }
+        }
+      ],
+      "get": {
+        "summary": "List current VM snapshots",
+        "responses": {
+          "200": {
+            "description": "Snapshots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or confirmation failed"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/lifecycle/state": {
+      "get": {
+        "summary": "Template families/versions, build provenance, backup policies and successful copy reports",
+        "responses": {
+          "200": {
+            "description": "Lifecycle records; secret values omitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation, changed identity or confirmation failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/lifecycle/families": {
+      "post": {
+        "summary": "Create a template family",
+        "description": "No VM mutation. Preferred version is set only by reviewed promotion after testing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Create a template family",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation, changed identity or confirmation failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/lifecycle/plan": {
+      "post": {
+        "summary": "Review recovery or template lifecycle operation",
+        "description": "Read-only Proxmox inspection. backup-restore requires node/vmid/storage/name/archive; refuses occupied IDs, creates unique identities and leaves the new VM stopped. Optional boot_test requires disconnected=true. backup-retention requires node/backup_storage/source_vmid, keep and older_than_days; returns exact candidates and preserves protected/newest archives. version-build requires family_id/recipe_id/vmid/name/label and optional start; Windows builds require fresh licensing/disk confirmation. Recipe tasks run only after verified bootstrap; otherwise remain planned. version-register requires family_id/node/vmid/label/prepared=true; stopped guests are converted and onboot disabled. template-test and version-clone require version_id/node/vmid/storage/name; testing always disconnects networking, boot-checks and retains the clone. version-promote requires version_id and successful test evidence tied to unchanged config. Plans expire after 30 minutes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecyclePlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Review recovery or template lifecycle operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation, changed identity or confirmation failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/lifecycle/run": {
+      "post": {
+        "summary": "Queue exact lifecycle plan once",
+        "description": "Requires confirmed=true and risk_confirmed=true for archive deletion or custom scripts. Same plan ID returns same job. No VM overwrite, automatic force-stop or test-VM deletion. Poll returned job URL.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Queue exact lifecycle plan once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation, changed identity or confirmation failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/lifecycle/policies": {
+      "post": {
+        "summary": "Save opt-in backup restore-check or retention policy",
+        "description": "Defaults disabled; retention defaults to preview only. auto_delete requires risk_confirmed=true. Restore checks select latest backup for exactly one source VM/storage and an unused destination ID in the reserved range (at most 1000 IDs). Copies remain disconnected and retained. Full scratch range skips instead of reusing/deleting. UTC windows and intervals; missed and overlapping occurrences skipped. No external notifications.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Save opt-in backup restore-check or retention policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation, changed identity or confirmation failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/bootstrap/helper": {
+      "post": {
+        "summary": "Download a guest bootstrap helper without executing it",
+        "description": "Windows requires management_cidr and a selected agent_iso. Run elevated in the guest only. Linux supports apt/dnf. Helpers contain no guest passwords.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "windows",
+                      "linux"
+                    ]
+                  },
+                  "management_cidr": {
+                    "type": "string"
+                  },
+                  "agent_iso": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "platform"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Downloaded shell/PowerShell script",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation, changed identity or confirmation failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    }
+  }
+}

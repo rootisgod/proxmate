@@ -1,0 +1,31 @@
+services:
+  proxmate:
+    build: .
+    ports:
+      - "${PORT:-8088}:8080"
+    environment:
+      PROXMOX_URL: ${PROXMOX_URL:-https://192.168.1.244:8006}
+      PROXMOX_USER: ${PROXMOX_USER:-root@pam}
+      PROXMOX_VERIFY_TLS: ${PROXMOX_VERIFY_TLS:-true}
+      PROXMOX_SSH_FINGERPRINT: ${PROXMOX_SSH_FINGERPRINT:-}
+      PROXMOX_PASSWORD_FILE: /run/secrets/proxmox_password
+      APP_PASSWORD_FILE: /run/secrets/app_password
+    secrets:
+      - proxmox_password
+      - app_password
+    volumes:
+      - proxmate-data:/data
+      - ${ISO_PATH:-D:/ISOs}:/isos:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+secrets:
+  proxmox_password:
+    file: .env.password
+  app_password:
+    file: .env.admin
+volumes:
+  proxmate-data:

@@ -1,0 +1,212 @@
+# Proxmate
+
+A Docker-hosted LAN dashboard and HTTP API for Proxmox. Single-administrator access; no external account or hosted service required.
+
+## Run
+
+Docker Compose is required. Copy `.env.example` to `.env`, set your Proxmox URL and ISO directory, and create two plain-text secret files:
+
+- `.env.password`: Proxmox password (the supplied environment uses `root@pam`).
+- `.env.admin`: a separate, strong password for the Proxmate dashboard.
+
+These files are excluded from Git and Docker build contexts. They are mounted as Docker secrets. For a self-signed Proxmox certificate, explicitly set `PROXMOX_VERIFY_TLS=false` on a trusted LAN, or install a trusted certificate and keep verification enabled. Set `PROXMOX_SSH_FINGERPRINT` to the host's SHA256 SSH fingerprint, verified from its console. Linux-template and advanced hypervisor Ansible operations require root SSH access to the configured Proxmox host.
+
+```sh
+docker compose up -d --build
+```
+
+Open **http://localhost:8088** (or `http://YOUR-DOCKER-HOST:8088` from your LAN), and sign in with `.env.admin`. Use `PORT` in `.env` to change the host port. The container always listens on 8080. Allow LAN traffic through your host firewall as appropriate.
+
+The existing checkout has already been configured for the supplied Proxmox host and `D:/ISOs`. Its generated administrator password is in `.env.admin`.
+
+## Build machines
+
+Choose **Build a machine** and follow Source, Guest settings, Hardware & network, then Review. Planning has no infrastructure side effects. Creation requires confirmation and refuses existing VM IDs.
+
+- **Windows ISO:** choose local media or an existing Proxmox ISO. Select edition image index, display language, region, keyboard, timezone, computer name, optional administrator password and RDP. Autounattend media configures the new GPT disk, UEFI/TPM and optional RDP with NLA. Confirm the edition index with DISM; the display language must exist in the ISO. Setup may still require a DVD boot key, activation or account prompts. Preparation success does not prove Windows installation completed.
+- **Linux cloud images:** Ubuntu 22.04/24.04/26.04, Fedora Cloud 44 and Rocky Linux 9.8. Downloads use official sources and published SHA256 checksums. Select login user/public SSH key, hardware, DHCP or static IPv4, gateway and DNS. Choose a VM or template. Profiles are x86-64; release URLs can eventually expire.
+- **Linux ISO:** prepare an installer VM and finish the distribution's installer in the Proxmox console. Arbitrary Linux ISOs do not receive an unattended answer file.
+- **Recipes:** save the reviewed build configuration and an ordered list of guest tasks. VM ID and Windows setup password are omitted. A credential reference suggests the later guest login. Choose Build to reopen the wizard, finish installation, configure the guest connection, then Apply tasks. Recipe tasks do not run automatically while an OS is installing.
+- **Templates:** generalize, shut down, remove setup secrets, then convert. Windows requires Sysprep /generalize /oobe /shutdown. Finish setup detaches and deletes only that VM's Proxmate-generated answer ISO. Remove cached Windows answer files and rotate the setup password before sharing a template. Proxmate cannot verify generalization.
+- **Clones:** full-clone an existing template to a fresh ID. Cloud-init user/key options apply only to compatible templates. New machines remain stopped unless explicitly selected to start.
+
+Answer XML downloads intentionally contain any supplied administrator password. Generated media and Windows caches can also contain it. The preview redacts the password and new queue payloads are encrypted. Never attach answer media to existing machines. The original ISO library is mounted read-only; uploads refuse existing filenames.
+
+## Guest tasks and credentials
+
+1. Add a named credential in **Credentials**. Windows supports username/password; Linux supports a password or unencrypted PEM/OpenSSH private key, plus an optional sudo password. A WinRM issuing CA certificate can be saved with a Windows credential.
+2. Choose a VM's **Connection** and enter its guest address, platform, port and credential. Windows uses HTTPS WinRM (5986), NTLM and certificate verification by default. Linux uses SSH (22) with a mandatory independently verified SHA256 host fingerprint. Linux tasks use sudo by default and require Python. WinRM/SSH must already be configured.
+3. Run **Guest readiness** to check power, guest-agent information, the configured TCP endpoint, authentication and Ansible runtime. No subnet scan is performed. An unavailable guest agent is reported separately. The reviewed plan shows the configured address and credential name. Guest-agent IP mismatches abort execution when addresses are available; guest endpoints resolving to Proxmox or loopback/link-local addresses are rejected. Without a guest agent, the address remains operator-supplied: verify it belongs to the selected VM.
+4. In **Task library**, select tasks, enter package/service parameters, arrange their order and select VMs/groups. Optionally take a pre-task snapshot. Review the exact resolved targets, then run.
+
+Built-ins cover Chocolatey installation/packages, RDP with NLA, separate Windows firewall disabling/enabling, Windows security/critical updates, Linux packages/updates and Windows/Linux services. Firewall disabling is never bundled with RDP. Updates do not automatically reboot. Chocolatey can require .NET 4.8 and Internet/package-repository access inside the guest.
+
+Save custom PowerShell/shell scripts or YAML lists of Ansible guest tasks. Custom Ansible accepts one supported fully qualified guest module per task and an optional name; play-level hosts, delegation, connection overrides, includes and loops are rejected. Example:
+
+```yaml
+- name: Install curl
+  ansible.builtin.package:
+    name: curl
+    state: present
+```
+
+Supported modules are listed in guest_tasks.py under validate_script. This is trusted administrator code, not a sandbox. Scripts and templating are powerful operations. Use the advanced **Ansible** page for complete playbooks/custom inventory. Targeting the hypervisor there requires a separate checkbox and does not use saved guest credentials.
+
+Guest logs include task names and per-VM results. Arbitrary module output is withheld and no_log is applied to protect secrets. Failure stops remaining tasks on that VM; other reviewed VMs still receive their own results. No automatic retry/rollback occurs. Timeouts can leave remote work running: inspect before retrying.
+
+Credential values are encrypted and write-only through the API. Blank secret fields on edit retain existing values. Rotation invalidates plans/schedules using the old revision; create a fresh reviewed plan. References prevent deleting credentials used by connections, groups, recipes or schedules.
+
+## VM controls, snapshots and schedules
+
+**Manage** offers start, graceful shutdown, confirmed force-stop, CPU/RAM changes, backups, snapshots and snapshot restore. CPU/RAM changes require stopped VMs and apply on next start; CPU topology is set to one socket. Graceful shutdown times out after 120 seconds without forcing power off. LXC guests are visible but actions target QEMU VMs.
+
+Snapshots require storage/guest support. A failed pre-task snapshot prevents that VM's tasks. Snapshots are retained and named in job logs. Snapshot restore requires a stopped VM and separate destructive confirmation because it replaces current state. Backups use snapshot-mode vzdump with Zstandard. Use **Backup recovery** for archive restoration, isolated restore checks and reviewed retention.
+
+Groups save explicit members and an optional credential override for runs selected through the group. Plans freeze exact targets, script versions and connection settings. Later edits cannot expand a plan; VM identity/disk changes invalidate execution.
+
+From a reviewed task, backup, start, shutdown or readiness plan choose **Save as schedule**. Schedules default disabled. Set an interval of at least 15 minutes, a same-day UTC window, then explicitly enable. First run is at least one interval later, aligned to the next open window. Daylight-saving changes do not affect UTC schedules.
+
+Schedules use the serialized job queue. Late/missed occurrences are skipped, including after restart. Runs do not overlap their own previous queued/running occurrence. Schedules link to the latest per-VM job report; no external notifications are sent. The window is checked when queuing and before starting each VM; a late target is reported as skipped/failed without changes. An operation already running may finish after the window closes. To refresh targets/tasks/credentials, disable the old schedule and create a newly reviewed one.
+
+## First-boot bootstrap
+
+In the provisioning wizard, explicitly enable **Guest bootstrap** in Hardware & network. Preparation and authenticated readiness are separate outcomes.
+
+- Linux cloud images use cloud-init **vendor data**, preserving generated users, SSH keys and networking. Choose an existing snippets-enabled storage whose snippets directory is available. The guest installs qemu-guest-agent, OpenSSH, Python and sudo, then writes a completion marker. The snippet remains referenced by templates/clones; do not remove it while needed. Proxmate does not enable storage content types automatically.
+- Windows runs a helper from generated answer media during specialize. Select a trusted VirtIO ISO containing the signed x64 guest-agent MSI and matching vioserial driver for Windows 10/11 or Server 2019/2022/2025. The helper validates the MSI signature, installs the driver/agent, disables HTTP WinRM listeners and Basic/unencrypted authentication, and configures HTTPS. The firewall rule permits only the chosen management client IP/CIDR. Use the actual LAN source address/subnet, not an unrelated Docker container subnet.
+- Optional authentication verification requires VM purpose, Start enabled and a saved credential matching the installed login. After the completion marker appears, Proxmate retrieves the public SSH host key or public Windows TLS certificate through the authenticated Proxmox guest-agent API, checks the guest IP, and tests SSH/WinRM with verification enabled. Success saves the VM connection. Windows certificate trust is stored per connection, not overwritten for other VMs sharing a credential.
+
+Verification occupies the single job queue until completion/timeout. Package repositories, drivers, networking and account setup must work. Windows OOBE/licensing prompts may still require the console. Failed VMs remain for inspection. Windows certificates include the current computer name/IPv4 addresses and expire after one year; refresh bootstrap and connection trust after relevant identity/address changes.
+
+For interactive Linux ISOs, use **Task library > Guest bootstrap helper** after installation. Downloading never executes it. Inspect the script and run elevated only inside the intended guest. The Windows helper also exports its public certificate to `C:\ProgramData\Proxmate\winrm.pem`, which can be entered in Connection settings. Downloaded answer XML alone does not include the helper: use the generated answer ISO flow or provide its matching script alongside it.
+
+Windows template generalization must remove setup secrets and bootstrap certificate private keys. Each Windows clone needs its own identity/certificate; run the helper after configuring that clone's identity and network. Bootstrap does not bypass Sysprep, reset passwords or disable TLS verification.
+
+## Backup recovery and retention
+
+Open **Backup recovery**, choose an archive and supply a new VM ID/storage. Review and execution both reject occupied IDs. Restores request unique identities, no overwrite, no immediate start and disabled onboot. By default, all restored NICs are disconnected before any test boot. Original networking can be retained only with test boot off; inspect it before starting that restored VM yourself.
+
+Optional boot checks start the disconnected copy, wait for guest-agent OS information, gracefully shut it down and retain it. No force-stop or automatic VM deletion occurs. A failed shutdown can leave a disconnected test VM running; inspect its report. Passthrough devices, host device paths, hooks, custom QEMU arguments and generated answer media are rejected by this workflow.
+
+A successful Proxmox restore task proves restoration completed. A boot check additionally proves guest-agent OS responsiveness. Neither validates application/data consistency; test application recovery separately.
+
+**Scheduled restore checks** select the newest backup for one source VM/storage and an unused ID in a reserved range. Policies default disabled and skip missed/overlapping occurrences. Every test VM is disconnected and retained. A full range stops further checks rather than deleting or reusing occupied IDs. Inspect and clean up copies through Proxmox.
+
+**Retention review** preserves at least the newest selected count and all protected archives, proposing only archives older than the configured age. Confirmation lists exact archive IDs; metadata, protection and eligibility are checked again before each deletion. The deletion list never expands after review. Saved policies default to preview-only. Recurring deletion needs explicit auto-delete and risk confirmation, scoped to one node/storage/source VM. Archive identity uses Proxmox metadata, not an independent full-file checksum.
+
+## Versioned templates
+
+In **Template versions**, create a family, then build a replacement from a saved recipe into a fresh ID. Provenance records configuration, source image/checksum when available, and task history without setup passwords. Windows ISO provenance identifies selected media; it does not claim a full ISO checksum.
+
+Task definitions are frozen for the reviewed build. They run automatically only after enabled bootstrap authentication verification on a started candidate. Otherwise they remain marked as planned: finish installation, configure its connection and apply tasks separately.
+
+Generalize and shut down, remove setup media/secrets, then **Register version** with a unique label. A stopped VM is converted to a template and onboot disabled. Existing templates can be adopted with unavailable historical provenance clearly labelled. Build provenance follows machine identity, not just a reusable VM ID.
+
+**Test clone** creates a full copy in a fresh ID, disconnects it, boot-checks through the guest agent and shuts it down. **Promote** requires successful evidence tied to unchanged registered configuration. Promotion updates the preferred pointer; previous versions and test clones remain. **Clone preferred** checks registered identity before cloning. Configuration changes require registering/testing a new version.
+
+## Lifecycle API
+
+The authenticated API adds these routes; OpenAPI contains full request schemas:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/lifecycle/state` | Families, versions, provenance, policies and recovery reports |
+| `POST /api/lifecycle/plan` | Review restore, retention, version build/register/test/promote/clone |
+| `POST /api/lifecycle/run` | Queue the exact reviewed plan once |
+| `POST /api/lifecycle/families` | Create a template family |
+| `POST /api/lifecycle/policies` | Save disabled-by-default backup policies |
+| `POST /api/bootstrap/helper` | Download a guest-side helper without executing it |
+
+Lifecycle plans expire after 30 minutes. Submission requires `plan_id` and `confirmed:true`; deletion/custom scripts also require `risk_confirmed:true`. Repeating the plan ID returns the same job. Disable both management schedules and backup policies before upgrades.
+
+API contracts were checked against the [Proxmox QEMU API source](https://github.com/proxmox/qemu-server/blob/master/src/PVE/API2/Qemu.pm), [guest-agent API source](https://github.com/proxmox/qemu-server/blob/master/src/PVE/API2/Qemu/Agent.pm), and [Microsoft specialize command documentation](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-deployment-runsynchronous-runsynchronouscommand-path).
+
+## API
+
+- Human-readable reference: http://localhost:8088/api/docs
+- OpenAPI 3.0 JSON: http://localhost:8088/api/openapi.json
+- Inventory: `GET /api/state`
+- Job submission: `POST /api/jobs`
+- Job history/status/log: `GET /api/jobs` and `GET /api/jobs/{id}`
+
+Retrieve the generated bearer token locally (this command prints a secret):
+
+```sh
+docker compose exec proxmate cat /data/api-token
+```
+
+Use `Authorization: Bearer TOKEN`. Send JSON and optionally an `Idempotency-Key` on submissions. The same key and payload returns the original job; a changed payload returns HTTP 409. HTTP 202 means queued, not successful. Poll the job until its status becomes `succeeded`, `failed` or `interrupted`.
+
+```sh
+curl http://localhost:8088/api/jobs \
+  -H "Authorization: Bearer $PROXMATE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: backup-9002-2026-11-14" \
+  -d '{"action":"backup","node":"pve","vmid":9002,"backup_storage":"local"}'
+```
+
+Supported legacy/job actions: `provision`, `finish-setup`, `linux-template`, `installer`, `clone`, `start`, `convert-template`, `backup`, `upload-iso`, `ansible`. Hypervisor Ansible requires `host_confirmed: true`. OpenAPI includes example payloads. Browser authentication uses a session cookie plus CSRF token; scripts should use the bearer token.
+
+Additional routes (authenticated; JSON for writes):
+
+| Route | Purpose |
+| --- | --- |
+| GET /api/catalog | Linux profiles and Windows locale/timezone options |
+| POST /api/provision/plan | Pure validation and redacted answer preview |
+| POST /api/windows/answer-file | Explicit answer XML download |
+| GET/POST /api/manage/{kind} | List/create/update credentials, connections, tasks, groups, recipes or schedules |
+| POST /api/manage/{kind}/{id}/delete | Delete unreferenced saved configuration |
+| POST /api/manage/plan | Resolve and review exact guest-management targets |
+| POST /api/manage/run | Queue a reviewed plan once |
+| GET /api/manage/snapshots/{node}/{vmid} | List snapshots |
+
+For example, POST /api/manage/plan with:
+
+```json
+{"operation":"shutdown","targets":[{"node":"pve","vmid":201}]}
+```
+
+Then POST /api/manage/run with the returned plan ID and confirmed=true. Risky plans also require risk_confirmed=true. Plans expire after 30 minutes. Repeating the plan ID returns the same job; retrying failed work requires a fresh reviewed plan. Saved scripts, groups and connections are frozen; credential rotation invalidates the reviewed revision. Full request schemas are in OpenAPI.
+
+## Persistence and recovery
+
+The `proxmate-data` Docker volume contains jobs, encrypted records, schedules/policies, session/encryption key and API token. Back up the database and encryption key together; losing the key loses credential access. Keep one application process/replica. Disable schedules and backup policies and wait for active work before upgrading. Do not remove the volume during normal upgrades. Jobs are serialized. Restarting marks queued/running jobs `interrupted`; they are never replayed automatically. Remote operations may still be running or have created partial VMs. Inspect Proxmox before retrying. Failed resources are retained; the application exposes no VM deletion operation.
+
+New job payloads and management records are encrypted at rest. Historical jobs predating encryption remain in their original format. Encryption does not protect against a compromised administrator or running container. The advanced Ansible page retains output and can expose secrets printed by custom playbooks; guest-library runs suppress output. Protect the volume and back it up before upgrades.
+
+```sh
+docker compose logs --tail=100
+docker compose ps
+docker compose stop
+docker compose up -d --build
+```
+
+## Security and scope
+
+Everyone with the dashboard password or API token is an administrator. Do not publish this directly to the Internet. Use an HTTPS reverse proxy for shared access and set `COOKIE_SECURE=true` in the container environment. The initial Compose setup serves HTTP on a trusted LAN. Proxmox API credentials are server-side only; SSH operations pin the host key. The current SSH implementation operates only on the configured host, not arbitrary nodes in a cluster. API-only operations can target other nodes.
+
+## Development checks
+
+```sh
+python -m pip install -r requirements.txt pytest
+python -m pytest -q
+npm ci
+npm test
+node --check static/app.js
+node --check static/wizard.js
+node --check static/manage.js
+node --check static/lifecycle.js
+docker compose build
+```
+
+Backend tests cover authentication, secrets, frozen plans, snapshot failures, bulk partial failures, schedules and provisioning. DOM tests cover navigation, task review/submission and recipe password exclusion. They do not contact real guests. The built image can be checked with networking disabled:
+
+```sh
+docker run --rm --network none --entrypoint python -v C:/Code/proxmate/tests:/tests:ro proxmate-proxmate /tests/container_check.py
+```
+
+Adjust the bind mount on another machine. This checks authentication, static routes and the installed Ansible collections without executing guest tasks. Full visual/mobile review and actual WinRM/SSH/installer execution still need validation on the intended server.
+
+Inspired by [Creating Proxmox Templates with Ansible](https://www.rootisgod.com/2024/Creating-Proxmox-Templates-with-Ansible/). Template creation intentionally refuses VM-ID collisions rather than deleting existing guests.
+
+Official references: [Ansible WinRM](https://docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html), [Chocolatey module](https://docs.ansible.com/projects/ansible/latest/collections/chocolatey/chocolatey/win_chocolatey_module.html), [Proxmox guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.pdf).
