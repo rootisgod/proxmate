@@ -16,6 +16,7 @@ import yaml
 BUILTINS = [
     dict(id='install-chocolatey', name='Install Chocolatey', platform='windows', description='Install the Chocolatey package manager.', parameters={}),
     dict(id='chocolatey-package', name='Install a Chocolatey package', platform='windows', description='Install a named package without allowing checksum bypass.', parameters={'package': 'Package ID, e.g. 7zip'}),
+    dict(id='windows-feature', name='Install a Windows Server feature (restart if needed)', platform='windows', description='Install a role or feature with its management tools. Restart automatically if required.', parameters={'feature':'Feature name, e.g. Web-Server'}),
     dict(id='enable-rdp', name='Enable Remote Desktop', platform='windows', description='Enable RDP with NLA and open domain/private firewall profiles.', parameters={}),
     dict(id='disable-firewall', name='Disable Windows firewall', platform='windows', description='Disables all three firewall profiles. Requires separate risk confirmation.', dangerous=True, parameters={}),
     dict(id='enable-firewall', name='Enable Windows firewall', platform='windows', description='Enable all three firewall profiles.', parameters={}),
@@ -38,6 +39,9 @@ def compile_task(item, params):
     ident = item['id']
     if ident == 'install-chocolatey': return [{'chocolatey.chocolatey.win_chocolatey': {'name': 'chocolatey', 'state': 'present'}}]
     if ident == 'chocolatey-package': return [{'chocolatey.chocolatey.win_chocolatey': {'name': params['package'], 'state': 'present'}}]
+    if ident == 'windows-feature':
+        return [{'ansible.windows.win_feature':{'name':params['feature'],'state':'present','include_management_tools':True},'register':'proxmate_feature'},
+                {'ansible.windows.win_reboot':{'reboot_timeout':900},'when':'proxmate_feature.reboot_required'}]
     if ident == 'enable-rdp':
         return [{'ansible.windows.win_regedit': {'path': r'HKLM:\System\CurrentControlSet\Control\Terminal Server', 'name': 'fDenyTSConnections', 'data': 0, 'type': 'dword'}},
                 {'ansible.windows.win_regedit': {'path': r'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp', 'name': 'UserAuthentication', 'data': 1, 'type': 'dword'}},
@@ -70,7 +74,7 @@ def validate_script(body):
                        'ansible.windows.win_powershell', 'ansible.windows.win_shell',
                        'ansible.windows.win_command', 'ansible.windows.win_service',
                        'ansible.windows.win_copy', 'ansible.windows.win_file',
-                       'ansible.windows.win_regedit', 'ansible.windows.win_updates',
+                       'ansible.windows.win_regedit', 'ansible.windows.win_updates', 'ansible.windows.win_feature',
                        'chocolatey.chocolatey.win_chocolatey'}
     for task in tasks:
         if not isinstance(task, dict): raise ValueError('Each task must be an object')

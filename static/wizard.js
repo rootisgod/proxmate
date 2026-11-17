@@ -139,7 +139,7 @@ $('#wizard-form').onsubmit=async e=>{
     if(wizard.step===2){const plan=await api('provision/plan',wizardPayload());if(wizard!==activeWizard)return;wizard.plan=plan;wizard.step++;showWizardStep();}
     else if(wizard.step===3){
       if(!wizard.draft.confirmed)throw Error('Confirm the reviewed plan to create resources.');
-      const response=await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':wizard.key},body:JSON.stringify({...wizardPayload(),confirmed:true})});
+      const response=await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':wizard.key,'X-Proxmate-Server':serverInfo?.id||''},body:JSON.stringify({...wizardPayload(),confirmed:true})});
       const data=await response.json();if(!response.ok)throw Error(data.error||'Submission failed');
       $('#wizard').close();view='jobs';notice('Provisioning queued. Installer preparation does not mean the OS installation is complete.');await refresh();
     }else{wizard.step++;showWizardStep();}

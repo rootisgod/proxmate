@@ -158,10 +158,11 @@ def job_view(row):
     result = dict(row)
     payload = decode_payload(result.pop('payload'))
     result['target'] = {k: payload[k] for k in ('node', 'vmid', 'source', 'name', 'filename') if k in payload}
-    if payload['action'] in ('manage','lifecycle'):
+    if payload['action'] in ('manage','lifecycle','simple'):
         plan=payload.get('plan',{})
         result['operation']=plan.get('operation',payload['action'])
-        result['target']={k:plan[k] for k in ('node','vmid','name','label','archive') if k in plan}
+        target=plan.get('config',plan)
+        result['target']={k:target[k] for k in ('node','vmid','name','label','archive') if k in target}
     return result
 
 
@@ -211,9 +212,9 @@ def worker():
             if payload['action'] == 'manage':
                 manager.execute(payload['plan'], log)
                 if payload['plan']['operation']=='tasks': lifecycle.record_tasks(payload['plan'],row['id'])
-            elif payload['action'] == 'lifecycle':
+            elif payload['action'] in ('lifecycle','simple'):
                 password=payload['plan'].get('config',{}).get('windows',{}).get('admin_password','')
-                lifecycle.execute(payload['plan'],log,row['id'])
+                (simple if payload['action']=='simple' else lifecycle).execute(payload['plan'],log,row['id'])
             else:
                 result=execute(payload, log)
                 if payload['action']=='provision': lifecycle.after_provision(payload,result,row['id'],log)
@@ -277,6 +278,8 @@ from management import register
 manager = register(app, db, encode_payload, decode_payload)
 from lifecycle import register as register_lifecycle
 lifecycle = register_lifecycle(app,manager)
+from simple_flow import register as register_simple
+simple = register_simple(app,manager,lifecycle)
 
 from server_connection import ServerConnection
 import operations
@@ -290,7 +293,7 @@ def connection_boundary():
         return
     server.lock.acquire()
     g.connection_locked = True
-    host_write = request.method == 'POST' and (request.path == '/api/jobs' or
+    host_write = request.method == 'POST' and (request.path == '/api/jobs' or request.path.startswith('/api/simple/') or
         request.path.startswith('/api/manage/') and request.path.split('/')[3] not in ('credentials','tasks') or
         request.path in ('/api/lifecycle/plan','/api/lifecycle/run','/api/lifecycle/policies','/api/lifecycle/families'))
     if host_write:

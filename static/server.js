@@ -2,7 +2,7 @@ let serverInfo=null;
 
 function serverRender(){
   if(view!=='server' && state)return false;
-  if(view!=='server' && ['tasks','credentials','jobs'].includes(view))return false;
+  if(view!=='server' && ['tasks','scripts','credentials','jobs'].includes(view))return false;
   if(serverInfo?.connected && ['schedules','recovery'].includes(view))return false;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view==='server'));
   if($('#server-form'))return true; // Preserve an unfinished edit during background polling.

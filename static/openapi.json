@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Proxmate API",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "description": "Single-admin LAN API. Configuration writes are immediate; infrastructure actions run in a serialized durable queue. Guest management requires reviewing a frozen plan, then confirming its ID. No automatic retries or rollback."
   },
   "servers": [
@@ -830,6 +830,18 @@
           },
           "wipe_disk": {
             "type": "boolean"
+          },
+          "setup_key": {
+            "type": "string",
+            "enum": [
+              "N69G4-B89J2-4G8F4-WWYCC-J464C",
+              "WMDGN-G9PQG-XVVXX-R3X43-63DFG",
+              "VDYBN-27WPP-V4HQT-9VMD4-VMK7H",
+              "WX4NM-KYWYW-QJJR4-XV3QB-6VM33",
+              "TVRH6-WHNXV-R9WG3-9XRFY-MY832",
+              "D764K-2NDRG-47T6Q-P8T8W-YP6DF"
+            ],
+            "description": "Optional public Microsoft GVLK for Windows Setup only. Simple plans select it using the ISO build and edition metadata. Not a licence or retail activation key; private keys are not accepted here."
           }
         },
         "required": [
@@ -1018,7 +1030,7 @@
           },
           "agent_iso": {
             "type": "string",
-            "description": "Windows: attached trusted VirtIO ISO with signed guest-agent MSI and matching vioserial driver"
+            "description": "Windows: selected trusted VirtIO ISO with x64 guest-agent MSI and matching signed vioserial driver"
           },
           "snippet_storage": {
             "type": "string",
@@ -1036,6 +1048,11 @@
             "type": "integer",
             "minimum": 60,
             "maximum": 3600
+          },
+          "agent_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Exact MSI checksum frozen from the selected ISO. New build flows set and verify it automatically. Required to install an unsigned MSI; invalid signatures remain rejected."
           }
         },
         "required": [
@@ -2468,6 +2485,250 @@
           },
           "403": {
             "description": "CSRF or Origin check failed"
+          }
+        }
+      }
+    },
+    "/api/simple/options": {
+      "get": {
+        "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
+        "description": "Discover available build destinations, ISO media, Ubuntu releases and common features",
+        "responses": {
+          "200": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        }
+      }
+    },
+    "/api/simple/software": {
+      "get": {
+        "summary": "List common software choices without connecting to Proxmox",
+        "description": "List common software choices without connecting to Proxmox",
+        "responses": {
+          "200": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        }
+      }
+    },
+    "/api/simple/editions": {
+      "post": {
+        "summary": "Read named Windows Server editions from the selected ISO",
+        "description": "Supply node and source: a Proxmox ISO volume ID, or library:filename.iso for a local ISO. Reads WIM/ESD metadata and returns editions with index, label, desktop, language and build. Never mounts or executes media.",
+        "responses": {
+          "200": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "credential": {
+                    "type": "object",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/plan": {
+      "post": {
+        "summary": "Review a batch of new Windows Server or Ubuntu machines and software",
+        "description": "Supply os=windows|ubuntu, name (1-12 characters), count (1-20), purpose=vm|template, and tasks=[{id,params}]. Windows requires source, edition index returned by /editions, and password. Ubuntu accepts profile and username. Optional overrides: node, storage, iso_storage, bridge, cores, memory in MB, disk in GB, locale, timezone, rdp, agent_iso and management_cidr. Template count must be one. Plans freeze targets, credentials and task bodies; expire after 30 minutes. Passwords and generated private keys are encrypted and excluded from responses. Metadata identity is checked again before installing; this is not a full ISO file checksum.",
+        "responses": {
+          "200": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "credential": {
+                    "type": "object",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/run": {
+      "post": {
+        "summary": "Queue the reviewed batch once, with one tracked job per machine",
+        "description": "Supply plan_id and confirmed=true, plus risk_confirmed=true for trusted custom scripts. Confirmation covers starting the listed new guests, guest setup/software and Windows licensing. Returns jobs=[{id,name,url}]. Repeated submissions return the same jobs. Poll each job for actual installation, authenticated bootstrap, software and optional template generalization results. No failed guest is deleted.",
+        "responses": {
+          "202": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "credential": {
+                    "type": "object",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/existing-plan": {
+      "post": {
+        "summary": "Discover saved/existing guest connections and review selected software",
+        "description": "Supply targets=[{node,vmid}], tasks=[{id,params}], and optional credential_id or credential={platform,username,password}. Saves local login/binding records if needed, uses guest-agent IP/public trust discovery, and returns a normal management review plan. Submit its ID to /api/manage/run. Does not enable remote access or run software during planning. Existing WinRM/SSH and guest-agent access are required for discovery.",
+        "responses": {
+          "200": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "credential": {
+                    "type": "object",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -21,6 +21,16 @@ def digest(value): return hashlib.sha256(json.dumps(value,sort_keys=True).encode
 def vm_path(t): return f'nodes/{t["node"]}/qemu/{t["vmid"]}'
 def config_identity(config): return digest({k:v for k,v in config.items() if k not in ('digest','lock')})
 def machine_identity(config): return digest({k:config.get(k) for k in ('smbios1','vmgenid')})
+
+
+class BootstrapFailed(RuntimeError):
+    """A terminal bootstrap failure, not a guest readiness delay."""
+
+
+class BootstrapTargetChanged(BootstrapFailed):
+    """A terminal target change, not a guest readiness delay."""
+
+
 def protected(archive): return str(archive.get('protected',False)).lower() in ('1','true')
 def archive_identity(a): return digest({k:a.get(k) for k in ('volid','size','ctime','vmid','format')})
 
@@ -297,7 +307,7 @@ class Lifecycle:
         record=dict(id=job_id,node=d['node'],vmid=d['vmid'],machine_identity=machine_identity(cfg),created=time.time(),config=provenance(d),source=result or {},tasks=[],**(extra or {}))
         self.m.put('builds',record)
         if d.get('bootstrap',{}).get('verify'):
-            self.verify_bootstrap(d,log)
+            self.verify_bootstrap(d,log,record['machine_identity'])
             record['bootstrap_verified']=True;self.m.put('builds',record)
 
     def record_tasks(self,plan,job_id):
@@ -307,14 +317,38 @@ class Lifecycle:
             if builds:
                 b=builds[-1];b['tasks'].append({'job_id':job_id,'created':time.time(),'tasks':[{'id':s['item']['id'],'name':s['item']['name'],'params':s['params'],'script_sha256':digest(s['item'].get('body',''))} for s in plan['tasks']]});self.m.put('builds',b)
 
-    def verify_bootstrap(self,d,log):
+    def verify_bootstrap(self,d,log,expected_identity=None):
         opts=d['bootstrap'];credential=self.m.get('credentials',opts['credential_id'])
         platform='windows' if d['kind']=='windows' else 'linux'
         if credential['platform']!=platform: raise ValueError('Bootstrap credential platform mismatch')
         p=operations.Proxmox();path=vm_path(d);deadline=time.monotonic()+opts['timeout'];last='Guest agent not ready'
+        if expected_identity is None: expected_identity=machine_identity(p.call('GET',path+'/config'))
+        next_report=0
         log('Waiting for bootstrap marker, guest address and authenticated '+('WinRM' if platform=='windows' else 'SSH')+'.')
         while time.monotonic()<deadline:
+            waiting='Proxmox connection not ready'
             try:
+                resources=p.resources()
+                node=next((r for r in resources if r.get('type')=='node' and r.get('node')==d['node']),None)
+                if not node or node.get('status')!='online': raise ValueError('Proxmox node is offline or unavailable')
+                target=next((r for r in resources if r.get('vmid')==d['vmid']),None)
+                if not target: raise BootstrapTargetChanged('Created VM no longer exists; setup wait stopped. No VM was deleted by Proxmate.')
+                if target.get('node')!=d['node'] or target.get('type')!='qemu': raise BootstrapTargetChanged('Created VM moved or was replaced; setup wait stopped.')
+                if machine_identity(p.call('GET',path+'/config'))!=expected_identity:
+                    raise BootstrapTargetChanged('Created VM identity changed; setup wait stopped before guest access.')
+                waiting='Waiting for QEMU guest agent discovery; remote access has not yet been verified'
+                p.call('GET',path+'/agent/get-osinfo')
+                if platform=='windows':
+                    try:
+                        progress=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-status.json')
+                        stage=json.loads(progress.get('content','')).get('stage')
+                    except Exception: stage=None  # Older generated helpers have no status file.
+                    if stage=='failed-retry-limit': raise BootstrapFailed('Windows automatic setup exhausted its retries. VM retained; software was not run.')
+                    stages={'configuring-winrm':'Configuring HTTPS WinRM', 'waiting-windows-setup':'Waiting for Windows Setup to finish; no login is required',
+                            'installing-guest-tools':'Installing verified guest tools', 'retry-guest-tools':'WinRM configured; retrying guest-tool installation',
+                            'retry-winrm':'Guest tools running; retrying HTTPS WinRM setup', 'retry-winrm-and-guest-tools':'Retrying HTTPS WinRM and guest-tool setup'}
+                    if stage in stages: raise ValueError(stages[stage])
+                waiting='Guest agent is running; waiting for completed remote-access setup'
                 marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
                 if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
                 interfaces=p.call('GET',path+'/agent/network-get-interfaces')
@@ -327,6 +361,7 @@ class Lifecycle:
                 resolved=management.endpoint_addresses(binding)
                 if not set(map(str,resolved)) & addresses: raise ValueError('Configured address does not match guest-agent addresses')
                 if platform=='windows':
+                    waiting='Waiting for the guest HTTPS certificate'
                     cert=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\winrm.pem').get('content','')
                     if len(cert)>20000 or '-----BEGIN CERTIFICATE-----' not in cert: raise ValueError('Bootstrap public certificate unavailable')
                     binding['ca_pem']=cert
@@ -334,12 +369,19 @@ class Lifecycle:
                     public=p.call('GET',path+'/agent/file-read',file='/etc/ssh/ssh_host_ed25519_key.pub').get('content','').split()
                     if len(public)<2 or public[0]!='ssh-ed25519': raise ValueError('Guest SSH public host key unavailable')
                     binding['fingerprint']='SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public[1],validate=True)).digest()).decode().rstrip('=')
+                waiting='Authenticated HTTPS WinRM check has not passed' if platform=='windows' else 'Authenticated SSH check has not passed'
                 run_guest(binding,credential,[],log,readiness=True)
                 self.m.save('connections',binding)
                 log('Bootstrap authenticated and guest connection saved. Trust material was read through the authenticated Proxmox guest-agent channel.')
                 return
+            except BootstrapFailed:
+                raise
             except Exception as exc:
-                last=str(exc) if isinstance(exc,ValueError) else 'Guest runtime/authentication not ready; inspect the guest console and credential'
+                last=str(exc) if isinstance(exc,ValueError) else waiting
+                now=time.monotonic()
+                if now>=next_report:
+                    log(f'Waiting for setup: {last}. About {max(0, int((deadline-now+59)//60))} minutes remain. Later jobs stay queued until this build finishes.')
+                    next_report=now+60
                 time.sleep(5)
         raise RuntimeError('Bootstrap verification timed out: '+last+'. The created VM is retained.')
 

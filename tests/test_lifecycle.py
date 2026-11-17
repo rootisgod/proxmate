@@ -315,8 +315,59 @@ def test_bootstrap_auth_failure_does_not_save_connection(recovery,monkeypatch):
     assert app.manager.all('connections')==[] and 'not-the-guest-password' not in '\n'.join(logs)
 
 
+@pytest.mark.parametrize('stage,expected', [('retry-winrm','retrying HTTPS WinRM'),('retry-guest-tools','retrying guest-tool'),('waiting-windows-setup','no login is required'),('failed-retry-limit','exhausted its retries')])
+def test_windows_bootstrap_reports_safe_stage_and_blocks_tasks(recovery,monkeypatch,stage,expected):
+    app,_,_,fake=recovery
+    c=app.manager.save('credentials',dict(name='Guest',platform='windows',username='Administrator',password='test-password'))
+    original=fake.call
+    def call(method,path,**kw):
+        if kw.get('file','').endswith('bootstrap-status.json'):
+            return {'content':json.dumps({'stage':stage,'error':'private diagnostic must not be shown'})}
+        return original(method,path,**kw)
+    fake.call=call
+    def forbidden(*a,**kw):pytest.fail('No authentication/tasks before guest setup completes')
+    monkeypatch.setattr(lifecycle,'run_guest',forbidden)
+    d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':c['id'],'timeout':60})
+    logs=[]
+    with pytest.raises(RuntimeError,match=expected):app.lifecycle.verify_bootstrap(d,logs.append)
+    assert app.manager.all('connections')==[]
+    assert 'private diagnostic' not in '\n'.join(logs)
+
+
+def test_missing_agent_is_distinct_from_winrm_authentication_failure(recovery,monkeypatch):
+    app,_,_,fake=recovery;fake.fail_agent=True
+    c=app.manager.save('credentials',dict(name='Guest',platform='windows',username='Administrator',password='test-password'))
+    d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':c['id'],'timeout':60})
+    with pytest.raises(RuntimeError,match='Waiting for QEMU guest agent discovery'):
+        app.lifecycle.verify_bootstrap(d,lambda _:None)
+
+
 def test_bootstrap_cannot_be_silently_ignored_by_legacy_job_route(recovery):
     app,client,h,fake=recovery
     result=client.post('/api/jobs',json=dict(action='linux-template',node='pve',vmid=901,name='legacy',storage='local-lvm',bridge='vmbr0',bootstrap={'enabled':True,'snippet_storage':'local'}),headers=h)
     assert result.status_code==400 and 'provision action' in result.json['error']
+
+
+@pytest.mark.parametrize('change', ['deleted', 'replaced', 'moved', 'offline'])
+def test_bootstrap_target_changes_do_not_wait_for_guest_or_use_credentials(recovery, monkeypatch, change):
+    app,_,_,fake=recovery
+    credential=app.manager.save('credentials',dict(name='Guest',platform='windows',username='admin',password='test-secret'))
+    expected=lifecycle.machine_identity(fake.configs[201])
+    if change=='deleted': fake.guests.pop(201)
+    if change=='replaced': fake.configs[201]['smbios1']='uuid=replacement'
+    resources=fake.resources
+    if change in ('moved','offline'):
+        def changed_resources():
+            rows=resources()
+            rows[0 if change=='offline' else 1].update({'status':'offline'} if change=='offline' else {'node':'other'})
+            return rows
+        fake.resources=changed_resources
+    def forbidden(*args,**kwargs): raise AssertionError('Guest login must not run')
+    monkeypatch.setattr(lifecycle,'run_guest',forbidden)
+    d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':credential['id'],'timeout':60})
+    logs=[]
+    with pytest.raises(RuntimeError,match='timed out' if change=='offline' else 'setup wait stopped'):
+        app.lifecycle.verify_bootstrap(d,logs.append,expected)
+    assert fake.secret_reads==[] and fake.writes==[] and app.manager.all('connections')==[]
+    if change=='offline': assert any('Later jobs stay queued' in line for line in logs)
     assert not fake.writes

@@ -19,10 +19,13 @@ def options(value, kind):
         iso=value.get('agent_iso','')
         if not isinstance(iso,str) or not re.fullmatch(r'[A-Za-z0-9_.-]+:iso/[A-Za-z0-9_.-]+\.iso',iso): raise ValueError('Select a trusted VirtIO ISO containing guest-agent/qemu-ga-x86_64.msi')
         result.update(management_cidr=subnet,agent_iso=iso)
+        if value.get('agent_sha256'):
+            if not isinstance(value['agent_sha256'],str) or not re.fullmatch(r'[a-f0-9]{64}',value['agent_sha256']): raise ValueError('Invalid guest agent SHA256')
+            result['agent_sha256']=value['agent_sha256']
     else:
-        storage=value.get('snippet_storage','')
+        storage=value.get('seed_storage') or value.get('snippet_storage','')
         if not isinstance(storage,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,62}',storage): raise ValueError('Choose storage with snippets enabled for cloud-init bootstrap')
-        result['snippet_storage']=storage
+        result['seed_storage' if value.get('seed_storage') else 'snippet_storage']=storage
     if result['verify']:
         ident=value.get('credential_id','')
         if not isinstance(ident,str) or not re.fullmatch(r'[a-f0-9]{32}',ident): raise ValueError('Select a saved guest credential for verification')
@@ -62,57 +65,31 @@ def cloud_vendor():
         'runcmd':[['sh','-c','ssh-keygen -A && (systemctl enable --now ssh || systemctl enable --now sshd) && systemctl start qemu-guest-agent && mkdir -p /var/lib/proxmate && printf ready > /var/lib/proxmate/bootstrap-ready']]},sort_keys=False)
 
 
+def cloud_seed(path,username,public_key,hostname):
+    """NoCloud media avoids requiring a snippets-enabled Proxmox storage."""
+    import io
+    import uuid
+    import pycdlib
+    config=yaml.safe_load(cloud_vendor())
+    config.update(users=[{'name':username,'groups':['adm','sudo'],'shell':'/bin/bash','sudo':'ALL=(ALL) NOPASSWD:ALL',
+                          'lock_passwd':True,'ssh_authorized_keys':public_key.splitlines()}],ssh_pwauth=False)
+    files={'user-data':'#cloud-config\n'+yaml.safe_dump(config),
+           'meta-data':yaml.safe_dump({'instance-id':'proxmate-'+uuid.uuid4().hex,'local-hostname':hostname}),
+           'network-config':yaml.safe_dump({'version':2,'ethernets':{'lan':{'match':{'name':'e*'},'dhcp4':True}}})}
+    iso=pycdlib.PyCdlib();iso.new(interchange_level=3,joliet=3,rock_ridge='1.09',vol_ident='cidata')
+    try:
+        for i,(name,body) in enumerate(files.items()):
+            data=body.encode();iso.add_fp(io.BytesIO(data),len(data),iso_path=f'/FILE{i}.;1',joliet_path='/'+name,rr_name=name)
+        iso.write(str(path))
+    finally: iso.close()
+
+
 def windows_script(config):
+    from pathlib import Path
     subnet=str(ipaddress.ip_network(config['management_cidr'],strict=False))
-    return r'''# Run only inside the intended new Windows guest, elevated.
-$ErrorActionPreference = 'Stop'
-$root = 'C:\ProgramData\Proxmate'
-New-Item -ItemType Directory -Force -Path $root | Out-Null
-# The selected, attached VirtIO ISO supplies the signed guest-agent installer.
-$msi = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'guest-agent\qemu-ga-x86_64.msi' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if ($msi) {
-  $os = Get-CimInstance Win32_OperatingSystem
-  $build = [int]$os.BuildNumber
-  $flavour = if ($os.ProductType -eq 1) { if ($build -ge 22000) { 'w11' } else { 'w10' } } else { if ($build -ge 26100) { '2k25' } elseif ($build -ge 20348) { '2k22' } else { '2k19' } }
-  $inf = Join-Path ([IO.Path]::GetPathRoot($msi)) ('vioserial\'+$flavour+'\amd64\vioser.inf')
-  if (-not (Test-Path -LiteralPath $inf)) { throw 'VirtIO ISO lacks the matching x64 serial driver.' }
-  & pnputil.exe /add-driver $inf /install | Out-Null
-  if ($LASTEXITCODE -notin @(0,3010)) { throw 'VirtIO serial driver installation failed.' }
-}
-if (-not (Get-Service QEMU-GA -ErrorAction SilentlyContinue)) {
-  if (-not $msi) { throw 'Attach the selected VirtIO ISO containing the guest agent MSI.' }
-  if ((Get-AuthenticodeSignature -FilePath $msi).Status -ne 'Valid') { throw 'Guest agent MSI signature validation failed.' }
-  $install = Start-Process msiexec.exe -ArgumentList @('/i',('"'+$msi+'"'),'/qn','/norestart') -Wait -PassThru -WindowStyle Hidden
-  if ($install.ExitCode -notin @(0,3010)) { throw 'Guest agent installation failed.' }
-}
-Set-Service QEMU-GA -StartupType Automatic
-Start-Service QEMU-GA
-Enable-PSRemoting -SkipNetworkProfileCheck -Force
-Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $false
-Set-Item WSMan:\localhost\Service\Auth\Basic -Value $false
-# Remove HTTP listeners/rules created by Enable-PSRemoting. HTTPS only.
-Get-ChildItem WSMan:\localhost\Listener | Where-Object { $_.Keys -contains 'Transport=HTTP' } | Remove-Item -Recurse -Force
-Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue | Disable-NetFirewallRule
-$addresses = @()
-for ($attempt=0; $attempt -lt 60; $attempt++) {
-  $addresses = @(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.AddressState -eq 'Preferred' } | Select-Object -ExpandProperty IPAddress)
-  if ($addresses.Count) { break }; Start-Sleep -Seconds 2
-}
-if (-not $addresses.Count) { throw 'No usable guest address; fix networking and rerun bootstrap.' }
-$san = '2.5.29.17={text}DNS=' + $env:COMPUTERNAME
-foreach ($ip in $addresses) { $san += '&IPAddress=' + $ip }
-$cert = New-SelfSignedCertificate -Subject ('CN='+$env:COMPUTERNAME) -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 2048 -NotAfter (Get-Date).AddYears(1) -TextExtension @($san,'2.5.29.37={text}1.3.6.1.5.5.7.3.1')
-Get-ChildItem WSMan:\localhost\Listener | Where-Object { $_.Keys -contains 'Transport=HTTPS' } | Remove-Item -Recurse -Force
-New-Item WSMan:\localhost\Listener -Transport HTTPS -Address '*' -CertificateThumbPrint $cert.Thumbprint -Force | Out-Null
-Get-NetFirewallRule -Name 'Proxmate-WinRM-HTTPS' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-New-NetFirewallRule -Name 'Proxmate-WinRM-HTTPS' -DisplayName 'Proxmate WinRM HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5986 -Profile Any -RemoteAddress '__SUBNET__' | Out-Null
-Set-Service WinRM -StartupType Automatic
-Restart-Service WinRM
-$pem = "-----BEGIN CERTIFICATE-----`r`n" + [Convert]::ToBase64String($cert.RawData,[Base64FormattingOptions]::InsertLineBreaks) + "`r`n-----END CERTIFICATE-----`r`n"
-[IO.File]::WriteAllText((Join-Path $root 'winrm.pem'),$pem)
-[IO.File]::WriteAllText((Join-Path $root 'bootstrap-ready'),'ready')
-Write-Output 'Bootstrap complete. Proxmate can read this public TLS certificate through the guest agent and verify HTTPS.'
-'''.replace('__SUBNET__',subnet)
+    digest=config.get('agent_sha256','')
+    if digest and not re.fullmatch(r'[a-f0-9]{64}',digest): raise ValueError('Invalid guest agent SHA256')
+    return Path(__file__).with_name('windows_bootstrap.ps1').read_text(encoding='utf-8').replace('__SUBNET__',subnet).replace('__AGENT_SHA256__',digest)
 
 
-WINDOWS_COMMAND = r'''powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-PSDrive -PSProvider FileSystem | %% { $p=Join-Path $_.Root 'ProxmateBootstrap.ps1'; if(Test-Path $p){ & $p; exit } }; throw 'Bootstrap media missing'"'''.replace('%%','%')
+WINDOWS_COMMAND = r'''powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop';Get-PSDrive -PSProvider FileSystem|%%{$p=Join-Path $_.Root 'ProxmateBootstrap.ps1';if(Test-Path $p){& $p;exit}};throw 'Bootstrap media missing'"'''.replace('%%','%')

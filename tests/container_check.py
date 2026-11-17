@@ -37,10 +37,15 @@ with tempfile.TemporaryDirectory() as tmp:
     subprocess.run(['sh','-n',str(shell)],check=True)
     assert client.get('/api/server').json['connected'] is False
     assert client.get('/static/server.js').status_code==200
+    assert client.get('/static/simple.js').status_code==200
+    assert client.get('/api/simple/software').json['features']
     family=client.post('/api/lifecycle/families',json={'name':'Isolated family'},headers=headers)
     assert family.status_code==409  # No selected server on a clean installation.
     assert client.post('/api/jobs',json={'action':'start','node':'pve','vmid':201},headers=headers).status_code==409
     assert client.get('/api/openapi.json').status_code==200
+    import bootstrap
+    generated=bootstrap.windows_script({'management_cidr':'192.0.2.0/24'})
+    assert 'Invoke-ProxmateBootstrap' in generated and '__SUBNET__' not in generated
     # Syntax-check actual installed collections without running any task.
     for platform in ('windows','linux'):
         tasks=[]

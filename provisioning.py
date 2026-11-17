@@ -14,6 +14,24 @@ PROFILES = {
 LOCALES = {'en-US': 'English (United States)', 'en-GB': 'English (United Kingdom)', 'de-DE': 'German', 'fr-FR': 'French', 'es-ES': 'Spanish', 'ja-JP': 'Japanese'}
 TIMEZONES = ['GMT Standard Time', 'UTC', 'W. Europe Standard Time', 'Eastern Standard Time', 'Pacific Standard Time', 'Tokyo Standard Time', 'AUS Eastern Standard Time']
 
+# Public Microsoft GVLKs for setup, not private licence/activation keys.
+# https://learn.microsoft.com/en-us/windows-server/get-started/kms-client-activation-keys
+WINDOWS_SETUP_KEYS = {
+    ('17763', 'ServerStandard'): 'N69G4-B89J2-4G8F4-WWYCC-J464C',
+    ('17763', 'ServerDatacenter'): 'WMDGN-G9PQG-XVVXX-R3X43-63DFG',
+    ('20348', 'ServerStandard'): 'VDYBN-27WPP-V4HQT-9VMD4-VMK7H',
+    ('20348', 'ServerDatacenter'): 'WX4NM-KYWYW-QJJR4-XV3QB-6VM33',
+    ('26100', 'ServerStandard'): 'TVRH6-WHNXV-R9WG3-9XRFY-MY832',
+    ('26100', 'ServerDatacenter'): 'D764K-2NDRG-47T6Q-P8T8W-YP6DF',
+}
+
+
+def windows_setup_key(edition):
+    # Core and Desktop Experience share EDITIONID. Never infer an edition from
+    # an image index or give evaluation/Azure/unknown images a full-edition key.
+    if 'eval' in edition.get('name', '').lower(): return None
+    return WINDOWS_SETUP_KEYS.get((str(edition.get('build', '')), edition.get('edition_id')))
+
 
 def linux_options(data):
     profile = data.get('profile', 'ubuntu-24.04')
@@ -40,7 +58,7 @@ def linux_options(data):
 def windows_options(data):
     if not isinstance(data, dict): raise ValueError('Windows settings must be an object')
     defaults = dict(ui_language='en-US', locale='en-GB', keyboard='en-GB', timezone='GMT Standard Time', hostname='PROXMATE', image_index=1, rdp=False, accept_eula=False, wipe_disk=False)
-    if set(data) - set(defaults) - {'admin_password'}: raise ValueError('Unknown Windows setting')
+    if set(data) - set(defaults) - {'admin_password', 'setup_key'}: raise ValueError('Unknown Windows setting')
     d = dict(defaults, **data)
     for field in ('ui_language', 'locale', 'keyboard'):
         if d[field] not in LOCALES: raise ValueError(f'Unsupported Windows {field}')
@@ -50,6 +68,8 @@ def windows_options(data):
     if isinstance(d['image_index'], bool) or not str(d['image_index']).isdigit() or not 1 <= int(d['image_index']) <= 100:
         raise ValueError('Image index must be 1–100; confirm it against your ISO with DISM')
     d['image_index'] = int(d['image_index'])
+    if 'setup_key' in d and d['setup_key'] not in WINDOWS_SETUP_KEYS.values():
+        raise ValueError('Setup key must be a supported public Microsoft installation key; private activation keys are not accepted here')
     for field in ('rdp', 'accept_eula', 'wipe_disk'):
         if not isinstance(d[field], bool): raise ValueError(f'{field} must be a boolean')
     password = d.get('admin_password', '')
@@ -95,7 +115,11 @@ def answer_xml(settings, preview=False, bootstrap=None):
     meta = add(add(osimage,'InstallFrom'),'MetaData', **{'{'+wcm+'}action':'add'})
     add(meta,'Key','/IMAGE/INDEX'); add(meta,'Value',d['image_index'])
     target = add(osimage,'InstallTo'); add(target,'DiskID',0); add(target,'PartitionID',4)
-    add(osimage,'WillShowUI','OnError'); add(add(setup,'UserData'),'AcceptEula',d['accept_eula'])
+    add(osimage,'WillShowUI','OnError')
+    user = add(setup,'UserData'); add(user,'AcceptEula',d['accept_eula'])
+    if d.get('setup_key'):
+        product = add(user,'ProductKey')
+        add(product,'Key',d['setup_key']); add(product,'WillShowUI','OnError')
     specialize = add(root,'settings', **{'pass':'specialize'})
     if bootstrap and bootstrap.get('enabled'):
         from bootstrap import WINDOWS_COMMAND

@@ -16,7 +16,7 @@ import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 import yaml
 from provisioning import PROFILES, linux_options, windows_options, answer_iso, checksum_for
-from bootstrap import options as bootstrap_options, cloud_vendor
+from bootstrap import options as bootstrap_options, cloud_vendor, cloud_seed
 
 
 def secret(path):
@@ -102,6 +102,16 @@ class Proxmox:
                 log(line.rstrip())
             if stdout.channel.recv_exit_status() != 0:
                 raise RuntimeError('Remote operation failed; see job log. Partial resources are retained.')
+
+
+def upload_generated(p,node,storage,path,log):
+    with path.open('rb') as stream:
+        enc=MultipartEncoder(fields={'content':'iso','filename':(path.name,stream,'application/octet-stream')})
+        response=p.session.post(p.url+f'/api2/json/nodes/{node}/storage/{storage}/upload',data=enc,
+            headers={'Content-Type':enc.content_type},timeout=120,allow_redirects=False)
+        if not 200<=response.status_code<300: raise RuntimeError('Generated setup media upload failed')
+        p.wait(node,response.json()['data'],log)
+    return storage+':iso/'+path.name
 
 
 def inventory():
@@ -214,6 +224,32 @@ def validate(data):
     return d
 
 
+def windows_first_boot(p, base, identity, answer_volume, started, log):
+    """Best-effort DVD prompt input, only during a new unattended VM's first boot."""
+    deadline = started + 20
+    sent = 0
+    try:
+        for _ in range(20):
+            if time.monotonic() >= deadline:
+                break
+            config = p.call('GET', f'{base}/config')
+            if config.get('smbios1') != identity or config.get('sata1', '').split(',')[0] != answer_volume:
+                break
+            state = p.call('GET', f'{base}/status/current')
+            if state.get('status') != 'running' or not 0 <= state.get('uptime', 20) < 20:
+                break
+            if time.monotonic() >= deadline:
+                break
+            p.call('PUT', f'{base}/sendkey', key='spc')
+            sent += 1
+            time.sleep(1)
+    except Exception:
+        # Missing console permission or a slow boot must not abandon installation.
+        # Do not log remote error bodies, which can contain sensitive arguments.
+        log('Automatic DVD boot input stopped. Use the Proxmox console if Windows setup has not started.')
+    log(f'First-boot input finished ({sent} space keys sent). This does not verify installation. If the DVD prompt timed out, open the console, press Enter for Boot Manager, select the Windows DVD and immediately press a key.')
+
+
 def execute(d, log):
     if d['action'] == 'provision':
         return execute_flow(d, log)
@@ -271,8 +307,16 @@ def execute(d, log):
         if windows: config['tpmstate0'] = f'{d["storage"]}:0,version=v2.0'
         if d.get('_answer_volume'): config['sata1'] = d['_answer_volume'] + ',media=cdrom'
         if d.get('bootstrap',{}).get('agent_iso'): config['sata2'] = d['bootstrap']['agent_iso']+',media=cdrom'
+        unattended = windows and bool(d.get('_answer_volume'))
+        if unattended:
+            config['boot'] = 'order=sata0;ide2'
+            config['smbios1'] = f'uuid={uuid.uuid4()}'
         task(base, **config)
-        if d.get('start'): task(f'{base}/{vmid}/status/start')
+        if d.get('start'):
+            started = time.monotonic()
+            task(f'{base}/{vmid}/status/start')
+            if unattended:
+                windows_first_boot(p, f'{base}/{vmid}', config['smbios1'], d['_answer_volume'], started, log)
         log('Installer VM ready. Open its Proxmox console, install the OS, then generalize before converting to a template.')
     elif a == 'upload-iso':
         root = Path(os.getenv('ISO_DIR', 'D:/ISOs')).resolve()
@@ -311,12 +355,18 @@ echo '{digest}  image.qcow2' | sha256sum -c -
 qm create {vmid} --name {name} --memory {d.get('memory', 2048)} --cores {d.get('cores', 2)} --cpu host --ostype l26 --agent 1 --scsihw virtio-scsi-single --net0 virtio,bridge={bridge} --serial0 socket --vga serial0
 qm set {vmid} --scsi0 {storage}:0,import-from="$work/image.qcow2",discard=on
 qm resize {vmid} scsi0 {d.get('disk', 32)}G
-qm set {vmid} --ide2 {storage}:cloudinit --boot order=scsi0 --ipconfig0 {q('ip=' + d['address'] + ',gw=' + d['gateway'] if d.get('network_mode') == 'static' else 'ip=dhcp')} --ciuser {q(d.get('username', profile['user']))}
+qm set {vmid} {('--ide2 '+storage+':cloudinit') if not d.get('bootstrap',{}).get('seed_storage') else ''} --boot order=scsi0 --ipconfig0 {q('ip=' + d['address'] + ',gw=' + d['gateway'] if d.get('network_mode') == 'static' else 'ip=dhcp')} --ciuser {q(d.get('username', profile['user']))}
 '''
         if d.get('dns'): script += f'qm set {vmid} --nameserver {q(d["dns"])}\n'
         if d.get('ssh_key'):
             script += f"printf '%s\\n' {q(d['ssh_key'])} > key.pub\nqm set {vmid} --sshkeys key.pub\n"
-        if d.get('bootstrap',{}).get('enabled'):
+        if d.get('bootstrap',{}).get('seed_storage'):
+            with tempfile.TemporaryDirectory(prefix='proxmate-seed-') as temp:
+                seed=Path(temp)/f'proxmate-seed-{vmid}-{uuid.uuid4().hex}.iso'
+                cloud_seed(seed,d['username'],d['ssh_key'],d['name'])
+                volume=upload_generated(p,node,d['bootstrap']['seed_storage'],seed,log)
+            script+=f'qm set {vmid} --ide2 {q(volume+",media=cdrom")}\n'
+        elif d.get('bootstrap',{}).get('enabled'):
             volume = d['bootstrap']['snippet_storage']+':snippets/proxmate-bootstrap-'+str(vmid)+'-'+uuid.uuid4().hex+'.yaml'
             encoded = base64.b64encode(cloud_vendor().encode()).decode()
             script += f'''snippet=$(pvesm path {q(volume)})
@@ -383,7 +433,8 @@ def execute_flow(d, log):
     if not any(n['iface'] == d['bridge'] and n.get('type') == 'bridge' for n in networks): raise ValueError('Choose an existing bridge')
     log('Preflight passed: unused VM ID, online node, storage and bridge.')
     if d['kind'] == 'linux-cloud':
-        if d.get('bootstrap',{}).get('enabled') and not any(s['storage']==d['bootstrap']['snippet_storage'] and s.get('active') and 'snippets' in s.get('content','').split(',') for s in stores):
+        b=d.get('bootstrap',{})
+        if b.get('enabled') and not any(s['storage']==(b.get('seed_storage') or b.get('snippet_storage')) and s.get('active') and ('iso' if b.get('seed_storage') else 'snippets') in s.get('content','').split(',') for s in stores):
             raise ValueError('Bootstrap requires active snippets-enabled storage')
         result = execute(dict(d, action='linux-template', outcome=d.get('purpose', 'vm')), log)
         log('Next: boot the VM or clone the template and verify SSH/network access.')
@@ -392,6 +443,11 @@ def execute_flow(d, log):
         vol=d['bootstrap']['agent_iso']
         drivers=p.call('GET',f'nodes/{d["node"]}/storage/{vol.split(":")[0]}/content',content='iso')
         if not any(m['volid']==vol for m in drivers): raise ValueError('Selected guest agent ISO is not present')
+        from media import guest_agent_sha256
+        actual=guest_agent_sha256(vol,d['node'])
+        if d['bootstrap'].get('agent_sha256') and d['bootstrap']['agent_sha256']!=actual:
+            raise ValueError('Guest agent MSI changed since review; create a new plan')
+        d['bootstrap']['agent_sha256']=actual
     if d['source_kind'] == 'local':
         execute(dict(action='upload-iso', node=d['node'], storage=d['iso_storage'], filename=d['filename']), log)
     else:

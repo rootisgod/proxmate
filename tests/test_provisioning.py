@@ -7,7 +7,7 @@ import pycdlib
 import pytest
 
 import operations
-from provisioning import answer_xml, answer_iso, windows_options, checksum_for
+from provisioning import answer_xml, answer_iso, windows_options, checksum_for, windows_setup_key, WINDOWS_SETUP_KEYS
 from test_api import service
 
 NS = {'u': 'urn:schemas-microsoft-com:unattend'}
@@ -45,6 +45,38 @@ def test_password_preview_redacted_and_iso_round_trip(tmp_path):
     iso=pycdlib.PyCdlib();iso.open(str(path));out=io.BytesIO()
     iso.get_file_from_iso_fp(out,joliet_path='/Autounattend.xml');iso.close()
     assert ET.fromstring(out.getvalue()).find('.//u:AdministratorPassword/u:Value',NS).text == PASSWORD
+
+
+@pytest.mark.parametrize('build,edition_id', WINDOWS_SETUP_KEYS)
+def test_public_setup_key_matches_media_edition_and_only_sets_setup_pass(build,edition_id,tmp_path):
+    key=windows_setup_key(dict(build=build,edition_id=edition_id,name='Windows Server'))
+    assert key==WINDOWS_SETUP_KEYS[(build,edition_id)]
+    path=tmp_path/'key-answer.iso';answer_iso(windows(setup_key=key),path)
+    iso=pycdlib.PyCdlib();iso.open(str(path));out=io.BytesIO()
+    iso.get_file_from_iso_fp(out,joliet_path='/Autounattend.xml');iso.close()
+    root=ET.fromstring(out.getvalue())
+    product=root.find("u:settings[@pass='windowsPE']/u:component[@name='Microsoft-Windows-Setup']/u:UserData/u:ProductKey",NS)
+    assert product.find('u:Key',NS).text==key
+    assert product.find('u:WillShowUI',NS).text=='OnError'
+    assert len(root.findall('.//u:ProductKey',NS))==1
+    assert root.find('.//u:MetaData/u:Value',NS).text=='2'
+
+
+@pytest.mark.parametrize('edition', [
+    dict(build='26100',edition_id='ServerStandardEval'),
+    dict(build='26100',edition_id='ServerStandard',name='Windows Server Evaluation'),
+    dict(build='26100',edition_id='ServerAzureCor'),
+    dict(build='99999',edition_id='ServerStandard'),
+    dict(build='26100',name='Windows Server Standard'),
+])
+def test_setup_key_never_guessed_for_unknown_or_evaluation_media(edition):
+    assert windows_setup_key(edition) is None
+
+
+def test_private_or_empty_setup_key_rejected():
+    for key in ('XXXXX-XXXXX-XXXXX-XXXXX-XXXXX','',None,[]):
+        with pytest.raises(ValueError,match='public Microsoft'):
+            windows_options(windows(setup_key=key))
 
 
 @pytest.mark.parametrize('update', [
@@ -133,6 +165,20 @@ def test_flow_collision_prevents_even_media_upload(monkeypatch):
     p.session.post.assert_not_called();assert p.calls==[]
 
 
+def test_changed_guest_agent_msi_stops_before_upload_or_vm_creation(monkeypatch):
+    import media
+    p=FakeProxmox();original=p.call
+    def call(method,path,**kw):
+        if path.endswith('/content'):return [{'volid':'local:iso/windows.iso'},{'volid':'local:iso/virtio.iso'}]
+        return original(method,path,**kw)
+    p.call=call;monkeypatch.setattr(operations,'Proxmox',lambda:p)
+    monkeypatch.setattr(media,'guest_agent_sha256',lambda *args:'b'*64)
+    d=flow(bootstrap=dict(enabled=True,management_cidr='192.0.2.0/24',agent_iso='local:iso/virtio.iso',agent_sha256='a'*64))
+    with pytest.raises(ValueError,match='MSI changed since review'):operations.execute(d,lambda _:None)
+    p.session.post.assert_not_called()
+    assert not any(method!='GET' for method,_,_ in p.calls)
+
+
 def test_finish_setup_never_deletes_arbitrary_media(monkeypatch):
     p=FakeProxmox()
     p.resources=lambda:[{'type':'node','node':'pve','status':'online'},{'type':'qemu','node':'pve','vmid':9123,'status':'stopped'}]
@@ -140,3 +186,55 @@ def test_finish_setup_never_deletes_arbitrary_media(monkeypatch):
     monkeypatch.setattr(operations,'Proxmox',lambda:p)
     with pytest.raises(ValueError,match='No Proxmate-generated'):operations.execute({'action':'finish-setup','node':'pve','vmid':9123,'prepared':True},lambda s:None)
     assert p.call.call_count==1
+
+
+@pytest.mark.parametrize('reason', ['normal', 'changed-vm', 'changed-media', 'stopped', 'old-boot', 'late-start', 'api-error'])
+def test_windows_boot_input_is_bounded_and_checks_target(monkeypatch, reason):
+    now = [25 if reason == 'late-start' else 0]
+    monkeypatch.setattr(operations.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(operations.time, 'sleep', lambda n: now.__setitem__(0, now[0] + n))
+    calls = []
+    def call(method, path, **args):
+        calls.append((method, path, args))
+        if reason == 'api-error':
+            raise RuntimeError('sensitive remote error')
+        if path.endswith('/config'):
+            return {'smbios1': 'uuid=other' if reason == 'changed-vm' else 'uuid=new',
+                    'sata1': ('local:iso/other.iso' if reason == 'changed-media' else 'local:iso/answer.iso') + ',media=cdrom'}
+        if path.endswith('/status/current'):
+            return {'status': 'stopped' if reason == 'stopped' else 'running',
+                    'uptime': 50 if reason == 'old-boot' else now[0]}
+    p = Mock();p.call = call
+    logs = []
+    operations.windows_first_boot(p, 'nodes/pve/qemu/9123', 'uuid=new', 'local:iso/answer.iso', 0, logs.append)
+    keys = [c for c in calls if c[0] == 'PUT']
+    assert len(keys) == (20 if reason == 'normal' else 0)
+    assert all(c[1] == 'nodes/pve/qemu/9123/sendkey' and c[2] == {'key': 'spc'} for c in keys)
+    assert 'sensitive remote error' not in '\n'.join(logs)
+
+
+@pytest.mark.parametrize('os,answer,start,expected', [('windows',True,True,True), ('windows',True,False,False), ('windows',False,True,False), ('linux',False,True,False)])
+def test_boot_input_only_for_new_started_unattended_windows(monkeypatch, os, answer, start, expected):
+    p = FakeProxmox()
+    monkeypatch.setattr(operations, 'Proxmox', lambda:p)
+    boot = Mock();monkeypatch.setattr(operations, 'windows_first_boot', boot)
+    d = dict(action='installer',node='pve',vmid=9123,name='new',storage='local-lvm',bridge='vmbr0',iso='local:iso/windows.iso',os=os,start=start)
+    if answer: d['_answer_volume'] = 'local:iso/answer.iso'
+    operations.execute(d, lambda _:None)
+    assert boot.called == expected
+    creation = next(c[2] for c in p.calls if c[1] == 'nodes/pve/qemu')
+    if os == 'windows' and answer:
+        assert creation['boot'] == 'order=sata0;ide2'
+        assert creation['smbios1'].startswith('uuid=')
+    if expected:
+        assert p.calls[-1][1].endswith('/status/start')
+        assert boot.call_args.args[2] == creation['smbios1']
+
+
+def test_existing_vm_start_never_sends_boot_keys(monkeypatch):
+    p = FakeProxmox()
+    p.resources = lambda:[{'type':'node','node':'pve','status':'online'}, {'type':'qemu','node':'pve','vmid':9123}]
+    monkeypatch.setattr(operations, 'Proxmox', lambda:p)
+    boot = Mock();monkeypatch.setattr(operations, 'windows_first_boot', boot)
+    operations.execute(dict(action='start',node='pve',vmid=9123), lambda _:None)
+    boot.assert_not_called()
