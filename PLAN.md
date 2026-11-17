@@ -35,4 +35,16 @@ Build a Docker-hosted, single-administrator LAN utility. Initial modules: Flask 
 5. Exercise the app in Docker; verify authentication/input boundaries and real operations using uniquely named new test resources. Browser-check main workflows.
 6. Document verified behavior and remaining limitations.
 
-Contracts: GET /api/state provides live inventory, GET /api/jobs provides persistent progress, POST /api/jobs accepts a validated action. Credentials remain in mounted secrets, never browser responses. SSH host identity is pinned. Source VM IDs must exist; target IDs must be unused. No delete action is exposed. Failed creations retain their partial resources for inspection; no automatic destructive rollback.
+Original contracts: GET /api/state provides live inventory, GET /api/jobs provides persistent progress, POST /api/jobs accepts a validated action. The initial version used mounted secrets; the server interface below supersedes Proxmox credential configuration with encrypted storage. SSH host identity is pinned. Source VM IDs must exist; target IDs must be unused. Failed creations retain their partial resources for inspection; no automatic destructive rollback.
+
+## Server connection interface (2026-11-15)
+
+Goal: configure, test, connect and disconnect one Proxmox server in the UI and API. No multi-server selector or live infrastructure operations in this iteration. Use existing encryption and admin authentication; preserve the task library and guest credentials on replacement.
+
+Sequence: add server_connection.py with encrypted configuration and local legacy import; adapt operations.py and management.py to use a saved configuration snapshot; guard API submissions, worker claims and scheduler ticks against connection changes; add static/server.js and first-run setup; update Compose, API contracts and upgrade instructions; run backend/DOM and network-disabled container checks before local deployment.
+
+Contracts: GET /api/server exposes metadata only; test/connect/disconnect POSTs require the expected saved ID. Host-bound POSTs require X-Proxmate-Server. Replacement archives host-bound records and invalidates old reviewed plans. Active jobs or enabled schedules/policies block connection edits. API tests authenticate and read nodes/version only, with no SSH calls, redirects or remote changes.
+
+Verification: mocked connection and failure handling, encryption, auth/CSRF, stale IDs, pending work, archive isolation, reconnection, first-run DOM, password fields and obsolete dialogs. Rollback: back up SQLite plus encryption key before upgrading; preserve encrypted archives. Inspect active jobs before restoring an application/database pair. No automatic infrastructure rollback or archive restoration.
+
+Completion checkpoint (2026-11-17): server UI/API implemented and deployed locally; prior settings imported and legacy secret mount removed. The subsequent HTTP LAN wizard failure was reproduced and fixed by using getRandomValues for request keys. Checks cover 106 backend tests and 11 DOM workflows, including missing randomUUID and stale server responses. Real-server and rendered-browser validation remain outstanding; no new live Proxmox operations were performed for these changes.

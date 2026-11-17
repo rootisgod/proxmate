@@ -280,10 +280,11 @@ def test_review_shows_guest_endpoint_and_mismatch_prevents_wrong_vm_tasks(lab):
 
 @pytest.mark.parametrize('host',['127.0.0.1','::1','169.254.1.2','0.0.0.0','192.168.1.244','localhost'])
 def test_guest_connection_rejects_local_and_hypervisor_addresses(host,monkeypatch):
-    monkeypatch.setenv('PROXMOX_URL','https://192.168.1.244:8006')
+    monkeypatch.setattr(management.operations,'configured_url',lambda:'https://192.168.1.244:8006')
     with pytest.raises(ValueError):management.address(host)
 
 
 def test_dns_alias_cannot_route_guest_tasks_to_hypervisor(monkeypatch):
+    monkeypatch.setattr(management.operations,'configured_url',lambda:'https://192.168.1.244:8006')
     monkeypatch.setattr(management.socket,'getaddrinfo',lambda *a,**kw:[(2,1,6,'',('192.168.1.244',5986))])
     with pytest.raises(ValueError,match='Proxmox host'):management.endpoint_addresses({'host':'guest.example','port':5986})

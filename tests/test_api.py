@@ -11,8 +11,19 @@ def service(tmp_path, monkeypatch):
     password = tmp_path / 'password'
     password.write_text('test-admin-password')
     monkeypatch.setenv('APP_PASSWORD_FILE', str(password))
+    monkeypatch.setenv('PROXMOX_URL', 'https://192.0.2.10:8006')
+    monkeypatch.setenv('PROXMOX_PASSWORD_FILE', str(password))
+    monkeypatch.setenv('PROXMOX_SSH_FINGERPRINT', '')
     import app
     importlib.reload(app)
+    from flask.testing import FlaskClient
+    class SelectedServerClient(FlaskClient):
+        def open(self,*args,**kwargs):
+            headers = dict(kwargs.get('headers') or {})
+            headers.setdefault('X-Proxmate-Server',app.server.read().get('id',''))
+            kwargs['headers'] = headers
+            return super().open(*args,**kwargs)
+    app.app.test_client_class = SelectedServerClient
     return app, app.app.test_client()
 
 

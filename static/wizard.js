@@ -4,6 +4,12 @@ const wf = (name, label, value = '', type = 'text', extra = '') => `<label>${lab
 const ws = (name, label, items, selected) => `<label>${label}<select name="${name}">${items.map(([value,text])=>`<option value="${esc(value)}" ${String(value)===String(selected)?'selected':''}>${esc(text)}</option>`).join('')}</select></label>`;
 const wc = (name, label, checked=false) => `<label class="check wide"><input type="checkbox" name="${name}" ${checked?'checked':''}>${label}</label>`;
 
+function wizardRequestKey() {
+  // getRandomValues works on LAN HTTP; randomUUID requires a secure context.
+  // This is an opaque idempotency key, so it does not need UUID formatting.
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), b=>b.toString(16).padStart(2,'0')).join('');
+}
+
 async function openWizard(kind='linux-cloud', filename='', purpose='vm') {
   if (!state) return notice('Connect to Proxmox before opening the wizard.');
   try {
@@ -15,7 +21,7 @@ async function openWizard(kind='linux-cloud', filename='', purpose='vm') {
       vmid:state.next_id,name:kind==='windows'?'windows-server':'my-linux-vm',profile:'ubuntu-24.04',
       cores:2,memory:kind==='windows'?4096:2048,disk:kind==='windows'?64:32,username:'ubuntu',
       network_mode:'dhcp',ui_language:'en-US',locale:'en-GB',keyboard:'en-GB',timezone:'GMT Standard Time',
-      hostname:'PROXMATE',image_index:'',admin_password:'',rdp:false,start:false}, key:crypto.randomUUID()};
+      hostname:'PROXMATE',image_index:'',admin_password:'',rdp:false,start:false}, key:wizardRequestKey()};
     showWizardStep(); $('#wizard').showModal();
   } catch(e) { notice(e.message); }
 }

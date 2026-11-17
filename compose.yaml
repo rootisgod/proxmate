@@ -4,14 +4,13 @@ services:
     ports:
       - "${PORT:-8088}:8080"
     environment:
-      PROXMOX_URL: ${PROXMOX_URL:-https://192.168.1.244:8006}
+      PROXMOX_URL: ${PROXMOX_URL:-}
       PROXMOX_USER: ${PROXMOX_USER:-root@pam}
       PROXMOX_VERIFY_TLS: ${PROXMOX_VERIFY_TLS:-true}
       PROXMOX_SSH_FINGERPRINT: ${PROXMOX_SSH_FINGERPRINT:-}
       PROXMOX_PASSWORD_FILE: /run/secrets/proxmox_password
       APP_PASSWORD_FILE: /run/secrets/app_password
     secrets:
-      - proxmox_password
       - app_password
     volumes:
       - proxmate-data:/data
@@ -23,8 +22,6 @@ services:
       timeout: 5s
       retries: 3
 secrets:
-  proxmox_password:
-    file: .env.password
   app_password:
     file: .env.admin
 volumes:

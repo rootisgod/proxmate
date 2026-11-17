@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Proxmate API",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "description": "Single-admin LAN API. Configuration writes are immediate; infrastructure actions run in a serialized durable queue. Guest management requires reviewing a frozen plan, then confirming its ID. No automatic retries or rollback."
   },
   "servers": [
@@ -1232,6 +1232,88 @@
           "source_vmid",
           "confirmed"
         ]
+      },
+      "ServerConnectionInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url",
+          "username",
+          "expected_id"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "example": "https://192.0.2.10:8006"
+          },
+          "username": {
+            "type": "string",
+            "example": "root@pam"
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "Blank retains the saved password only for the same URL and username."
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "default": true
+          },
+          "ssh_user": {
+            "type": "string",
+            "default": "root"
+          },
+          "ssh_fingerprint": {
+            "type": "string",
+            "description": "Independently verified SHA256 fingerprint; optional for API-only operations."
+          },
+          "replace_confirmed": {
+            "type": "boolean",
+            "default": false
+          },
+          "expected_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Current saved server ID, or null on initial setup."
+          }
+        }
+      },
+      "ServerConnection": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "example": "https://192.0.2.10:8006"
+          },
+          "username": {
+            "type": "string",
+            "example": "root@pam"
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "default": true
+          },
+          "ssh_user": {
+            "type": "string",
+            "default": "root"
+          },
+          "ssh_fingerprint": {
+            "type": "string",
+            "description": "Independently verified SHA256 fingerprint; optional for API-only operations."
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "has_password": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
       }
     }
   },
@@ -1282,6 +1364,15 @@
               "type": "string",
               "maxLength": 128
             }
+          },
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
           }
         ],
         "requestBody": {
@@ -1436,7 +1527,7 @@
             "description": "Unauthorized"
           },
           "409": {
-            "description": "Idempotency key payload conflict"
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
         }
       }
@@ -1727,8 +1818,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/manage/{kind}/{id}/delete": {
@@ -1779,8 +1884,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/manage/plan": {
@@ -1813,8 +1932,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/manage/run": {
@@ -1847,8 +1980,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/manage/snapshots/{node}/{vmid}": {
@@ -1958,8 +2105,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/lifecycle/plan": {
@@ -1992,8 +2153,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/lifecycle/run": {
@@ -2026,8 +2201,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/lifecycle/policies": {
@@ -2060,8 +2249,22 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "409": {
+            "description": "No selected server, stale/missing X-Proxmate-Server, or idempotency conflict"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server. Required for host-bound writes; credentials and tasks are exempt."
+          }
+        ]
       }
     },
     "/api/bootstrap/helper": {
@@ -2112,6 +2315,159 @@
           },
           "401": {
             "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/server": {
+      "get": {
+        "summary": "Read the single saved server (password omitted)",
+        "responses": {
+          "200": {
+            "description": "Encrypted saved connection metadata. Connected means enabled, not a live health check.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerConnection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign in required"
+          }
+        }
+      }
+    },
+    "/api/server/test": {
+      "post": {
+        "summary": "Test Proxmox connection",
+        "description": "Authenticate and read version/nodes only; does not persist settings or use SSH.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerConnectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "nodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, stale expected_id, active operations or connection test failure"
+          },
+          "401": {
+            "description": "Sign in required"
+          },
+          "403": {
+            "description": "CSRF or Origin check failed"
+          }
+        }
+      }
+    },
+    "/api/server/connect": {
+      "post": {
+        "summary": "Connect Proxmox connection",
+        "description": "Test and save encrypted connection. Refuses active jobs or enabled schedules/policies. Replacement requires confirmation and archives host-bound records/plans; task library, guest credentials and job history remain.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerConnectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, stale expected_id, active operations or connection test failure"
+          },
+          "401": {
+            "description": "Sign in required"
+          },
+          "403": {
+            "description": "CSRF or Origin check failed"
+          }
+        }
+      }
+    },
+    "/api/server/disconnect": {
+      "post": {
+        "summary": "Disconnect Proxmox connection",
+        "description": "Disable operations without changing VMs; retains saved settings. Refuses active jobs or enabled schedules/policies.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_id"
+                ],
+                "properties": {
+                  "expected_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerConnection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, stale expected_id, active operations or connection test failure"
+          },
+          "401": {
+            "description": "Sign in required"
+          },
+          "403": {
+            "description": "CSRF or Origin check failed"
           }
         }
       }

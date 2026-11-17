@@ -75,7 +75,7 @@ def address(value):
     except ValueError: ip = None
     if ip and (ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local):
         raise ValueError('Use a routable guest address')
-    if value.lower() == (urlparse(os.getenv('PROXMOX_URL','https://192.168.1.244:8006')).hostname or '').lower():
+    if value.lower() == (urlparse(operations.configured_url()).hostname or '').lower():
         raise ValueError('Guest connections cannot target the Proxmox host')
     return value
 
@@ -84,7 +84,7 @@ def endpoint_addresses(binding):
     addresses = {ipaddress.ip_address(row[4][0].split('%')[0]) for row in socket.getaddrinfo(binding['host'],binding['port'],type=socket.SOCK_STREAM)}
     if not addresses or any(ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local for ip in addresses):
         raise ValueError('Guest endpoint resolves to an unsuitable address')
-    pve_host = urlparse(os.getenv('PROXMOX_URL','https://192.168.1.244:8006')).hostname
+    pve_host = urlparse(operations.configured_url()).hostname
     pve_addresses = {ipaddress.ip_address(row[4][0].split('%')[0]) for row in socket.getaddrinfo(pve_host,8006,type=socket.SOCK_STREAM)}
     if addresses & pve_addresses: raise ValueError('Guest endpoint resolves to the Proxmox host; refusing guest tasks')
     return addresses

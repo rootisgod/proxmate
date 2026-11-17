@@ -26,23 +26,35 @@ def secret(path):
     return value
 
 
+connection_provider = None
+
+
+def configured_url():
+    return connection_provider.read().get('url','') if connection_provider else os.getenv('PROXMOX_URL','')
+
+
 class Proxmox:
-    def __init__(self):
-        self.url = os.getenv('PROXMOX_URL', 'https://192.168.1.244:8006').rstrip('/')
-        self.password = secret(os.getenv('PROXMOX_PASSWORD_FILE', '.env.password'))
+    def __init__(self, config=None):
+        if config is None:
+            if connection_provider is None: raise ValueError('No Proxmox connection configured')
+            config = connection_provider.current()
+        self.url = config['url']
+        self.password = config['password']
+        self.ssh_user = config['ssh_user']
+        self.ssh_fingerprint = config['ssh_fingerprint']
         self.session = requests.Session()
-        self.session.verify = os.getenv('PROXMOX_VERIFY_TLS', 'true').lower() == 'true'
+        self.session.verify = config['verify_tls']
         if not self.session.verify:
             requests.packages.urllib3.disable_warnings()
-        data = self.call('POST', 'access/ticket', username=os.getenv('PROXMOX_USER', 'root@pam'), password=self.password)
+        data = self.call('POST', 'access/ticket', username=config['username'], password=self.password)
         self.session.cookies.set('PVEAuthCookie', data['ticket'])
         self.session.headers['CSRFPreventionToken'] = data['CSRFPreventionToken']
 
     def call(self, method, path, **data):
         r = self.session.request(method, self.url + '/api2/json/' + path,
                                  params=data if method == 'GET' else None,
-                                 data=data if method != 'GET' else None, timeout=60)
-        if not r.ok:
+                                 data=data if method != 'GET' else None, timeout=60, allow_redirects=False)
+        if not 200 <= r.status_code < 300:
             # Proxmox errors may echo arguments; callers redact credentials as well.
             raise RuntimeError(f'Proxmox HTTP {r.status_code}: {r.text[:1500]}')
         return r.json()['data']
@@ -66,9 +78,9 @@ class Proxmox:
         return self.call('GET', 'cluster/resources')
 
     def ssh(self):
-        expected = os.getenv('PROXMOX_SSH_FINGERPRINT', '')
+        expected = self.ssh_fingerprint
         if not expected:
-            raise ValueError('Configure PROXMOX_SSH_FINGERPRINT before using SSH operations.')
+            raise ValueError('Add a verified SSH host fingerprint on the Server page before using SSH operations.')
         class PinnedPolicy(paramiko.MissingHostKeyPolicy):
             def missing_host_key(self, client, hostname, key):
                 actual = 'SHA256:' + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip('=')
@@ -76,7 +88,7 @@ class Proxmox:
                     raise paramiko.SSHException('Proxmox SSH host fingerprint mismatch')
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(PinnedPolicy())
-        client.connect(urlparse(self.url).hostname, username=os.getenv('PROXMOX_SSH_USER', 'root'),
+        client.connect(urlparse(self.url).hostname, username=self.ssh_user,
                        password=self.password, look_for_keys=False, allow_agent=False, timeout=15)
         return client
 
@@ -336,7 +348,7 @@ qm cloudinit update {vmid}
                 known.write_text(f'{host} {key.get_name()} {key.get_base64()}\n')
                 inventory_path = directory / 'inventory.yml'
                 inventory_path.write_text(yaml.safe_dump({'all': {'hosts': {d['node']: {
-                    'ansible_host': host, 'ansible_user': os.getenv('PROXMOX_SSH_USER', 'root'),
+                    'ansible_host': host, 'ansible_user': p.ssh_user,
                     'ansible_password': p.password,
                     'ansible_ssh_common_args': f'-o UserKnownHostsFile={known} -o StrictHostKeyChecking=yes',
                     'ansible_python_interpreter': '/usr/bin/python3'}}}}))

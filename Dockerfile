@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir -r requirements.txt ansible-core==2.19.9
 COPY collections.yml ./
 RUN ansible-galaxy collection install -r collections.yml -p /usr/share/ansible/collections
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
-COPY app.py operations.py provisioning.py management.py guest_tasks.py bootstrap.py lifecycle.py ./
+COPY app.py operations.py provisioning.py management.py guest_tasks.py bootstrap.py lifecycle.py server_connection.py ./
 COPY static ./static
 RUN useradd --uid 10001 --create-home proxmate && mkdir /data && chown proxmate /data
 USER proxmate

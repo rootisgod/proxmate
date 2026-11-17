@@ -4,12 +4,7 @@ A Docker-hosted LAN dashboard and HTTP API for Proxmox. Single-administrator acc
 
 ## Run
 
-Docker Compose is required. Copy `.env.example` to `.env`, set your Proxmox URL and ISO directory, and create two plain-text secret files:
-
-- `.env.password`: Proxmox password (the supplied environment uses `root@pam`).
-- `.env.admin`: a separate, strong password for the Proxmate dashboard.
-
-These files are excluded from Git and Docker build contexts. They are mounted as Docker secrets. For a self-signed Proxmox certificate, explicitly set `PROXMOX_VERIFY_TLS=false` on a trusted LAN, or install a trusted certificate and keep verification enabled. Set `PROXMOX_SSH_FINGERPRINT` to the host's SHA256 SSH fingerprint, verified from its console. Linux-template and advanced hypervisor Ansible operations require root SSH access to the configured Proxmox host.
+Docker Compose is required. Copy `.env.example` to `.env`, set your ISO directory, and create `.env.admin` containing a separate, strong password for the Proxmate dashboard. This ignored file is mounted as a Docker secret. A Proxmox password file is no longer required for a new installation.
 
 ```sh
 docker compose up -d --build
@@ -17,11 +12,17 @@ docker compose up -d --build
 
 Open **http://localhost:8088** (or `http://YOUR-DOCKER-HOST:8088` from your LAN), and sign in with `.env.admin`. Use `PORT` in `.env` to change the host port. The container always listens on 8080. Allow LAN traffic through your host firewall as appropriate.
 
-The existing checkout has already been configured for the supplied Proxmox host and `D:/ISOs`. Its generated administrator password is in `.env.admin`.
+Choose **Server** in the sidebar. Enter the HTTPS address, username including realm (for example `root@pam`) and password. **Test connection** checks API authentication and visible nodes without saving. **Save & connect** tests again and stores the connection encrypted in the data volume. Passwords are never returned by the API; a blank password retains the existing value only for the same address and username. TLS verification defaults on; explicitly uncheck it only for a trusted LAN server with a self-signed certificate. HTTPS is required. SSH fingerprint and username are separate optional settings; verify the SHA256 fingerprint independently from the server console. Linux image builds and advanced hypervisor scripts require SSH access using the saved password. The connection test checks the HTTPS API only.
+
+**Disconnect** disables Proxmate operations without stopping or changing VMs. Finish queued/running jobs and disable schedules and backup policies before disconnecting or editing the connection. Reconnect using the saved fields. To use another server, enter its details and tick **Replace the server**. This archives the old server's VM connections, groups, recipes, schedules, template/recovery metadata and reviewed plans. Your scripts, guest credentials and job history remain. Also tick replacement if a different machine reuses the old address. Archives are encrypted in the data volume; restoring them currently requires manual administration. There is one configured server, not a multi-server selector.
+
+Upgrade from environment-based configuration: retain the existing `.env` and `.env.password`, explicitly set `PROXMOX_URL` to your current server address in `.env`, then run `docker compose -f compose.yaml -f compose.legacy.yaml up -d --build` once. Startup imports the existing connection locally, without contacting Proxmox, only when no saved connection exists. After checking **Server**, run `docker compose up -d --no-build` to remove the legacy password mount. Saved UI settings take precedence thereafter. Keep the data volume and its session key together; losing the key makes saved credentials unreadable.
 
 ## Build machines
 
 Choose **Build a machine** and follow Source, Guest settings, Hardware & network, then Review. Planning has no infrastructure side effects. Creation requires confirmation and refuses existing VM IDs.
+
+The wizard supports LAN HTTP access and does not depend on `crypto.randomUUID`. After upgrading, reload existing browser tabs; if an old `crypto.randomUUID is not a function` error persists, force-refresh to replace the cached script.
 
 - **Windows ISO:** choose local media or an existing Proxmox ISO. Select edition image index, display language, region, keyboard, timezone, computer name, optional administrator password and RDP. Autounattend media configures the new GPT disk, UEFI/TPM and optional RDP with NLA. Confirm the edition index with DISM; the display language must exist in the ISO. Setup may still require a DVD boot key, activation or account prompts. Preparation success does not prove Windows installation completed.
 - **Linux cloud images:** Ubuntu 22.04/24.04/26.04, Fedora Cloud 44 and Rocky Linux 9.8. Downloads use official sources and published SHA256 checksums. Select login user/public SSH key, hardware, DHCP or static IPv4, gateway and DNS. Choose a VM or template. Profiles are x86-64; release URLs can eventually expire.
@@ -135,11 +136,14 @@ Retrieve the generated bearer token locally (this command prints a secret):
 docker compose exec proxmate cat /data/api-token
 ```
 
-Use `Authorization: Bearer TOKEN`. Send JSON and optionally an `Idempotency-Key` on submissions. The same key and payload returns the original job; a changed payload returns HTTP 409. HTTP 202 means queued, not successful. Poll the job until its status becomes `succeeded`, `failed` or `interrupted`.
+Use `Authorization: Bearer TOKEN`. Read `GET /api/server` and send its `id` as `X-Proxmate-Server` on host-bound POSTs: jobs, management except credentials/tasks, and lifecycle plan/run/families/policies. Missing or obsolete IDs return HTTP 409; reload and review the current server before retrying. This protects against stale tabs and scripts submitting old VM IDs to a replacement host. The Server API provides `/api/server/test`, `/api/server/connect` and `/api/server/disconnect`; include `expected_id` from the GET response (null for initial setup). Connection requests use `url`, `username`, write-only `password`, `verify_tls`, `ssh_user`, `ssh_fingerprint` and optional `replace_confirmed`.
+
+Send JSON and optionally an `Idempotency-Key` on submissions. The same key and payload returns the original job; a changed payload returns HTTP 409. Use a new key after replacing the server. HTTP 202 means queued, not successful. Poll the job until its status becomes `succeeded`, `failed` or `interrupted`.
 
 ```sh
 curl http://localhost:8088/api/jobs \
   -H "Authorization: Bearer $PROXMATE_TOKEN" \
+  -H "X-Proxmate-Server: $PROXMATE_SERVER_ID" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: backup-9002-2026-11-14" \
   -d '{"action":"backup","node":"pve","vmid":9002,"backup_storage":"local"}'

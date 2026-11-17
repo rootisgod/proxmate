@@ -1,8 +1,18 @@
-# Implementation checkpoint — 2026-11-14
+# Implementation checkpoint — 2026-11-17
 
-The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. Credentials are in local ignored secret files; never copy them into this document.
+The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
 ## Current iteration
+
+Server connection UI/API (0.5.0) is deployed locally. Open Server in the sidebar to edit/test/connect/disconnect one saved host. Existing configuration was imported locally into encrypted SQLite storage, and the legacy Proxmox secret mount was removed. The eight historical jobs remain; no new live Proxmox calls or operations were performed during this iteration. SQLite/key snapshot: /data/backup-before-server-ui-20261115 (same volume, not an off-host backup).
+
+Verification: 106 backend tests and 11 DOM workflow tests passed. Docker build and network-disabled container authentication, first-run/disconnected guards, static assets and Ansible syntax checks passed. Local authenticated checks verified imported metadata and API 0.5.0 without requesting Proxmox inventory. Real connection testing remains for the user; rendered visual/mobile verification remains outstanding.
+
+LAN HTTP wizard fix: opening Windows or Linux provisioning failed when crypto.randomUUID was unavailable outside a secure browser context. Request keys now use crypto.getRandomValues, retaining cryptographically random, per-draft idempotency keys. A regression test explicitly removes randomUUID and opens all three wizard paths at an HTTP LAN origin. The rebuilt image includes the fix, and the running container received the identical static asset without a restart or interrupted jobs. Served-file hashes matched the tested source. Reload existing browser tabs to pick up the updated script.
+
+Security review: the highest-risk failure was a stale VM form or saved plan applying to a replacement server. Host-bound POSTs now require the current server ID; replacement archives host-bound records/plans and changes that ID. A shared lock serializes API submissions, worker claims, scheduler ticks and connection changes; active work or enabled schedules/policies prevent changes. Passwords are encrypted/write-only; tests do not save drafts, follow HTTP redirects or echo remote errors. Residual limits: a different physical server reusing the same URL must be explicitly marked as replacement; archive restoration is manual; TLS verification can be disabled explicitly; an administrator/container compromise can access credentials. Custom scripts remain trusted administrator code.
+
+## Previous lifecycle iteration
 
 Local deployment: http://localhost:8088, API version 0.4.0. Historical job count: 8, all succeeded. No schedules or backup policies were created/enabled. Database/key snapshots are retained inside /data/backup-before-management-20261114 and /data/backup-before-lifecycle-20261114 (same volume, not off-host backups). Authenticated lifecycle routes, helper download, static assets and health checks passed after deployment.
 

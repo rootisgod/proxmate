@@ -25,3 +25,5 @@ aside nav{overflow:auto;min-height:0}
 aside{max-height:100vh}
 .row-actions{flex-wrap:wrap}
 @media(max-width:760px){#manage-dialog{padding:14px}#manage-form{max-height:calc(94vh - 28px)}aside{max-height:none}.target-picker{max-height:200px}}
+
+.server-panel{padding:24px;max-width:960px}.server-panel input:not([type=checkbox]){width:100%;min-width:0}.server-panel .form-grid{margin:24px 0}.server-panel .row-actions{flex-wrap:wrap}

@@ -12,7 +12,7 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, request, session, send_from_directory
+from flask import Flask, jsonify, request, session, send_from_directory, g
 from werkzeug.exceptions import HTTPException
 from cryptography.fernet import Fernet
 from operations import ACTIONS, execute, inventory, secret, validate
@@ -91,6 +91,9 @@ def headers(response):
 
 
 def redact(value):
+    if 'server' in globals():
+        password = server.read().get('password','')
+        if password: value = value.replace(password, '[redacted]')
     for path in (os.getenv('PROXMOX_PASSWORD_FILE', '.env.password'), os.getenv('APP_PASSWORD_FILE', '.env.admin')):
         try:
             s = secret(path)
@@ -102,7 +105,7 @@ def redact(value):
 @app.errorhandler(Exception)
 def error(exc):
     if isinstance(exc, HTTPException): return jsonify(error=exc.description), exc.code
-    if isinstance(exc, (ValueError, KeyError)): return jsonify(error=str(exc)), 400
+    if isinstance(exc, (ValueError, KeyError)): return jsonify(error=redact(str(exc))), 400
     return jsonify(error=redact(str(exc))), 502
 
 
@@ -191,7 +194,7 @@ def submit():
 
 def worker():
     while True:
-        with db() as con:
+        with server.lock, db() as con:
             row = con.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
             if row: con.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row['id']))
         if not row:
@@ -275,12 +278,62 @@ manager = register(app, db, encode_payload, decode_payload)
 from lifecycle import register as register_lifecycle
 lifecycle = register_lifecycle(app,manager)
 
+from server_connection import ServerConnection
+import operations
+server = ServerConnection(db,encode_payload,decode_payload)
+operations.connection_provider = server
+
+
+@app.before_request
+def connection_boundary():
+    if not request.path.startswith('/api/') or request.path in ('/api/health','/api/login','/api/docs','/api/openapi.json'):
+        return
+    server.lock.acquire()
+    g.connection_locked = True
+    host_write = request.method == 'POST' and (request.path == '/api/jobs' or
+        request.path.startswith('/api/manage/') and request.path.split('/')[3] not in ('credentials','tasks') or
+        request.path in ('/api/lifecycle/plan','/api/lifecycle/run','/api/lifecycle/policies','/api/lifecycle/families'))
+    if host_write:
+        config = server.read()
+        if not config.get('connected'): return jsonify(error='Connect a server from the Server page first'),409
+        if request.headers.get('X-Proxmate-Server') != config['id']:
+            return jsonify(error='Server selection changed. Reload and review the operation for the current server'),409
+
+
+@app.teardown_request
+def release_connection_boundary(exc):
+    if getattr(g,'connection_locked',False):
+        g.connection_locked = False
+        server.lock.release()
+
+
+@app.get('/api/server')
+def server_settings(): return jsonify(server.public())
+
+
+@app.post('/api/server/test')
+def server_test():
+    data = request.get_json()
+    if not isinstance(data,dict) or data.get('expected_id') != server.read().get('id'):
+        raise ValueError('Server settings changed. Reload the page before continuing')
+    return jsonify(ok=True,**server.probe(server.validate(data,server.read())))
+
+
+@app.post('/api/server/connect')
+def server_connect(): return jsonify(server.change(request.get_json()))
+
+
+@app.post('/api/server/disconnect')
+def server_disconnect(): return jsonify(server.change(request.get_json(),disconnect=True))
+
 
 def scheduler():
     while True:
         try:
-            manager.tick()
-            lifecycle.tick()
+            with server.lock:
+                if server.read().get('connected'):
+                    manager.tick()
+                    lifecycle.tick()
         except Exception:
             app.logger.error('Schedule tick failed; no immediate retry. Check data volume availability.')
         time.sleep(15)

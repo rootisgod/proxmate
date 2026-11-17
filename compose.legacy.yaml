@@ -1,0 +1,10 @@
+# One-time upgrade from an environment-configured server. See README.
+services:
+  proxmate:
+    environment:
+      PROXMOX_URL: ${PROXMOX_URL:?Set PROXMOX_URL to your existing server URL for this one-time import}
+    secrets:
+      - proxmox_password
+secrets:
+  proxmox_password:
+    file: .env.password

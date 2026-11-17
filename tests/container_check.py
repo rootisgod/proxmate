@@ -35,9 +35,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert helper.status_code==200
     shell=root/'bootstrap.sh';shell.write_text(helper.text)
     subprocess.run(['sh','-n',str(shell)],check=True)
+    assert client.get('/api/server').json['connected'] is False
+    assert client.get('/static/server.js').status_code==200
     family=client.post('/api/lifecycle/families',json={'name':'Isolated family'},headers=headers)
-    assert family.status_code==200
-    assert len(client.get('/api/lifecycle/state').json['families'])==1
+    assert family.status_code==409  # No selected server on a clean installation.
+    assert client.post('/api/jobs',json={'action':'start','node':'pve','vmid':201},headers=headers).status_code==409
     assert client.get('/api/openapi.json').status_code==200
     # Syntax-check actual installed collections without running any task.
     for platform in ('windows','linux'):
