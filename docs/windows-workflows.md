@@ -51,10 +51,18 @@ Install and verify the baseline first. Run Sysprep generalization on the build V
 | --- | --- |
 | Add data disks | Add one or more sizes, optional labels and optional drive letters. Default to NTFS with an automatically assigned drive letter. ISO builds reserve D:, E: and F: for setup DVDs. The picker also disables letters selected for another data disk. Record each newly allocated disk’s identity and match it inside this VM before formatting. If the match is ambiguous, the disk contains data, or the letter is occupied, stop and identify the disk that needs attention. A repeat run recognizes a volume already prepared by this build. |
 | Reuse a Windows answer file | As soon as XML is generated, attach the exact version to the build record, including failed builds. Keep the original encrypted with administrator-only download. Make a reusable copy with credential and product-key placeholders the default download. Identify the source ISO, edition and any companion bootstrap script needed to use it elsewhere. |
-| Manage my Ansible library | Browse, read and edit scripts from the main navigation. Define named inputs with defaults and show their values during build review. Record the reviewed script revision with each run. GitHub-backed import or sync can follow later. |
+| Manage my Ansible library | In **Script library**, define text inputs, dropdown choices, yes/no checkboxes or free drive letters. Set defaults for repeated builds. Both the build wizard and Operations show the same inputs. |
 | See which Windows machines I can manage | Show the last successful authenticated WinRM check and its time in the inventory. Distinguish unchecked guests, stopped guests, unavailable agents, unreachable listeners, certificate errors and rejected logins. An unreachable port alone cannot establish that WinRM is disabled. |
 | Enable WinRM | Offer **Enable HTTPS WinRM** when an authenticated guest-agent channel can configure that particular VM. Show the intended firewall scope and apply the change on request. Without that channel, show copyable PowerShell commands for an elevated console on the guest. Offer **Test again** and mark the machine manageable after a certificate-validated login succeeds. |
 | Open the console | Keep **Open console** on the machine and on a build that needs attention. Open that VM’s Proxmox console directly in a separate window or tab. A Proxmox sign-in may be needed. |
+
+## Connect and run a task after the build
+
+When an RDP-enabled build finishes, choose **Open desktop** in its notification, or open the running VM under **Operations**. Proxmate reads the current address and RDP port from the guest. Open the downloaded `.rdp` file in your Remote Desktop client and sign in. **Open console** is available from the machine page for boot or network troubleshooting.
+
+To run a task later, choose **Operations → Run script** for the machine. For example, choose **Manage a Windows service**, enter the service name and select the action from the dropdown. **Review run** shows the targets, logins and inputs before submission. Proxmate uses each machine’s saved login and asks for credentials on machines that need them. **One-off script** lets you paste a task without saving it to the library.
+
+If a saved script asks for a free drive letter, the picker disables letters in use on any selected Windows machine. During a build it also accounts for setup media and explicitly assigned data disks. The worker checks the chosen letter again on each guest immediately before running the script.
 
 ## Delivery and verification
 
@@ -66,7 +74,7 @@ ISO names are grouped for discovery. The edition list comes from the selected im
 
 The script library supports named inputs and defaults on saved Ansible task lists. Scripts and input values are frozen during build review. The machine page supports targeted WinRM inspection, a reviewed firewall scope and console commands. A successful login supplies the verification time shown in inventory. GitHub synchronization is deferred.
 
-If a script fails because the saved address differs from the guest agent’s addresses, open the failed job and choose **Refresh connection** for the affected VM. The same button is on every VM row under **Operations** and in the machine’s **Network** panel. Check the current address and saved login, then choose **Test and save**. After verification, start a new script run for the affected VM. If the VM was rebuilt and its certificate also changed, verify the new public certificate in the VM console before updating **Guest connection → Manual settings**.
+If a script fails because the saved address differs from the guest agent’s addresses, choose **Refresh connection** in the failed job, on the VM row under **Operations**, or in the machine’s **Network** panel. Check the current address and login, then choose **Test and save**. On a Proxmate-prepared Windows VM, this can verify a changed listener certificate through Proxmox and save it after a successful login. For a custom listener, verify its certificate in the VM console and use **Guest connection → Manual settings**. Review a new script run for the affected VM after the connection succeeds.
 
 ### Run the Windows ISO acceptance test
 

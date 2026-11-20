@@ -1,8 +1,20 @@
-# Implementation checkpoint — 2026-11-17
+# Proxmate status — 2026-11-20
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
-## Current iteration
+## Current release
+
+The connection shortcuts and typed Ansible inputs are complete and deployed. The dashboard container was recreated with the job queue idle. The deployed application revision is [4a77803](https://github.com/rootisgod/proxmate/commit/4a77803a75f94c6b743da0c3b201878d94dcccb1).
+
+| Workflow | Verified on the live dashboard |
+| --- | --- |
+| Open a Windows desktop | **Operations → NUC-PM-Win → Open desktop** downloaded an RDP file for the guest's current listener. The file prompts for credentials. |
+| Connect to Linux | **Copy SSH command** on `NUC-Linux-Build` selected its LAN address from seven guest-agent addresses by matching the Proxmox network adapter. |
+| Run an Ansible script | The script editor displayed dropdown, yes/no and free-drive-letter controls. Drive discovery on the Windows guest reported C: through F: in use. A Windows service action reached review without executing it. |
+
+The release passed 257 backend tests, 46 UI tests and the network-isolated container checks. Automated tests cover completion notifications, reused VM IDs and a drive letter becoming occupied after review. Live browser verification covered the shortcuts on existing guests and the editor. The Windows ISO installation recorded below is a separate, earlier acceptance run.
+
+## Windows installation checkpoint — 2026-11-17
 
 Clean recreation verified: at the user's request the previous nuc/104 VM, its three attached disks and exact generated answer ISO were deleted after identity checks. Job a150235eeb2443bfb426b76cce0540c4 recreated win-server with the latest helper and frozen MSI checksum from the start. It succeeded without interactive login, remote repair or a helper change during installation. Attached setup media was verified against the deployed helper. Final checks through certificate-validated WinRM: address 192.168.1.92, 7-Zip 26.06 installed, WinRM and QEMU-GA running, bootstrap-ready=ready and retry task removed. Proxmate health check passed. Original Windows/VirtIO installation ISOs were retained.
 
@@ -58,14 +70,9 @@ Backend tests cover secrets, plan immutability, duplicate submission, stale iden
 
 ## Remaining real-server validation
 
-- Confirm guest networking on the intended real server. Nested Hyper-V DHCP was not resolved; MAC spoofing remains an unverified hypothesis, and no settings were changed.
-- Validate Windows installation using the actual ISO/edition, answer file and generalization. Preparation success is not installation success.
-- Test a saved WinRM/SSH connection and selected tasks on explicitly approved disposable guests.
-- Exercise snapshots, shutdown, CPU/RAM changes and a deliberately enabled schedule on approved targets.
-- Complete visual/mobile and multi-node checks. Current new UI checks use a DOM environment, not a rendered browser.
-
-No live mutating verification should run without explicit user approval of disposable targets. The new lifecycle features require testing against approved disposable guests/archives, including Windows driver/OOBE behavior, TLS certificate trust, Linux cloud-init vendor data, restoration and retention. Multiple users, scoped API tokens and cancellation remain outside this iteration.
-
-The goal tracker was still paused when queried; its tools cannot resume or expand the existing goal. User authorization to continue implementation is recorded in the conversation and PLAN.md. Do not claim real-host validation complete.
+- On disposable Windows guests, verify Sysprep, two differently named clones, their distinct WinRM identities, and a data disk on just one clone. The [Windows acceptance checklist](docs/windows-workflows.md#disposable-guest-acceptance) gives the steps.
+- On a fresh guided Ubuntu build, use a workstation public key and sign in with the SSH command from the completion notification. The existing-guest check above verified address selection and the command.
+- Use approved disposable targets and archives for snapshot restore, backup retention, scheduled operations and CPU/RAM changes. Mobile and multi-node checks also remain open.
+- The earlier nested Hyper-V test still has an unresolved DHCP issue. The November 20 guest checks used the homelab Proxmox node.
 
 Security review: the main residual risk is trusted administrator code execution. Saved task YAML rejects delegation/connection overrides, guest runs suppress output, credential reads omit secrets, and reviewed plans expose guest endpoints. Guest-agent mismatches and endpoints resolving to the configured hypervisor/loopback are rejected. These controls do not make custom scripts a sandbox or protect a compromised running container.

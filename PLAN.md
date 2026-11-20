@@ -2,6 +2,13 @@
 
 The [everyday Windows workflows](docs/windows-workflows.md) describe the intended template, clone and ISO experience, acceptance criteria and disposable-guest validation.
 
+## Completed on 2026-11-20
+
+- **Connect after provisioning.** Successful guided VM builds offer **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Ubuntu. The same actions are available from a running machine's page. Both resolve the current guest address when selected. Guided Ubuntu builds accept an optional workstation public key.
+- **Reuse an Ansible task during or after a build.** Script authors can define text, choices, yes/no and free Windows drive letters. Create and Operations use the same declarations and defaults. Operations uses saved per-machine logins and prompts for missing ones.
+
+Release verification and the remaining disposable-guest checks are recorded in [project status](STATUS.md). The milestones below retain their original scope and verification dates.
+
 ## Windows workflow implementation
 
 1. Extend the existing Windows build wizard and encrypted simple-build plan with a source choice. For a template, freeze its node, VM ID, configuration identity and clone mode. Clone to a fresh ID while stopped, attach first-boot answer media, then start. Use a specialize/oobe-only answer for clones. Verify the requested Windows hostname and per-guest TLS login through the existing restart-safe readiness wait before running follow-up tasks. Full copies are the default.
