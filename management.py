@@ -50,6 +50,19 @@ def target(value):
 def target_id(value): return value['node'] + ':' + str(value['vmid'])
 
 
+ADDRESS_MISMATCH = 'Configured endpoint does not match guest-agent IP addresses'
+
+
+def connection_recovery_targets(plan, log):
+    if plan.get('operation') not in ('tasks', 'readiness'):
+        return []
+    # Older jobs have only the per-VM result line. Resolve it against the frozen targets.
+    failed = {key for key, _, reason in (line.partition(' RESULT: failed - ') for line in log.splitlines())
+              if reason.startswith(ADDRESS_MISMATCH)}
+    return [dict(node=t['node'], vmid=t['vmid'], reviewed_identity=t['identity'])
+            for t in plan.get('targets', []) if t.get('identity') and target_id(t) in failed]
+
+
 def targets(values):
     if not isinstance(values, list) or not 1 <= len(values) <= 100: raise ValueError('Select 1-100 VMs')
     return list({target_id(t): t for t in map(target, values)}.values())
@@ -175,13 +188,16 @@ class Manager:
         if not isinstance(values, list) or not 1 <= len(values) <= 50: raise ValueError('Choose 1-50 tasks in order')
         result = []
         for value in values:
-            item = self.task(value['id'])
-            supplied = value.get('params', {})
-            if not isinstance(supplied,dict): raise ValueError('Task inputs must be an object')
-            params = {**item.get('defaults',{}),**supplied}
-            compile_task(item, params)
-            result.append({'item': item, 'params': params})
+            if not isinstance(value, dict) or not isinstance(value.get('id'), str): raise ValueError('Choose a library task')
+            result.append(self.select_task(self.task(value['id']), value.get('params', {})))
         return result
+
+    @staticmethod
+    def select_task(item, supplied):
+        if not isinstance(supplied, dict): raise ValueError('Task inputs must be an object')
+        params = {**item.get('defaults', {}), **supplied}
+        compile_task(item, params)
+        return {'item': item, 'params': params}
 
     def save(self, kind, d):
         return self.put(kind, self.prepare(kind, d))
@@ -279,7 +295,7 @@ class Manager:
                 if ident in json.dumps(record): raise ValueError('Record is referenced by a connection, group, recipe or schedule; update those first')
         with self.db() as con: con.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, ident))
 
-    def create_plan(self, d):
+    def create_plan(self, d, *, selections=None, discovered=None):
         if not isinstance(d, dict): raise ValueError('Plan must be a JSON object')
         op = d.get('operation')
         if op not in OPS: raise ValueError('Unknown management operation')
@@ -296,7 +312,8 @@ class Manager:
                     if previous and previous != group['credential_id']: raise ValueError('Overlapping groups have different credentials; select VMs directly')
                     group_credentials[target_id(t)] = group['credential_id']
         chosen = targets(chosen)
-        selections = self.task_selection(d.get('tasks')) if op=='tasks' else []
+        if selections is None: selections = self.task_selection(d.get('tasks')) if op=='tasks' else []
+        discovered = discovered or {}
         p = operations.Proxmox()
         resources = p.resources()
         plan = {'operation': op, 'targets': [], 'tasks': selections, 'snapshot_before': boolean(d.get('snapshot_before', False)),
@@ -313,13 +330,13 @@ class Manager:
             if op=='resize' and guest.get('status')!='stopped': raise ValueError('Shut down VMs before changing CPU/RAM; new values apply on next start')
             if op=='restore' and guest.get('status')!='stopped': raise ValueError('Shut down VMs before restoring a snapshot')
             if op in ('tasks', 'readiness'):
-                binding = self.get('connections', target_id(t))
+                binding = discovered.get(('connections', target_id(t))) or self.get('connections', target_id(t))
                 if binding.get('machine_identity'):
                     from lifecycle import machine_identity
                     if binding['machine_identity'] != machine_identity(cfg):
                         raise ValueError('The saved connection belongs to another machine. Review its identity and reconnect.')
                 if group_credentials.get(target_id(t)): binding['credential_id'] = group_credentials[target_id(t)]
-                credential = self.get('credentials', binding['credential_id'])
+                credential = discovered.get(('credentials', binding['credential_id'])) or self.get('credentials', binding['credential_id'])
                 if credential['platform'] != binding['platform']: raise ValueError('Group credential does not match guest platform')
                 if any(s['item']['platform'] != binding['platform'] for s in selections): raise ValueError('All selected tasks must match each guest platform')
                 t['connection'] = binding
@@ -328,6 +345,9 @@ class Manager:
             plan['targets'].append(t)
         ident = uuid.uuid4().hex
         with self.db() as con:
+            for (kind, key), record in discovered.items():
+                inserted = con.execute('INSERT OR IGNORE INTO records VALUES (?,?,?)', (kind, key, self.encode(record)))
+                if not inserted.rowcount: raise ValueError('Guest connection changed during discovery. Review the run again.')
             con.execute('DELETE FROM plans WHERE created < ?', (time.time()-86400,))
             con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
         return dict(id=ident, **self.summary(plan))
@@ -412,7 +432,7 @@ class Manager:
                         log(label+' guest agent available; reported IPs: '+(', '.join(sorted(map(str,reported))) or 'none'))
                     except Exception: log(label+' guest agent unavailable; checking configured address instead.')
                     if reported and not resolved & reported:
-                        raise ValueError('Configured endpoint does not match guest-agent IP addresses; check VM connection settings')
+                        raise ValueError(ADDRESS_MISMATCH + '. Choose Refresh connection, then test and save the current address.')
                     # No port scanning or discovery: only the configured guest endpoint.
                     with socket.create_connection((b['host'],b['port']),timeout=10): pass
                     log(label+' configured transport port reachable.')

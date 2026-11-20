@@ -1,6 +1,6 @@
 # Everyday Windows workflows
 
-From **Machines → Create machine → Windows**, a sysadmin should be able to choose a template or ISO, give the machine a Windows name, and create it. Leaving software and data disks empty should produce a plain, manageable Windows VM. A separate **Create Windows template** action should capture the setup that several machines will share.
+From **Create → Virtual machine → Windows Server**, a sysadmin should be able to choose a template or ISO, give the machine a Windows name, and create it. Leaving software and data disks empty should produce a plain, manageable Windows VM. A separate **Create → Reusable template → Windows Server** action should capture the setup that several machines will share.
 
 The following examples define the workflow and its acceptance criteria. The delivery notes at the end distinguish automated coverage from checks that still need a disposable Windows guest.
 
@@ -66,7 +66,7 @@ ISO names are grouped for discovery. The edition list comes from the selected im
 
 The script library supports named inputs and defaults on saved Ansible task lists. Scripts and input values are frozen during build review. The machine page supports targeted WinRM inspection, a reviewed firewall scope and console commands. A successful login supplies the verification time shown in inventory. GitHub synchronization is deferred.
 
-If login reports that the address changed, close the login dialog and choose **Network → Refresh network details** on the machine page. **Verify login** offers the addresses reported by the guest agent. A successful test saves the selected address. If the VM was rebuilt and its certificate also changed, verify the new public certificate in the VM console before updating **Guest connection → Manual settings**.
+If a script fails because the saved address differs from the guest agent’s addresses, open the failed job and choose **Refresh connection** for the affected VM. The same button is on every VM row under **Operations** and in the machine’s **Network** panel. Check the current address and saved login, then choose **Test and save**. After verification, start a new script run for the affected VM. If the VM was rebuilt and its certificate also changed, verify the new public certificate in the VM console before updating **Guest connection → Manual settings**.
 
 ### Run the Windows ISO acceptance test
 

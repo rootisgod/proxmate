@@ -88,6 +88,16 @@ nav :focus-visible { outline-offset: -3px; }
 .machine-name { overflow-wrap: anywhere; }
 .inventory tr:has(input:checked) { background: #f1faf6; }
 .machine-actions .row-actions { align-items: center; gap: 12px; }
+.operation-controls { display: flex; align-items: center; gap: 12px; }
+.build-choices { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(240px,100%),1fr)); gap: 16px; }
+.build-choices section { padding: 20px; }
+.build-choices h2 { margin-top: 0; }
+.script-run-mode { display: flex; gap: 4px; margin: 12px 0; }
+.script-run-mode button[aria-pressed=true] { background: #e6f1ed; color: #125c4c; border-color: #91baaf; font-weight: 650; }
+.run-source { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#run-script textarea { font-family: ui-monospace, monospace; }
+#run-params fieldset, #run-login fieldset { margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.run-targets small { display: block; color: var(--muted); }
 .machine-actions button, .machine-menu summary { font-size: 12px; }
 .machine-menu summary { padding: 7px 4px; }
 .inventory .pill { text-transform: capitalize; }
@@ -122,6 +132,10 @@ nav :focus-visible { outline-offset: -3px; }
   .title h1 { font-size: 27px; }
   .create-menu summary { font-size: 13px; padding: 10px; }
   .inventory-tools { padding: 14px 12px 8px; gap: 8px; }
+  .inventory-tools:has(.operation-controls) { flex-wrap: wrap; }
+  .inventory-tools:has(.operation-controls) > label { flex-basis: 100%; }
+  .inventory-tools .operation-controls { width: 100%; }
+  .inventory-tools .operation-controls button { max-width: none; }
   .inventory-tools label { width: auto; min-width: 0; flex: 1; }
   .inventory-tools button { max-width: 42%; padding: 10px; }
   .inventory-filters { padding: 3px 7px 10px; gap: 0; }
@@ -213,6 +227,7 @@ nav :focus-visible { outline-offset: -3px; }
 .script-card .row-actions { margin-top:auto;padding-top:8px;flex-wrap:wrap }
 .script-settings { display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px }
 .script-settings label { min-width:0 }
+.script-settings :is(input,select) { height:38px;padding:6px 10px }
 .script-workbench { border:1px solid #b8c9c6;border-radius:8px;overflow:hidden }
 .code-toolbar,.code-status { padding:6px 9px;background:#eef3f2 }
 .code-toolbar strong { margin-right:auto }

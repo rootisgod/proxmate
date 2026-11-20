@@ -8,12 +8,12 @@ function scriptLibrary() {
       esc(t.platform === 'windows' ? 'Windows' : 'Linux')+' · '+esc(scriptFormats[t.kind])+
       '</div><h3>'+esc(t.name)+'</h3>'+(t.example?'<p>'+esc(t.description)+'</p>':'')+
       '<div class="row-actions">'+mgButton(t.example?'Open example':'Edit script','edit-tasks',t.id)+
-      '<button data-simple-task="'+esc(t.id)+'">Run on machines</button>'+
+      '<button data-simple-task="'+esc(t.id)+'">Run script</button>'+
       (t.example?'':mgButton('Delete','delete-tasks',t.id))+'</div></article>').join('')+'</div>';
   }
   const saved = scripts.filter(t => !t.example), examples = scripts.filter(t => t.example);
   return title('Script library','Guest scripts for new and existing machines.',mgButton('New script','new-tasks'))+
-    '<button data-simple="apply">Install software or run scripts</button>'+
+    '<button data-simple="apply">Run a script</button>'+
     (saved.length?'<h2>Your scripts</h2>'+cards(saved):'')+
     (examples.length?'<h2>Starter scripts</h2><p>Open an example to read it or save your own copy.</p>'+cards(examples):'');
 }

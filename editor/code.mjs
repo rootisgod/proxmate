@@ -15,6 +15,7 @@ export function mount(host, field, kind, update) {
   const view = new EditorView({
     parent: host, doc: field.value,
     extensions: [
+      EditorView.cspNonce.of(host.ownerDocument.querySelector('link[rel="stylesheet"][nonce]')?.nonce || ''),
       basicSetup, language.of(languages[kind]), indentUnit.of('  '),
       keymap.of([indentWithTab]), EditorView.lineWrapping,
       EditorView.contentAttributes.of({'aria-label':'Script source', spellcheck:'false'}),

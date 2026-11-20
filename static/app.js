@@ -72,7 +72,7 @@ async function refresh(){
 function title(name,sub,button=''){return `<div class="title"><div><h1>${name}</h1><p>${sub}</p></div>${button}</div>`}
 function btn(label,a,id){return `<button data-action="${a}" ${id?`data-id="${id}"`:''}>${label}</button>`}
 function table(head,rows){return `<div class="panel table-wrap"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')||`<tr><td colspan="${head.length}" class="empty">Nothing here yet. Your next operation will appear here.</td></tr>`}</tbody></table></div>`}
-function guestRows(items,template=false){return items.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${r.type.toUpperCase()} · ${r.vmid}</small></td><td><span class="pill ${esc(r.status)}">${template?'template':esc(r.status)}</span></td><td>${esc(r.node)}</td><td>${r.maxcpu} cores · ${(r.maxmem/1073741824).toFixed(0)} GB</td><td><div class="row-actions">${r.type==='qemu'?(template?'<button data-clone-template="'+esc(r.vmid)+'">Clone →</button>':`<button data-simple="apply" data-id="${r.vmid}">Run scripts</button>`+mgButton('Power / settings','manage-vm',r.vmid)+mgButton('Connection','connection',r.vmid)+mgButton('Snapshots','snapshots',r.vmid)+btn('Backup','backup',r.vmid)+btn('Start','start',r.vmid)+btn('Finish setup','finish-setup',r.vmid)+btn('Template','convert-template',r.vmid)):''}</div></td></tr>`)}
+function guestRows(items,template=false){return items.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${r.type.toUpperCase()} · ${r.vmid}</small></td><td><span class="pill ${esc(r.status)}">${template?'template':esc(r.status)}</span></td><td>${esc(r.node)}</td><td>${r.maxcpu} cores · ${(r.maxmem/1073741824).toFixed(0)} GB</td><td><div class="row-actions">${r.type==='qemu'?(template?'<button data-clone-template="'+esc(r.vmid)+'">Clone →</button>':`<button data-simple="apply" data-id="${r.vmid}">Run script</button>`+mgButton('Power / settings','manage-vm',r.vmid)+mgButton('Connection','connection',r.vmid)+mgButton('Snapshots','snapshots',r.vmid)+btn('Backup','backup',r.vmid)+btn('Start','start',r.vmid)+btn('Finish setup','finish-setup',r.vmid)+btn('Template','convert-template',r.vmid)):''}</div></td></tr>`)}
 function activity(){return table(['Operation','Status','Submitted','Details'],jobs.map(j=>`<tr><td>${esc(j.operation||j.action)}<small>${esc(j.target?.name||j.target?.label||j.target?.filename||j.target?.vmid||j.target?.node||'')}</small></td><td><span class="pill ${j.status}">${j.status}</span></td><td>${new Date(j.created*1000).toLocaleString()}</td><td><button data-log="${j.id}">View log</button></td></tr>`))}
 function render(){
   if(state&&!state.details&&needsInventoryDetails()){loadInventoryDetails();return}
@@ -112,6 +112,7 @@ async function readJobLog(log){
     const job=await api('jobs/'+encodeURIComponent(log.dataset.job));
     if(!log.isConnected||!$('#editor').open)return;
     log.textContent=job.log;
+    if(typeof jobConnectionActions==='function')jobConnectionActions(job,log);
     if(typeof jobWindowsActions==='function')jobWindowsActions(job,log);
     log.dataset.updated=String(job.updated);
     log.dataset.status=job.status;

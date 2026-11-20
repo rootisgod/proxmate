@@ -5,6 +5,10 @@
     "version": "0.6.0",
     "description": "Single-admin LAN API. Configuration writes are immediate; infrastructure actions run in a serialized durable queue. Guest management requires reviewing a frozen plan, then confirming its ID. No automatic retries or rollback."
   },
+  "externalDocs": {
+    "description": "Windows provisioning guide for agents",
+    "url": "/static/llms.txt"
+  },
   "servers": [
     {
       "url": "/"
@@ -411,6 +415,40 @@
             "properties": {
               "log": {
                 "type": "string"
+              },
+              "connection_recovery": {
+                "type": "object",
+                "description": "Returned by the single-job endpoint for a failed task or readiness check with a saved address mismatch on the connected server.",
+                "required": [
+                  "server_id",
+                  "targets"
+                ],
+                "properties": {
+                  "server_id": {
+                    "type": "string"
+                  },
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Target"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "reviewed_identity"
+                          ],
+                          "properties": {
+                            "reviewed_identity": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
               }
             }
           }
@@ -2659,14 +2697,18 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "required": [
+                  "node",
+                  "source"
+                ],
                 "properties": {
-                  "password": {
+                  "node": {
                     "type": "string",
-                    "writeOnly": true
+                    "description": "Selected destination node."
                   },
-                  "credential": {
-                    "type": "object",
-                    "writeOnly": true
+                  "source": {
+                    "type": "string",
+                    "description": "ISO id from destinations[].isos or local_isos."
                   }
                 }
               }
@@ -2726,12 +2768,103 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "os": {
+                    "type": "string",
+                    "enum": [
+                      "windows",
+                      "ubuntu"
+                    ],
+                    "default": "windows"
+                  },
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z]([A-Za-z0-9-]{0,10}[A-Za-z0-9])?$",
+                    "description": "Hostname or batch prefix."
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 1
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "vm",
+                      "template"
+                    ],
+                    "default": "vm"
+                  },
+                  "node": {
+                    "type": "string",
+                    "description": "Destination node from discovery. Use the source node for a template clone."
+                  },
+                  "storage": {
+                    "type": "string",
+                    "description": "Disk storage override from the selected destination."
+                  },
+                  "bridge": {
+                    "type": "string",
+                    "description": "Network bridge override for an ISO or cloud build."
+                  },
+                  "iso_storage": {
+                    "type": "string",
+                    "description": "ISO storage override from the selected destination."
+                  },
+                  "cores": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 128,
+                    "default": 2
+                  },
+                  "memory": {
+                    "type": "integer",
+                    "maximum": 1048576,
+                    "description": "Memory in MiB. Windows requires at least 4096."
+                  },
+                  "disk": {
+                    "type": "integer",
+                    "maximum": 4096,
+                    "description": "System disk in GiB. Windows ISO builds require at least 64. Clones inherit their boot disk size."
+                  },
+                  "source": {
+                    "type": "string",
+                    "description": "Windows ISO id from discovery."
+                  },
+                  "edition": {
+                    "type": "integer",
+                    "description": "Image index from POST /api/simple/editions."
+                  },
+                  "locale": {
+                    "type": "string",
+                    "description": "Windows locale code from /api/catalog."
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "Windows time zone from /api/catalog."
+                  },
+                  "management_cidr": {
+                    "type": "string",
+                    "description": "Address or subnet allowed to manage Windows over WinRM."
+                  },
+                  "tasks": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "items": {
+                      "$ref": "#/components/schemas/TaskSelection"
+                    },
+                    "description": "Ordered built-in or saved guest tasks."
+                  },
+                  "profile": {
+                    "type": "string",
+                    "description": "Ubuntu release id from discovery."
+                  },
+                  "username": {
+                    "type": "string",
+                    "description": "Ubuntu login name."
+                  },
                   "password": {
                     "type": "string",
-                    "writeOnly": true
-                  },
-                  "credential": {
-                    "type": "object",
                     "writeOnly": true
                   },
                   "source_kind": {
@@ -2813,7 +2946,71 @@
                       }
                     }
                   }
-                }
+                },
+                "required": [
+                  "name"
+                ],
+                "oneOf": [
+                  {
+                    "title": "Windows ISO install",
+                    "required": [
+                      "source",
+                      "edition",
+                      "password"
+                    ],
+                    "properties": {
+                      "os": {
+                        "enum": [
+                          "windows"
+                        ]
+                      },
+                      "source_kind": {
+                        "enum": [
+                          "iso"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "title": "Windows template clone",
+                    "required": [
+                      "source_kind",
+                      "template_id",
+                      "generalized",
+                      "password"
+                    ],
+                    "properties": {
+                      "os": {
+                        "enum": [
+                          "windows"
+                        ]
+                      },
+                      "source_kind": {
+                        "enum": [
+                          "template"
+                        ]
+                      },
+                      "generalized": {
+                        "enum": [
+                          true
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "title": "Ubuntu cloud image",
+                    "required": [
+                      "os"
+                    ],
+                    "properties": {
+                      "os": {
+                        "enum": [
+                          "ubuntu"
+                        ]
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -2854,17 +3051,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "password": {
-                    "type": "string",
-                    "writeOnly": true
-                  },
-                  "credential": {
-                    "type": "object",
-                    "writeOnly": true
-                  }
-                }
+                "$ref": "#/components/schemas/RunPlan"
               }
             }
           }
@@ -2873,8 +3060,8 @@
     },
     "/api/simple/existing-plan": {
       "post": {
-        "summary": "Discover saved/existing guest connections and review selected software",
-        "description": "Supply targets=[{node,vmid}], tasks=[{id,params}], and optional credential_id or credential={platform,username,password}. Saves local login/binding records if needed, uses guest-agent IP/public trust discovery, and returns a normal management review plan. Submit its ID to /api/manage/run. Does not enable remote access or run software during planning. Existing WinRM/SSH and guest-agent access are required for discovery.",
+        "summary": "Review library tasks or a one-off script on existing guests",
+        "description": "Reuse each VM login. Missing connections require a compatible saved or new guest credential. A successful review saves those new connections and freezes script source and inputs. Pasted scripts stay outside the library. Submit the plan ID to /api/manage/run with the returned risk confirmation requirement.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2906,14 +3093,123 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "required": [
+                  "targets"
+                ],
+                "oneOf": [
+                  {
+                    "required": [
+                      "tasks"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "one_off"
+                    ]
+                  }
+                ],
                 "properties": {
-                  "password": {
+                  "targets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "$ref": "#/components/schemas/Target"
+                    }
+                  },
+                  "tasks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "items": {
+                      "$ref": "#/components/schemas/TaskSelection"
+                    }
+                  },
+                  "one_off": {
+                    "type": "object",
+                    "required": [
+                      "platform",
+                      "kind",
+                      "body"
+                    ],
+                    "properties": {
+                      "platform": {
+                        "type": "string",
+                        "enum": [
+                          "windows",
+                          "linux"
+                        ]
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "ansible",
+                          "powershell",
+                          "shell"
+                        ]
+                      },
+                      "body": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100000
+                      },
+                      "parameters": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "params": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "credential_id": {
                     "type": "string",
-                    "writeOnly": true
+                    "description": "Saved login used only for guests without a binding."
                   },
                   "credential": {
                     "type": "object",
-                    "writeOnly": true
+                    "writeOnly": true,
+                    "required": [
+                      "platform",
+                      "username"
+                    ],
+                    "properties": {
+                      "platform": {
+                        "type": "string",
+                        "enum": [
+                          "windows",
+                          "linux"
+                        ]
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "password": {
+                        "type": "string",
+                        "writeOnly": true,
+                        "description": "Blank on update retains existing material."
+                      },
+                      "private_key": {
+                        "type": "string",
+                        "writeOnly": true,
+                        "description": "Blank on update retains existing material."
+                      },
+                      "become_password": {
+                        "type": "string",
+                        "writeOnly": true,
+                        "description": "Blank on update retains existing material."
+                      },
+                      "ca_pem": {
+                        "type": "string",
+                        "writeOnly": true,
+                        "description": "Blank on update retains existing material."
+                      }
+                    }
                   }
                 }
               }
@@ -2951,7 +3247,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Machine details"
+            "description": "Machine details with identity, addresses, connection and a nullable suggested_credential_id. For Windows the suggestion can identify the login from the current build when a VM ID has been reused."
           },
           "400": {
             "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
@@ -2979,6 +3275,10 @@
                   },
                   "vmid": {
                     "type": "integer"
+                  },
+                  "reviewed_identity": {
+                    "type": "string",
+                    "description": "Optional identity from a failed job recovery target. Discovery stops if the reviewed VM configuration changed."
                   }
                 }
               }
@@ -3047,6 +3347,7 @@
     "/api/simple/machine/connect": {
       "post": {
         "summary": "Authenticate to a guest and save its verified connection",
+        "description": "Use a current address and the identity from machine discovery. For Proxmate-prepared Windows guests the server can authenticate a changed listener through the guest agent over verified Proxmox HTTPS or pinned SSH. Login and connection settings are saved after successful verification.",
         "parameters": [
           {
             "name": "X-Proxmate-Server",
@@ -3106,7 +3407,8 @@
                   },
                   "connection_revision": {
                     "type": "number",
-                    "nullable": true
+                    "nullable": true,
+                    "description": "Send connection.updated from machine discovery, or null for a new connection."
                   },
                   "credential_id": {
                     "type": "string"

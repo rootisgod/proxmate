@@ -3,20 +3,39 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {JSDOM}=require('jsdom');
 
-test('existing VMs use the same software choices with an inline saved login',async()=>{
+test('the script editor mounts its gutter and language styles with the document nonce',async()=>{
+  const {outputFiles}=await require('esbuild').build({
+    entryPoints:['editor/code.mjs'],bundle:true,format:'iife',globalName:'codeEditor',write:false
+  });
+  const dom=new JSDOM('<link rel="stylesheet" nonce="page-specific"><div id="host"></div><textarea>Get-Date</textarea>',
+    {runScripts:'outside-only',pretendToBeVisual:true});
+  const w=dom.window;
+  try{
+    w.eval(outputFiles[0].text);
+    const editor=w.codeEditor.mount(w.document.querySelector('#host'),w.document.querySelector('textarea'),'powershell',()=>{});
+    try{
+      editor.language('ansible');
+      const styles=[...w.document.head.querySelectorAll('style')];
+      assert.ok(styles.length && styles.every(style=>style.nonce==='page-specific'));
+      assert.ok(w.document.querySelector('.cm-lineNumbers'));
+    }finally{editor.destroy()}
+  }finally{w.close()}
+});
+
+test('existing VMs ask for a missing login and show only the selected script inputs',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
     w.document.querySelector('[data-simple="apply"]').click();await f.settle();
     const form=w.document.querySelector('#manage-form');
     form.querySelector('[name=target]').checked=true;
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
-    assert.ok(form.elements.packages.disabled);form.elements.chocolatey.click();
-    assert.equal(form.elements.packages.disabled,false);form.elements.packages.value='7zip';
+    assert.equal(form.elements.packages,undefined);assert.equal(form.elements.chocolatey,undefined);
+    form.elements.script.value='install-chocolatey';form.elements.script.dispatchEvent(new w.Event('change'));
     form.elements.guest_username.value='Administrator';form.elements.guest_password.value='Test-Login#123';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const payload=f.calls.find(c=>c[0]==='/api/simple/existing-plan')[1];
     assert.deepEqual(payload.targets,[{node:'pve',vmid:201}]);
-    assert.deepEqual(payload.tasks.map(t=>t.id),['install-chocolatey','chocolatey-package']);
+    assert.deepEqual(payload.tasks,[{id:'install-chocolatey',params:{}}]);
     assert.equal(payload.credential.username,'Administrator');
     assert.match(w.document.querySelector('#manage-title').textContent,/Review/);
     assert.deepEqual(f.errors,[]);
@@ -26,7 +45,9 @@ test('existing VMs use the same software choices with an inline saved login',asy
 test('machine inventory is the landing screen with advanced tools collapsed',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
-    assert.match(w.document.querySelector('h1').textContent,/^Machines$/);
+    assert.match(w.document.querySelector('h1').textContent,/^Operations$/);
+    w.document.querySelector('nav [data-view=create]').click();await f.settle();
+    assert.equal(w.document.querySelector('h1').textContent,'Create');
     assert.ok(w.document.querySelector('[data-simple="windows"]'));
     assert.ok(w.document.querySelector('[data-simple="ubuntu"]'));
     assert.equal(w.document.querySelector('.advanced-nav').open,false);
@@ -79,9 +100,10 @@ test('inventory keeps filters and runs software on exactly the checked machines'
     assert.equal(w.document.querySelector('[data-machine-key]').checked,true);
     w.document.querySelector('#run-selected').click();await f.settle();
     const form=w.document.querySelector('#manage-form');
-    assert.equal(form.querySelector('select[name=os]').value,'ubuntu');
+    assert.equal(form.querySelector('select[name=os]'),null);assert.equal(form.elements.packages,undefined);
     assert.equal(form.elements.guest_password,undefined);
-    form.elements.packages.value='curl';
+    form.elements.script.value='linux-package';form.elements.script.dispatchEvent(new w.Event('change'));
+    form.querySelector('[data-run-param=package]').value='curl';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const plan=f.calls.find(([url])=>url==='/api/simple/existing-plan')[1];
     assert.deepEqual(plan.targets,[{node:'pve',vmid:201}]);
@@ -100,13 +122,97 @@ test('unknown OS asks for a choice and build prerequisites lead to server settin
     const form=w.document.querySelector('#manage-form');
     assert.equal(form.elements.os.value,'');
     assert.equal(form.elements.packages,undefined);
-    form.elements.os.value='ubuntu';form.elements.os.dispatchEvent(new w.Event('change'));
+    form.elements.os.value='linux';form.elements.os.dispatchEvent(new w.Event('change'));
     assert.equal(form.elements.guest_username.value,'ubuntu');
     w.document.querySelector('#manage-close').click();
-    w.document.querySelector('[data-simple=ubuntu]').click();await f.settle();
+    await f.build('ubuntu');
     assert.equal(w.document.querySelector('.server-advanced').open,true);
     assert.equal(w.document.activeElement.name,'ssh_fingerprint');
     assert.equal(f.calls.some(([url])=>url==='/api/simple/options'),false);
+  }finally{f.close()}
+});
+
+test('library shortcut preselects a script, offers its defaults, and sends only named overrides',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    f.records.tasks.push({id:'service-test',name:'Start service',platform:'windows',kind:'ansible',
+      parameters:{service:'Service name'},defaults:{service:'Spooler'},body:'- name: Start service'});
+    f.records.connections.push({node:'pve',vmid:201,platform:'windows'});
+    doc.querySelector('[data-view=scripts]').click();await f.settle();
+    doc.querySelector('[data-simple-task="service-test"]').click();await f.settle();
+    const form=doc.querySelector('#manage-form');
+    form.elements.target.click();form.requestSubmit();await f.settle();
+    assert.equal(form.elements.script.value,'service-test');
+    assert.equal(form.elements.credential_id,undefined);assert.equal(form.elements.packages,undefined);
+    const input=form.querySelector('[data-run-param=service]');
+    assert.equal(input.value,'Spooler');input.value='W32Time';
+    form.requestSubmit();await f.settle();
+    assert.deepEqual(f.calls.find(([url])=>url==='/api/simple/existing-plan')[1],
+      {targets:[{node:'pve',vmid:201}],tasks:[{id:'service-test',params:{service:'W32Time'}}]});
+    doc.querySelector('[data-edit-run]').click();await f.settle();
+    assert.equal(form.querySelector('[data-run-param]').value,'W32Time');
+  }finally{f.close()}
+});
+
+test('one-off script review retains source and parameters and never saves a library entry',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    f.records.connections.push({node:'pve',vmid:201,platform:'linux'});
+    doc.querySelector('[data-simple=apply][data-id]').click();await f.settle();
+    const form=doc.querySelector('#manage-form');
+    doc.querySelector('[data-run-mode=once]').click();
+    const source='- ansible.builtin.service:\n    name: "{{ proxmate_inputs.service }}"\n    state: started';
+    form.elements.body.value=source;form.elements.body.dispatchEvent(new w.Event('input'));
+    form.querySelector('[data-run-param=service]').value='cron';
+    form.requestSubmit();await f.settle();
+    const payload=f.calls.find(([url])=>url==='/api/simple/existing-plan')[1];
+    assert.deepEqual(payload.one_off,{kind:'ansible',platform:'linux',body:source,parameters:{service:'service'},params:{service:'cron'}});
+    assert.equal(payload.credential_id,undefined);
+    assert.equal(f.calls.some(([url,body])=>url==='/api/manage/tasks'&&body),false);
+    doc.querySelector('[data-edit-run]').click();await f.settle();
+    assert.equal(form.elements.body.value,source);assert.equal(form.querySelector('[data-run-param]').value,'cron');
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('Operations reviews power for the checked machines without asking for a guest login',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    const fetch=w.fetch;
+    w.fetch=async(url,opts)=>{
+      const reply=await fetch(url,opts);
+      if(url==='/api/manage/plan')return {ok:true,json:async()=>({id:'power-plan',operation:'shutdown',tasks:[],targets:[{node:'pve',vmid:201,name:'Test VM'}]})};
+      return reply;
+    };
+    doc.querySelector('[data-machine-key]').click();
+    doc.querySelector('[data-bulk-power=shutdown]').click();await f.settle();
+    assert.deepEqual(f.calls.find(([url])=>url==='/api/manage/plan')[1],{operation:'shutdown',targets:[{node:'pve',vmid:201}]});
+    assert.equal(f.calls.some(([url])=>url==='/api/manage/run'),false);
+    assert.equal(doc.querySelector('#manage-form').elements.credential_id,undefined);
+    doc.querySelector('#manage-form').requestSubmit();await f.settle();
+    assert.deepEqual(f.calls.find(([url])=>url==='/api/manage/run')[1],{plan_id:'power-plan',confirmed:true,risk_confirmed:false});
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('Create loads detailed storage only when opening a Linux template clone',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    const template={type:'qemu',template:1,node:'pve',vmid:9001,name:'linux-base',status:'stopped',maxcpu:2,maxmem:2147483648};
+    w.eval('state.resources.push('+JSON.stringify(template)+')');
+    const fetch=w.fetch;
+    w.fetch=async(url,opts)=>{
+      const reply=await fetch(url,opts);
+      if(url==='/api/simple/software')return {ok:true,json:async()=>({platforms:{'pve:9001':'linux'}})};
+      if(url==='/api/state'){const inventory=await reply.json();return {ok:true,json:async()=>({...inventory,resources:[...inventory.resources,template]})}}
+      return reply;
+    };
+    doc.querySelector('nav [data-view=create]').click();
+    assert.equal(f.calls.some(([url])=>url==='/api/state'),false);
+    doc.querySelector('[data-clone-template="9001"]').click();await f.settle();
+    assert.equal(doc.querySelector('#editor').open,true);
+    assert.equal(doc.querySelector('#action-form [name=source]').value,'9001');
+    assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
 
@@ -130,7 +236,7 @@ test('inventory polling discovers external changes while preserving search input
 test('one simple wizard selects a named Windows edition, three machines and software',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form');
     assert.equal(w.document.querySelector('#simple-dialog').open,true);
     assert.equal(form.elements.edition.value,'7');
@@ -167,7 +273,7 @@ test('edition inspection preserves edits and ignores obsolete responses',async()
     return response;
   };
   try{
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form'),next=w.document.querySelector('#simple-next');
     form.elements.source.value='library:install.iso';
     form.elements.source.dispatchEvent(new w.Event('change'));await f.settle();
@@ -199,7 +305,7 @@ test('browsing media and editing disks preserve the chosen edition and machine d
     return res;
   };
   try{
-    doc.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=doc.querySelector('#simple-form'),fields=form.elements;
     assert.equal(doc.activeElement.textContent,'1. Machine');
     fields.edition.value='8';fields.name.value='lab';fields.password.value='Example#12345';
@@ -231,7 +337,7 @@ test('machine settings group related controls and surface a missing WinRM networ
     return response;
   };
   try{
-    doc.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=doc.querySelector('#simple-form'),fields=form.elements;
     const groups=panel=>[...form.querySelectorAll(panel+' fieldset')].map(g=>
       [g.querySelector('legend').textContent,[...g.querySelectorAll('select,input')].map(el=>el.name)]);
@@ -263,7 +369,7 @@ test('failed ISO inspection can be retried after a redraw without losing the for
     return res;
   };
   try{
-    doc.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=doc.querySelector('#simple-form'),fields=form.elements,retry=doc.querySelector('#simple-retry-iso');
     fields.name.value='lab';fields.password.value='Example#12345';
     fields.all_media.click();await f.settle();
@@ -283,7 +389,7 @@ test('failed ISO inspection can be retried after a redraw without losing the for
 test('Ubuntu simple setup has no ISO index, public-key or snippets-storage step',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
-    w.document.querySelector('[data-simple="ubuntu"]').click();await f.settle();
+    await f.build('ubuntu');
     const form=w.document.querySelector('#simple-form');
     assert.equal(form.elements.profile.value,'ubuntu-24.04');
     assert.equal(form.elements.ssh_key,undefined);assert.equal(form.elements.snippet_storage,undefined);
@@ -422,7 +528,7 @@ test('machine page keeps the selected VM through discovery, login and return to 
     assert.ok(w.document.querySelector('#content [data-simple="apply"]'));
     assert.equal(form.elements.password,undefined);
     w.document.querySelector('.machine-back').click();
-    assert.equal(w.document.querySelector('h1').textContent,'Machines');
+    assert.equal(w.document.querySelector('h1').textContent,'Operations');
     assert.equal(w.location.hash,'');assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
@@ -433,18 +539,64 @@ test('refresh network details selects the current IPv4 when the saved address ha
   try{
     w.fetch=async(url,opts)=>{
       if(url==='/api/simple/machine')return {ok:true,json:async()=>({node:'pve',vmid:201,name:'Windows',identity:'vm',platform:'windows',status:'running',
-        addresses:[{host:address},{host:'fd00::1'}],jobs:[],logins:[],connection:{host:'192.0.2.92',platform:'windows',port:5986}})};
+        addresses:[{host:address},{host:'fd00::1'}],jobs:[],suggested_credential_id:'current',
+        logins:[{id:'old',name:'Former VM',platform:'windows'},{id:'current',name:'Windows login',platform:'windows'}],
+        connection:{host:'192.0.2.92',platform:'windows',port:5986,credential_id:'old'}})};
       if(url==='/api/simple/machine/backup')return {ok:true,json:async()=>({latest:null})};
       return original(url,opts);
     };
     doc.querySelector('.machine-link').click();await f.settle();
     address='192.0.2.60';doc.querySelector('#refresh-machine-network').click();await f.settle();
-    doc.querySelector('#machine-connect').click();
+    assert.equal(doc.querySelector('#manage-dialog').open,true);
+    assert.equal(doc.querySelector('#machine-connect').textContent,'Verify new address');
     const select=doc.querySelector('#manage-form').elements.host;
     assert.equal(select.value,address);assert.deepEqual([...select.options].map(o=>o.value),[address,'fd00::1']);
+    assert.equal(doc.querySelector('#manage-form').elements.credential_id.value,'current');
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
+
+for(const source of ['inventory','failed job']){
+  test('refresh connection from '+source+' discovers the VM and waits for Test and save',async()=>{
+    const f=await fixture({},true),{w}=f,doc=w.document,original=w.fetch;
+    const requests=[];
+    const target={node:'pve',vmid:201};
+    const data={...target,name:'Web server',identity:'vm',platform:'linux',status:'running',
+      addresses:[{host:'192.0.2.60'},{host:'fd00::60'}],jobs:[],logins:[{id:'saved',name:'Lab login',platform:'linux'}],
+      connection:{host:'192.0.2.17',platform:'linux',port:22,credential_id:'saved',updated:1}};
+    try{
+      w.fetch=async(url,opts)=>{
+        if(url==='/api/jobs/failure')return {ok:true,json:async()=>({action:'manage',status:'failed',log:'job failed',
+          connection_recovery:{server_id:f.server.id,targets:[{...target,reviewed_identity:'reviewed'}]}})};
+        if(url.startsWith('/api/simple/machine')){
+          requests.push([url,JSON.parse(opts.body)]);
+          return {ok:true,json:async()=>url==='/api/simple/machine'?data:{}};
+        }
+        return original(url,opts);
+      };
+      if(source==='failed job'){
+        w.eval("openJobLog('failure')");await f.settle();
+        const button=doc.querySelector('.job-connection-actions button');
+        assert.equal(button.textContent,'Refresh connection for pve:201');
+        button.click();
+      }else doc.querySelector('[data-refresh-connection="pve:201"]').click();
+      await f.settle();
+      assert.equal(doc.querySelector('#manage-dialog').open,true);
+      assert.equal(doc.querySelector('#editor').open,false);
+      assert.deepEqual(requests[0][1],source==='failed job'?{...target,reviewed_identity:'reviewed'}:target);
+      const form=doc.querySelector('#manage-form');
+      assert.equal(form.elements.host.value,'192.0.2.60');
+      assert.equal(form.elements.credential_id.value,'saved');
+      assert.match(doc.querySelector('#manage-fields').textContent,/192\.0\.2\.17/);
+      assert.equal(requests.some(([url])=>url.endsWith('/connect')),false);
+      form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
+      assert.deepEqual(requests.find(([url])=>url.endsWith('/connect'))[1],
+        {...target,identity:'vm',connection_revision:1,platform:'linux',host:'192.0.2.60',credential_id:'saved'});
+      assert.equal(f.calls.some(([url])=>url==='/api/manage/run'),false);
+      assert.deepEqual(f.errors,[]);
+    }finally{f.close()}
+  });
+}
 
 test('a late machine detail response cannot reopen a closed machine page',async()=>{
   const f=await fixture({},true),{w}=f;
@@ -454,7 +606,7 @@ test('a late machine detail response cannot reopen a closed machine page',async(
     w.document.querySelector('.machine-link').click();
     w.document.querySelector('.machine-back').click();
     resolve({ok:true,json:async()=>({name:'Obsolete guest'})});await f.settle();
-    assert.equal(w.document.querySelector('h1').textContent,'Machines');
+    assert.equal(w.document.querySelector('h1').textContent,'Operations');
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
@@ -464,7 +616,7 @@ test('Windows template review preserves the name, clone mode, disks and software
   try{
     w.eval("state.resources.push({type:'qemu',template:1,node:'pve',vmid:9000,name:'Server 2025 base'})");
     f.records.tasks.push({id:'share',name:'Configure share',platform:'windows',kind:'ansible',body:'test',parameters:{share_name:'Share name'},defaults:{share_name:'Lab'}});
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form');
     form.elements.name.value='files-01';form.elements.source_kind.value='template';
     form.elements.source_kind.dispatchEvent(new w.Event('change'));await f.settle();
@@ -497,7 +649,7 @@ test('Windows ISO picker categorizes candidates and keeps other media browsable'
         {id:'local:iso/virtio-win-2025.iso',label:'virtio-win-2025.iso'},{id:'local:iso/sql2022.iso',label:'sql2022.iso'}];
       return {ok:true,json:async()=>d};
     };
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form');
     assert.deepEqual([...form.elements.source.options].map(o=>o.text),['Windows Server 2022']);
     assert.match(w.document.querySelector('#simple-fields').textContent,/win2022\.iso/);
@@ -540,11 +692,15 @@ async function fixture(initialServer={},startAtHome=false){
     else if(url.startsWith('/api/manage/')){const kind=url.split('/').at(-1);value=records[kind]||{id:'job'};}
     return {ok:true,status:200,json:async()=>value};
   };
-  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
+  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple.js','guest-operations.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
   const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
   await settle();
   if(server.connected&&!startAtHome){w.eval("view='overview';render()");await settle();}
-  return {w,calls,errors,records,server,settle,close:()=>dom.window.close()};
+  const build=async os=>{
+    w.document.querySelector('nav [data-view="create"]').click();await settle();
+    w.document.querySelector('[data-simple="'+os+'"][data-purpose="vm"]').click();await settle();
+  };
+  return {w,calls,errors,records,server,settle,build,close:()=>dom.window.close()};
 }
 
 test('management tabs render, secrets are blank on edit, and VM controls are available',async()=>{
@@ -571,7 +727,9 @@ test('task sequence survives parameters and review submits exact targets, then r
   const f=await fixture(),{w}=f;
   try{
     w.document.querySelector('[data-view="tasks"]').click();await f.settle();
-    w.document.querySelector('[data-mg="use-task"][data-record="install-chocolatey"]').click();await f.settle();
+    w.document.querySelector('[data-mg="apply"]').click();await f.settle();
+    w.document.querySelector('[name=task_choice]').value='install-chocolatey';
+    w.document.querySelector('[data-mg="add-task"]').click();
     w.document.querySelector('[name=target]').checked=true;
     w.document.querySelector('#manage-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const plan=f.calls.find(c=>c[0]==='/api/manage/plan')[1];
@@ -706,7 +864,7 @@ test('software review reconnects to its ticket and preserves the draft after a f
       }
       return fetch(url,opts);
     };
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form');
     form.elements.password.value='Test-Login#123456';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
@@ -734,7 +892,7 @@ test('fresh Windows choices survive Back and submit distinct apps and compatible
         {id:'console-sign-in',name:'Sign in once',advanced:true,vm_only:true}];
       return {ok:true,json:async()=>data};
     };
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form');
     const next=async()=>{form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle()};
     form.elements.password.value='Example-Windows#123';
@@ -760,7 +918,7 @@ test('fresh Windows choices survive Back and submit distinct apps and compatible
 test('Chocolatey gates custom package entry and excludes disabled IDs from review',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form'),fields=form.elements;
     const next=async()=>{form.querySelector('#simple-next').click();await f.settle()};
     fields.password.value='Example-Windows#123';
@@ -795,7 +953,7 @@ test('software categories keep choices and bulk controls respect edition and sco
       if(url==='/api/simple/editions')Object.assign(data.editions[0],{desktop:false,build:'17763'});
       return {...r,json:async()=>data};
     };
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form'),click=s=>form.querySelector(s).click();
     form.elements.password.value='Test-windows#1234';
     const next=async()=>{form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle()};
@@ -859,7 +1017,7 @@ test('ISO disk letters exclude setup DVDs and letters selected by another disk',
   const f=await fixture({},true),{w}=f;
   try{
     w.eval("state.resources.push({type:'qemu',template:1,node:'pve',vmid:9000,name:'Server template'})");
-    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    await f.build('windows');
     const form=w.document.querySelector('#simple-form');
     const field=i=>form.elements['disk_letter_'+i];
     const option=(i,value)=>[...field(i).options].find(o=>o.value===value);

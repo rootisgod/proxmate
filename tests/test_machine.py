@@ -1,4 +1,6 @@
+import ssl
 import time
+from contextlib import nullcontext
 
 import pytest
 import machine
@@ -7,6 +9,7 @@ from test_lifecycle import recovery
 
 
 TARGET=dict(node='pve',vmid=201)
+PUBLIC_PEM='-----BEGIN CERTIFICATE-----\nZ3Vlc3Q=\n-----END CERTIFICATE-----'
 
 
 def details(client,headers):
@@ -27,10 +30,39 @@ def setup_guest(fake,platform):
     fake.call=call
 
 
+def windows_listener(fake, monkeypatch):
+    original = fake.call
+    def read(path, **params):
+        if path.endswith('/agent/file-read'):
+            assert params == {'file': r'C:\ProgramData\Proxmate\winrm.pem'}
+            return {'content': PUBLIC_PEM}
+        return original('GET', path, **params)
+    fake.verified_reader = lambda: nullcontext(read)
+    def tls_peer(binding, ca):
+        if ca != PUBLIC_PEM:
+            raise ssl.SSLCertVerificationError()
+        return b'guest'
+    monkeypatch.setattr(machine, 'tls_peer', tls_peer)
+    return read
+
+
+def test_connection_refresh_rechecks_the_vm_from_the_failed_job(recovery):
+    app,client,headers,fake=recovery
+    setup_guest(fake,'windows')
+    config=fake.call('GET','nodes/pve/qemu/201/config')
+    target=dict(TARGET,reviewed_identity=app.manager.identity(config))
+    assert client.post('/api/simple/machine',json=target,headers=headers).status_code==200
+    fake.configs[201]['smbios1']='uuid=replacement'
+    result=client.post('/api/simple/machine',json=target,headers=headers)
+    assert result.status_code==400 and 'changed since the failed job' in result.json['error']
+    assert not fake.writes
+
+
 @pytest.mark.parametrize('platform',['linux','windows'])
 def test_discover_choose_address_verify_and_reuse_login(recovery,monkeypatch,platform):
     app,c,h,fake=recovery
     setup_guest(fake,platform)
+    if platform=='windows': windows_listener(fake,monkeypatch)
     d=details(c,h)
     assert d['platform']==platform and d['os']=='Guest OS' and d['connection']=={} and d['verified_at'] is None
     assert d['addresses']==[{'host':'192.0.2.21','interface':'eth0'},{'host':'192.0.2.22','interface':'eth0'}]
@@ -120,8 +152,74 @@ def test_saved_windows_ca_is_used_for_retest(recovery,monkeypatch):
     cred=app.manager.save('credentials',dict(name='Windows',platform='windows',username='admin',password='pw'))
     binding=app.manager.save('connections',dict(TARGET,platform='windows',credential_id=cred['id'],host='192.0.2.21',ca_pem=ca))
     def authenticate(b,*args,**kwargs): assert b['ca_pem']==ca and b['verify_tls']
+    monkeypatch.setattr(machine,'tls_peer',lambda b,saved: b'valid' if saved==ca else pytest.fail('Lost saved CA'))
     monkeypatch.setattr(machine,'run_guest',authenticate)
     reply=c.post('/api/simple/machine/connect',headers=h,json=dict(TARGET,platform='windows',host='192.0.2.21',
         credential_id=cred['id'],identity=details(c,h)['identity'],connection_revision=binding['updated']))
     assert reply.status_code==200
     assert not fake.secret_reads
+
+
+@pytest.mark.parametrize('outcome', ['success','wrong-peer','wrong-address','changed-identity','untrusted-proxmox','bad-password'])
+def test_windows_certificate_refresh_checks_both_ends_before_saving(recovery,monkeypatch,outcome):
+    app,c,h,fake=recovery
+    setup_guest(fake,'windows')
+    read=windows_listener(fake,monkeypatch)
+    identity=details(c,h)['identity']
+    login=app.manager.save('credentials',dict(name='Current',platform='windows',username='admin',password='private'))
+    old=app.manager.save('connections',dict(TARGET,host='192.0.2.21',platform='windows',credential_id=login['id'],
+                                            ca_pem=PUBLIC_PEM.replace('Z3Vlc3Q=', 'b2xk')))
+    old.update(machine_identity=identity)
+    app.manager.put('connections',old)
+    def trusted_read(path,**params):
+        if outcome=='untrusted-proxmox': raise RuntimeError('host key mismatch')
+        if outcome=='wrong-address' and path.endswith('/network-get-interfaces'): return {'result':[]}
+        if outcome=='changed-identity' and path.endswith('/config'): return {'vmgenid':'other'}
+        return read(path,**params)
+    fake.verified_reader=lambda:nullcontext(trusted_read)
+    if outcome=='wrong-peer':
+        original=machine.tls_peer
+        monkeypatch.setattr(machine,'tls_peer',lambda b,ca: b'different' if ca==PUBLIC_PEM else original(b,ca))
+    seen=[]
+    def authenticate(binding,credential,*args,**kwargs):
+        seen.append(credential['id'])
+        assert binding['ca_pem']==PUBLIC_PEM and binding['verify_tls']
+        if outcome=='bad-password': raise ValueError('private')
+    monkeypatch.setattr(machine,'run_guest',authenticate)
+    result=c.post('/api/simple/machine/connect',headers=h,json=dict(TARGET,platform='windows',host=old['host'],
+                  identity=identity,credential_id=login['id'],connection_revision=old['updated']))
+    saved=app.manager.get('connections',old['id'])
+    assert seen==([login['id']] if outcome in ('success','bad-password') else [])
+    if outcome=='success':
+        assert result.status_code==200 and saved['ca_pem']==PUBLIC_PEM and saved['verified_at']
+    else:
+        assert result.status_code==400 and 'private' not in result.text and saved==old
+    assert not fake.writes
+
+
+@pytest.mark.parametrize('legacy',[False,True])
+def test_refresh_uses_the_current_build_login_for_a_reused_vm_id(recovery,monkeypatch,legacy):
+    app,c,h,fake=recovery
+    setup_guest(fake,'windows')
+    windows_listener(fake,monkeypatch)
+    identity=details(c,h)['identity']
+    def login(name):
+        return app.manager.save('credentials',dict(name=name,platform='windows',username='admin',password=name))
+    old_login,current_login=login('Old'),login('Current')
+    old=app.manager.save('connections',dict(TARGET,host='192.0.2.92',platform='windows',credential_id=old_login['id']))
+    if not legacy:
+        old['machine_identity']='previous-vm'
+        app.manager.put('connections',old)
+    for job_id,server,cred in [('origin',app.server.current()['id'],current_login),('archived','other-server',old_login)]:
+        app.manager.put('builds',dict(TARGET,id=job_id,machine_identity=identity))
+        payload=dict(action='simple',server_id=server,plan=dict(config=dict(TARGET,bootstrap=dict(credential_id=cred['id']))))
+        with app.db() as con:
+            con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',(job_id,'simple','failed',1,2,app.encode_payload(payload),''))
+    assert details(c,h)['suggested_credential_id']==current_login['id']
+    seen=[]
+    monkeypatch.setattr(machine,'run_guest',lambda b,cred,*a,**kw:seen.append(cred['id']))
+    body=dict(TARGET,platform='windows',identity=identity,host='192.0.2.21',connection_revision=old['updated'])
+    assert c.post('/api/simple/machine/connect',headers=h,json=dict(body,credential_id=old_login['id'])).status_code==400
+    assert seen==[] and app.manager.get('connections',old['id'])==old
+    assert c.post('/api/simple/machine/connect',headers=h,json=dict(body,credential_id=current_login['id'])).status_code==200
+    assert seen==[current_login['id']] and app.manager.get('connections',old['id'])['machine_identity']==identity

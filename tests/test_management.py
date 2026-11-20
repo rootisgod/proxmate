@@ -67,6 +67,46 @@ def test_credentials_are_encrypted_write_only_and_reference_protected(lab):
     assert client.post(f'/api/manage/credentials/{cred["id"]}/delete',json={},headers=h).status_code==400
 
 
+def test_one_off_run_uses_each_machine_login_and_freezes_inputs(lab):
+    app,client,headers,fake,runs=lab
+    first=setup_guest(app)
+    second=app.manager.save('credentials',dict(name='Second guest',platform='windows',username='guest',password='second-password',
+        ca_pem='-----BEGIN CERTIFICATE-----\ntest only\n-----END CERTIFICATE-----'))
+    source='- name: Manage spooler\n  ansible.windows.win_service:\n    name: "{{ proxmate_inputs.service }}"\n    state: started'
+    targets=[dict(node='pve',vmid=i) for i in (201,202)]
+    script=dict(kind='ansible',platform='windows',body=source,parameters={'service':'Service name'},params={'service':'Spooler'})
+    def review(**changes):
+        return client.post('/api/simple/existing-plan',headers=headers,json=dict(targets=targets,one_off={**script,**changes},credential_id=second['id']))
+    assert review(body='- hosts: all\n  tasks: []').status_code==400
+    assert review(params={}).status_code==400
+    assert app.manager.find('connections','pve:202') is None
+    result=review()
+    assert result.status_code==200,result.json
+    plan=result.json
+    assert [t['credential_name'] for t in plan['targets']]==['Lab guest','Second guest']
+    assert plan['tasks']==[{'name':'One-off script','params':{'service':'Spooler'}}] and plan['dangerous']
+    assert app.manager.all('tasks')==[] and not runs and not fake.writes
+    assert source not in result.text and 'second-password' not in result.text
+    body=dict(plan_id=plan['id'],confirmed=True)
+    assert client.post('/api/manage/run',json=body,headers=headers).status_code==400
+    assert client.post('/api/manage/run',json={**body,'risk_confirmed':True},headers=headers).status_code==202
+    assert app.run_next_job()
+    executed=[(cred['id'],tasks[0]['vars']['proxmate_inputs']) for _,cred,tasks,probe in runs if not probe]
+    assert executed==[(first['id'],{'service':'Spooler'}),(second['id'],{'service':'Spooler'})]
+    assert app.manager.get('connections','pve:201')['credential_id']==first['id']
+    assert app.manager.all('tasks')==[]
+
+
+def test_failed_mixed_platform_review_does_not_save_discovered_login(lab):
+    app,client,headers,_,_=lab
+    setup_guest(app,'linux')
+    payload=dict(targets=[dict(node='pve',vmid=i) for i in (201,202)],tasks=[{'id':'install-chocolatey'}],
+        credential=dict(platform='windows',username='guest',password='unused',ca_pem='-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----'))
+    reply=client.post('/api/simple/existing-plan',headers=headers,json=payload)
+    assert reply.status_code==400
+    assert len(app.manager.all('credentials'))==1 and app.manager.find('connections','pve:202') is None
+
+
 def test_review_freezes_targets_and_task_body_and_requires_confirmation(lab):
     app,client,h,fake,runs=lab
     setup_guest(app)
@@ -264,7 +304,7 @@ def test_hypervisor_playbook_requires_explicit_confirmation():
 
 
 def test_review_shows_guest_endpoint_and_mismatch_prevents_wrong_vm_tasks(lab):
-    app,_,_,fake,runs=lab
+    app,client,headers,fake,runs=lab
     setup_guest(app)
     binding=app.manager.get('connections','pve:201')
     app.manager.save('connections',dict(binding,host='192.0.2.30'))
@@ -272,10 +312,23 @@ def test_review_shows_guest_endpoint_and_mismatch_prevents_wrong_vm_tasks(lab):
     assert p['targets'][0]['guest_host']=='192.0.2.30'
     assert p['targets'][0]['credential_name']=='Lab guest'
     assert 'Super-secret' not in json.dumps(p)
-    logs=[]
-    with pytest.raises(RuntimeError):app.manager.execute(app.manager.load_plan(p['id']),logs.append)
+    job=client.post('/api/manage/run',json=dict(plan_id=p['id'],confirmed=True),headers=headers).json
+    assert app.run_next_job()
+    detail=client.get(job['url'],headers=headers).json
     assert not runs and not fake.writes
-    assert any('does not match' in message for message in logs)
+    assert detail['status']=='failed' and 'does not match' in detail['log']
+    expected=dict(server_id=app.server.read()['id'],targets=[dict(
+        node='pve',vmid=201,reviewed_identity=app.manager.load_plan(p['id'])['targets'][0]['identity'])])
+    assert detail['connection_recovery']==expected
+    assert 'connection_recovery' not in client.get('/api/jobs?summary=1',headers=headers).json[0]
+    # Existing logs use the earlier wording. Only targets in the frozen job can be offered.
+    old_log='pve:201 RESULT: failed - Configured endpoint does not match guest-agent IP addresses; check VM connection settings'
+    with app.db() as con:
+        con.execute('UPDATE jobs SET log=? WHERE id=?',(old_log+'\n'+old_log.replace('201','222'),job['id']))
+    assert client.get(job['url'],headers=headers).json['connection_recovery']==expected
+    with app.db() as con:
+        con.execute('INSERT INTO server_archives VALUES (?,?,?)',('replacement',detail['created']+1,app.encode_payload({})))
+    assert 'connection_recovery' not in client.get(job['url'],headers=headers).json
 
 
 @pytest.mark.parametrize('host',['127.0.0.1','::1','169.254.1.2','0.0.0.0','192.168.1.244','localhost'])

@@ -44,6 +44,33 @@ def settings(**changes):
     return dict(os='windows',name='demo',count=3,purpose='vm',source='local:iso/server.iso',edition=7,password='Secret-Setup#123',tasks=[{'id':'install-chocolatey','params':{}},{'id':'chocolatey-package','params':{'package':'7zip'}},{'id':'windows-feature','params':{'feature':'Web-Server'}}],**changes)
 
 
+def test_agent_guide_example_reviews_without_creating_a_job(simple_lab):
+    _, client, auth, _ = simple_lab
+    spec = client.get('/api/openapi.json').json
+    guide_url = spec['externalDocs']['url']
+    assert guide_url in client.get('/api/docs').text
+    guide = client.get(guide_url)
+    assert guide.status_code == 200 and guide.mimetype == 'text/plain'
+    example = json.loads(guide.text.split('```json', 1)[1].split('```', 1)[0])
+
+    server_id = client.get('/api/server', headers=auth).json['id']
+    headers = {**auth, 'X-Proxmate-Server': server_id}
+    destination = client.get('/api/simple/options', headers=headers).json['destinations'][0]
+    source = next(iso['id'] for iso in destination['isos'] if iso['label'] == 'server.iso')
+    selection = {'node': destination['node'], 'source': source}
+    inspection = client.post('/api/simple/editions', json=selection, headers=headers).json
+    edition = next(e for e in inspection['editions'] if e['desktop'] and e['edition_id'] == 'ServerStandard')
+    example.update(selection, edition=edition['index'], edition_identity=inspection['identity'], password='Test-Only#1234')
+    response = client.post('/api/simple/plan', json=example, headers=headers)
+    assert response.status_code == 200, response.json
+    plan = response.json
+    machine, = plan['machines']
+    assert (machine['name'], machine['cores'], machine['memory'], machine['disk']) == ('lab-web01', 4, 8192, 64)
+    assert plan['data_disks'] == [{'size': 80, 'label': 'Data', 'letter': ''}]
+    assert [task['params'] for task in plan['tasks']] == [{}, {'package': 'git'}, {'feature': 'Web-Server'}]
+    assert client.get('/api/jobs', headers=headers).json == []
+
+
 def test_discovery_selects_resources_and_real_edition_index(simple_lab):
     app,c,h,inv=simple_lab
     options=c.get('/api/simple/options',headers=h).json

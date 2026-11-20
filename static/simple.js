@@ -16,20 +16,20 @@ function machineRows(){
   const query=machineFilters.query.trim().toLowerCase();
   const shown=guests.filter(g=>(machineFilters.status==='all'||g.status===machineFilters.status)&&
     [g.name,g.node,g.vmid].some(v=>String(v).toLowerCase().includes(query)));
-  if(!shown.length)return `<tr><td colspan="5" class="inventory-empty">${guests.length?'No machines match these filters.':'No virtual machines discovered. Create a machine to get started.'}</td></tr>`;
+  if(!shown.length)return `<tr><td colspan="5" class="inventory-empty">${guests.length?'No machines match these filters.':'No virtual machines discovered. <button data-view="create">Create a machine</button>'}</td></tr>`;
   return shown.map(g=>{
     const key=machineKey(g),name=g.name||'VM '+g.vmid;
     return `<tr><td class="pick"><input type="checkbox" aria-label="Select ${esc(name)} on ${esc(g.node)}" data-machine-key="${esc(key)}" ${machineFilters.selected.has(key)?'checked':''}></td>
       <td class="machine-name"><button class="machine-link" data-machine="${esc(key)}">${esc(name)}</button><small>${esc(g.node)} · VM ${esc(g.vmid)}</small>${g.last_winrm_check?'<small>WinRM login checked '+esc(new Date(g.last_winrm_check*1000).toLocaleDateString())+'</small>':''}</td>
       <td class="machine-state"><span class="pill ${esc(g.status)}">${esc(g.status||'unknown')}</span></td>
       <td class="capacity">${esc(g.maxcpu??'—')} vCPU<small>${g.maxmem?(g.maxmem/1073741824).toLocaleString(undefined,{maximumFractionDigits:1})+' GiB RAM':'Memory unavailable'}</small></td>
-      <td class="machine-actions"><div class="row-actions"><button data-simple="apply" data-id="${esc(g.vmid)}" aria-label="Run software on ${esc(name)}">Run software</button><details class="machine-menu"><summary>Manage</summary><div>${mgButton('Power & hardware','manage-vm',g.vmid)}${('<button data-machine="'+esc(key)+'">Guest connection</button>')}${mgButton('Snapshots','snapshots',g.vmid)}</div></details></div></td></tr>`;
+      <td class="machine-actions"><div class="row-actions"><button data-simple="apply" data-id="${esc(g.vmid)}" aria-label="Run script on ${esc(name)}">Run script</button><button type="button" data-refresh-connection="${esc(key)}" aria-label="Refresh connection for ${esc(name)}">Refresh connection</button><details class="machine-menu"><summary>Manage</summary><div>${powerButton(g)}${mgButton('More VM controls','manage-vm',g.vmid)}<button data-machine="${esc(key)}">Guest connection</button>${mgButton('Snapshots','snapshots',g.vmid)}</div></details></div></td></tr>`;
   }).join('');
 }
 
 function selectionLabel(){
   const count=machineFilters.selected.size;
-  return count?'Run on '+count+' machine'+(count===1?'':'s'):'Run software';
+  return 'Run script'+(count?' ('+count+')':'');
 }
 
 function onlineNodes(){
@@ -78,10 +78,10 @@ function renderRecentJobs(){
 
 function renderMachines(){
   const filters=[['all','All machines'],['running','Running'],['stopped','Stopped']];
-  const create=`<details class="create-menu"><summary class="primary">Create machine</summary><div><button data-simple="windows">Windows Server</button><button data-simple="ubuntu">Ubuntu</button></div></details>`;
-  $('#content').innerHTML=title('Machines','',create)+
+  $('#content').innerHTML=title('Operations','')+
     `<section class="inventory panel" aria-label="Machine inventory"><div class="inventory-tools"><label>Find a machine<input id="machine-search" type="search" placeholder="Name, node or VM ID" value="${esc(machineFilters.query)}"></label>
-    <button id="run-selected" data-simple="apply">Run software</button></div>
+    <div class="operation-controls"><button type="button" class="primary" id="run-selected" data-simple="apply">Run script</button>
+    <details class="machine-menu"><summary>Power</summary><div><button data-bulk-power="start">Power on</button><button data-bulk-power="shutdown">Graceful shutdown</button></div></details></div></div>
     <div class="inventory-filters" role="group" aria-label="Filter by status">${filters.map(([id,label])=>`<button data-machine-status="${id}" aria-pressed="${machineFilters.status===id}">${label} <span></span></button>`).join('')}</div>
     <table><thead><tr><th aria-label="Select"></th><th>Machine</th><th>Status</th><th>Resources</th><th>Actions</th></tr></thead><tbody id="machine-rows"></tbody></table></section>
     <section id="recent-jobs" class="recent-jobs" aria-label="Recent jobs"><div><h2>Recent jobs</h2><button data-view="jobs">View progress</button></div><ul></ul></section>`;
@@ -104,10 +104,18 @@ function renderMachines(){
 }
 
 function simpleRender(){
-  if(!['home','scripts','machines'].includes(view))return false;
+  if(!['home','scripts','machines','create'].includes(view))return false;
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   if(view==='home'||view==='machines'){
     renderMachines();
+  }else if(view==='create'){
+    const templates=state.resources.filter(r=>r.type==='qemu'&&r.template);
+    const choices=[['vm','Virtual machine','Build a working guest from installation media or a template.'],
+      ['template','Reusable template','Install the OS and your scripts, then prepare the guest for cloning.']];
+    $('#content').innerHTML=title('Create','Choose what to build.')+'<div class="build-choices">'+choices.map(([purpose,name,description])=>
+      '<section class="panel"><h2>'+name+'</h2><p>'+description+'</p><div class="row-actions">'+
+      '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button></div></section>').join('')+'</div>'+
+      '<h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
   }else{
     if(!mg){$('#content').innerHTML=title('Script library','Loading your saved scripts…');if(!mgLoading){mgLoading=true;loadManagement().then(render).catch(e=>notice(e.message)).finally(()=>mgLoading=false)}return true}
     $('#content').innerHTML=scriptLibrary();
@@ -218,7 +226,7 @@ function bulkChoices(label, options) {
 function softwareFields(d){
   const windows=d.os==='windows', platform=windows?'windows':'linux';
   const saved=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform);
-  const fresh=windows&&!d.existing?freshWindowsSettings(d):{};
+  const fresh=windows?freshWindowsSettings(d):{};
   const sections=[];
   if(fresh.settings) sections.push(['settings','Customisations',fresh.settings]);
   sections.push(['apps','Packages',(fresh.apps||'')+
@@ -429,103 +437,33 @@ function drawSimple(){
   }
 }
 
-async function openSimpleApply(preselected=[],taskId=''){
-  if(!state){view='server';render();return}
-  if(!preselected.length){
-    mgDialog('Choose machines',targetFields(),async()=>{
-      const selected=new Set(selectedTargets().map(machineKey));
-      const guests=mgGuests().filter(g=>selected.has(machineKey(g)));
-      if(!guests.length)throw Error('Select at least one machine.');
-      await openSimpleApply(guests,taskId);
-    },'Choose software');
-    return;
-  }
-  const serverId=serverInfo.id,fromPicker=$('#manage-dialog').open;
-  const targets=preselected.map(({node,vmid})=>({node,vmid}));
-  if(targets.length>100)throw Error('Choose up to 100 machines per run.');
-  await loadManagement();
-  const bindings=targets.map(t=>mg.connections.find(c=>c.node===t.node&&c.vmid===t.vmid));
-  const missing=targets.filter((_,i)=>!bindings[i]);
-  const platforms=new Set(bindings.filter(Boolean).map(c=>c.platform));
-  const script=mg.tasks.find(t=>t.id===taskId);
-  if(script)platforms.add(script.platform);
-  const software=await api('simple/software',missing.length?{targets:missing}:undefined);
-  if(serverInfo.id!==serverId||!serverInfo.connected||(fromPicker&&!$('#manage-dialog').open))return;
-  const hints=software.platforms||{};
-  for(const t of missing){
-    const hint=hints[machineKey(t)];
-    if(hint&&(targets.length>1||!script))platforms.add(hint);
-  }
-  if(platforms.size>1)throw Error('These targets or scripts use different operating systems. Select Windows and Linux machines in separate runs.');
-  simpleOptions={...(simpleOptions||{}),features:software.features};
-  const platform=[...platforms][0];
-  const d={os:platform==='windows'?'windows':platform==='linux'?'ubuntu':'',packages:'',scripts:taskId?[taskId]:[],features:[],script_params:{},existing:true};
-  const osChoices=[['','Choose the guest OS'],['windows','Windows'],['ubuntu','Linux']];
-  const summary=preselected.map(g=>`<li><strong>${esc(g.name||'VM '+g.vmid)}</strong> · ${esc(g.node)} / ${esc(g.vmid)}</li>`).join('');
-  mgDialog('Run software',`<ul class="run-targets" aria-label="Selected machines">${summary}</ul>`+
-    ws('os','Guest operating system',osChoices,d.os)+'<div id="simple-software"></div><div id="guest-login"></div>',async values=>{
-    if(!values.os)throw Error('Choose the guest operating system.');
-    Object.assign(d,values);
-    d.features=[...$('#manage-form').querySelectorAll('[name=feature]:checked')].map(i=>i.value);
-    d.scripts=[...$('#manage-form').querySelectorAll('[name=saved_script]:checked')].map(i=>i.value);
-    $('#manage-form').querySelectorAll('[data-script-param]').forEach(i=>{d.script_params[i.dataset.scriptParam]=i.value});
-    const tasks=selectedSoftware(d);
-    if(!tasks.length)throw Error('Choose a package, feature or saved script.');
-    if(missing.length&&!values.credential_id&&!values.guest_password)throw Error('Choose a saved guest login or enter a username and password.');
-    const formState=mgSave;
-    const reviewed=await api('simple/existing-plan',{targets,tasks,credential_id:values.credential_id,
-      credential:values.guest_password?{platform:d.os==='windows'?'windows':'linux',username:values.guest_username,password:values.guest_password}:undefined});
-    if(mgSave!==formState||serverInfo.id!==serverId)return;
-    mgPlan=reviewed;reviewOperation();
-  },'Review run');
-  function showPlatform(){
-    $('#simple-software').innerHTML=d.os?softwareFields(d):'';
-    if(d.os)bindSoftware($('#simple-software'),d);
-    const login=$('#guest-login');
-    if(!d.os){login.replaceChildren();return}
-    if(!missing.length){login.textContent='Using the saved guest connections.';return}
-    const choices=mgCreds(d.os==='windows'?'windows':'linux');
-    choices[0]=['','Enter a new login'];
-    login.innerHTML='<fieldset><legend>Guest login</legend><p>Proxmate will read the address and connection details from the guest agent.</p>'+
-      (choices.length>1?mgSelect('credential_id','Login',choices):'')+
-      '<div class="form-grid" id="inline-login">'+wf('guest_username','Username',d.os==='windows'?'Administrator':'ubuntu')+
-      wf('guest_password','Password','','password','autocomplete="new-password"')+'</div></fieldset>';
-    const saved=login.querySelector('[name=credential_id]');
-    if(saved)saved.onchange=()=>{
-      const fields=$('#inline-login');
-      fields.hidden=Boolean(saved.value);
-      fields.querySelectorAll('input').forEach(input=>{input.disabled=fields.hidden});
-    };
-  }
-  const select=$('#manage-fields [name=os]');
-  select.disabled=Boolean(script||bindings.some(Boolean));
-  // A disabled select is omitted from FormData. The form retains the known platform.
-  if(select.disabled)select.insertAdjacentHTML('afterend',`<input type="hidden" name="os" value="${esc(d.os)}">`);
-  select.onchange=()=>{d.os=select.value;d.features=[];d.scripts=[];showPlatform()};
-  showPlatform();
-}
-
 document.addEventListener('click',async e=>{
   const button=e.target.closest('button');if(!button)return;
   try{
     if(button.dataset.cloneTemplate){
       const src=state.resources.find(r=>r.type==='qemu'&&r.template&&r.vmid===Number(button.dataset.cloneTemplate));
       if(!src)return notice('Refresh to see available templates.');
+      const fromView=view;
       const hint=await api('simple/software',{targets:[{node:src.node,vmid:src.vmid}]});
+      if(view!==fromView)return;
       if(hint.platforms[machineKey(src)]==='windows')await openSimple('windows','vm','',src);
-      else openAction('clone',src.vmid);
+      else{
+        const inventory=state.details?state:await api('state');
+        if(view!==fromView)return;
+        if(!inventory.resources.some(r=>r.type==='qemu'&&r.template&&machineKey(r)===machineKey(src)))throw Error('The source template changed. Refresh the inventory.');
+        state=inventory;openAction('clone',src.vmid,'',src.node);
+      }
     }
     else if(button.dataset.simple==='apply'){
       const targets=button.dataset.id?mgGuests().filter(g=>g.vmid===Number(button.dataset.id)):
         button.id==='run-selected'?mgGuests().filter(g=>machineFilters.selected.has(machineKey(g))):[];
       if(button.dataset.id&&!targets.length)return notice('This machine is no longer in the inventory. Refresh to see available machines.');
-      await openSimpleApply(targets);
+      await openScriptRun(targets);
     }
     else if(button.dataset.simple){
-      if(button.closest('.create-menu'))button.closest('.create-menu').open=false;
       await openSimple(button.dataset.simple,button.dataset.purpose||'vm',button.dataset.filename||'');
     }
-    if(button.dataset.simpleTask)await openSimpleApply([],button.dataset.simpleTask);
+    if(button.dataset.simpleTask)await openScriptRun([],button.dataset.simpleTask);
   }catch(err){notice(err.message)}
 });
 $('#simple-close').onclick=()=>$('#simple-dialog').close();

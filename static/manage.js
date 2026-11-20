@@ -33,7 +33,7 @@ function managementRender(){
 
 function mgDialog(heading,html,save,button='Save'){
   $('#manage-title').textContent=heading;$('#manage-fields').innerHTML=html;$('#manage-error').textContent='';
-  $('#manage-submit').textContent=button;mgSave=save;
+  $('#manage-submit').textContent=button;$('#manage-submit').disabled=false;mgSave=save;
   if(!$('#manage-dialog').open)$('#manage-dialog').showModal();
 }
 function mgValues(){
@@ -133,7 +133,7 @@ document.addEventListener('click',async e=>{
       const g=mgGuests().find(g=>g.vmid===Number(id));const snaps=await api(`manage/snapshots/${encodeURIComponent(g.node)}/${g.vmid}`);
       mgDialog('VM snapshots',snaps.filter(s=>s.name!=='current').map(s=>`<p><strong>${esc(s.name)}</strong> ${esc(s.description||'')}</p>`).join('')||'<p>No snapshots yet.</p>',()=>{$('#manage-dialog').close();applyOperation({operation:'restore',selected:[g]})},'Choose snapshot to restore');
     }
-    else if(a==='use-task')applyOperation({tasks:[{id,params:{}}]});
+    else if(a==='use-task')await openScriptRun([],id);
     else if(a==='use-group')applyOperation({groups:[id]});
     else if(a==='build-recipe')await buildRecipe(mg.recipes.find(r=>r.id===id));
     else if(a==='apply-recipe'){const r=mg.recipes.find(r=>r.id===id);applyOperation({tasks:r.tasks});notice('Use the recipe credential when configuring each VM connection: '+(mg.credentials.find(c=>c.id===r.credential_id)?.name||'choose a guest credential'));}
@@ -150,6 +150,7 @@ $('#manage-close').onclick=()=>$('#manage-dialog').close();
 $('#manage-dialog').addEventListener('close',()=>{$('#manage-fields').replaceChildren();mgSave=null;mgSelectedTasks=[];mgPlan=null});
 $('#manage-form').onsubmit=async e=>{
   e.preventDefault();const button=$('#manage-submit');button.disabled=true;
-  try{await mgSave(mgValues())}catch(err){$('#manage-error').textContent=err.message}finally{button.disabled=false}
+  const save=mgSave;
+  try{await save(mgValues())}catch(err){if(mgSave===save)$('#manage-error').textContent=err.message}finally{if(mgSave===save)button.disabled=false}
 };
 document.addEventListener('click',e=>{if(e.target.closest('[data-view]')&&managementViews.includes(view)){loadManagement().then(()=>render()).catch(err=>notice(err.message))}});

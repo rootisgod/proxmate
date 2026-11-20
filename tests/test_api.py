@@ -1,5 +1,6 @@
 import importlib
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,21 @@ def test_auth_and_csrf(service):
     assert client.post('/api/jobs', json={'action': 'start', 'vmid': 9000, 'node': 'pve'}).status_code == 403
     assert client.post('/api/logout', json={}, headers={'X-CSRF-Token': login.json['csrf']}).status_code == 200
     assert client.get('/api/jobs').status_code == 401
+
+
+def test_editor_styles_have_a_fresh_document_nonce(service):
+    _, client = service
+    nonces = set()
+    for path in ('/', '/', '/static/index.html'):
+        page = client.get(path)
+        assert page.status_code == 200
+        nonce = re.search(r'<link rel="stylesheet"[^>]* nonce="([\w-]+)"', page.text).group(1)
+        assert nonce not in nonces
+        nonces.add(nonce)
+        policy = page.headers['Content-Security-Policy'].split('; ')
+        assert f"style-src 'self' 'nonce-{nonce}'" in policy and "script-src 'self'" in policy
+        assert page.cache_control.no_store
+    assert 'nonce-' not in client.get('/static/style.css').headers['Content-Security-Policy']
 
 
 def test_empty_secrets_fail_closed(service):

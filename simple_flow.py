@@ -107,17 +107,28 @@ class SimpleFlow:
         return options
 
     def existing_plan(self,d):
+        if not isinstance(d,dict): raise ValueError('Supply guest run settings')
         targets=management.targets(d.get('targets'))
-        selections=self.m.task_selection(d.get('tasks'))
+        if 'one_off' in d:
+            draft=d['one_off']
+            if not isinstance(draft,dict) or 'tasks' in d:
+                raise ValueError('Choose library tasks or one pasted script for this run')
+            item=self.m.prepare('tasks',dict(name='One-off script',platform=draft.get('platform'),
+                kind=draft.get('kind'),body=draft.get('body'),parameters=draft.get('parameters',{})))
+            selections=[self.m.select_task(item,draft.get('params',{}))]
+        else:
+            selections=self.m.task_selection(d.get('tasks'))
         bindings={r['id']:r for r in self.m.all('connections')}
         missing=[t for t in targets if management.target_id(t) not in bindings]
+        discovered={}
         if missing:
             if d.get('credential_id'): credential=self.m.get('credentials',d['credential_id'])
             elif isinstance(d.get('credential'),dict):
-                credential=self.m.save('credentials',dict(d['credential'],name='Guest login '+time.strftime('%Y-%m-%d %H:%M')))
-                credential=self.m.get('credentials',credential['id'])
+                fields={k:d['credential'].get(k) for k in ('platform','username','password','private_key','become_password','ca_pem')}
+                credential=self.m.prepare('credentials',dict(fields,name='Guest login '+time.strftime('%Y-%m-%d %H:%M')))
+                discovered['credentials',credential['id']]=credential
             else: raise ValueError('Choose a saved login or enter a username and password for these machines')
-            p=operations.Proxmox();resources=p.resources();new=[]
+            p=operations.Proxmox();resources=p.resources()
             for t in missing:
                 if not any(r.get('node')==t['node'] and r.get('vmid')==t['vmid'] and r.get('type')=='qemu' and not r.get('template') for r in resources): raise ValueError('Choose existing virtual machines')
                 if any(s['item']['platform']!=credential['platform'] for s in selections): raise ValueError('The login and scripts must use the same operating system')
@@ -132,11 +143,11 @@ class SimpleFlow:
                         except RuntimeError:
                             if credential['platform']=='linux': raise
                             # Existing Windows listeners may chain to a system-trusted CA.
-                    new.append(binding)
+                    record=self.m.prepare('connections',binding,credential)
+                    discovered['connections',record['id']]=record
                 except Exception as exc:
-                    raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Machines > Connection once to enter its address and trust settings.') from exc
-            for binding in new: self.m.save('connections',binding)
-        return self.m.create_plan(dict(operation='tasks',targets=targets,tasks=d['tasks']))
+                    raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Operations > Refresh connection to verify its address and login.') from exc
+        return self.m.create_plan(dict(operation='tasks',targets=targets),selections=selections,discovered=discovered)
 
     def plan(self,d,progress=lambda stage:None):
         if not isinstance(d,dict): raise ValueError('Supply wizard settings')
@@ -354,7 +365,7 @@ class SimpleFlow:
             from template_finish import finish
             with diagnostics.stage('generalize_template'):
                 finish(cfg,self.m,log,self.m.get('builds',job_id)['machine_identity'])
-        log('Ready: '+cfg['name']+(' template.' if plan['purpose']=='template' else '. Run more saved scripts from Machines whenever you need them.'))
+        log('Ready: '+cfg['name']+(' template.' if plan['purpose']=='template' else '. Run more scripts from Operations whenever you need them.'))
 
     def assert_owned(self,cfg,job_id):
         from lifecycle import machine_identity

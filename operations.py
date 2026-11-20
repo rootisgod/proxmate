@@ -1,6 +1,7 @@
 """Proxmox operations. All writes execute in the single durable job worker."""
 import base64
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -8,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse, quote
 
@@ -32,6 +34,10 @@ connection_provider = None
 
 def configured_url():
     return connection_provider.read().get('url','') if connection_provider else os.getenv('PROXMOX_URL','')
+
+
+class ManagementTrustError(ValueError):
+    pass
 
 
 class Proxmox:
@@ -89,6 +95,28 @@ class Proxmox:
 
     def resources(self):
         return self.call('GET', 'cluster/resources')
+
+    @contextmanager
+    def verified_reader(self):
+        """Read guest identity material through a verified management channel."""
+        if self.session.verify:
+            yield lambda path, **params: self.call('GET', path, **params)
+            return
+        try:
+            client = self.ssh()
+        except (ValueError, paramiko.SSHException, OSError):
+            raise ManagementTrustError('On the Server page, verify the Proxmox HTTPS connection or check its saved SSH fingerprint and login. Then refresh this VM.') from None
+        with client:
+            def read(path, **params):
+                args = ['pvesh', 'get', '/' + path, '--output-format', 'json']
+                for name, value in params.items():
+                    args.extend(['--' + name, value])
+                _, stdout, _ = client.exec_command(shlex.join(args), timeout=12)
+                data = stdout.read(131073)
+                if len(data) > 131072 or stdout.channel.recv_exit_status() != 0:
+                    raise RuntimeError('Proxmox could not read the guest details.')
+                return json.loads(data)
+            yield read
 
     def ssh(self):
         expected = self.ssh_fingerprint

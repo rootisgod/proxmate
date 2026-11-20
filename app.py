@@ -19,7 +19,7 @@ import windows_artifacts
 import winrm_setup
 from provisioning import answer_recorder
 from lifecycle import BootstrapPending, WaitForGuest
-from flask import Flask, jsonify, request, session, send_from_directory, g
+from flask import Flask, jsonify, request, session, send_from_directory, render_template, g
 from werkzeug.exceptions import HTTPException
 from cryptography.fernet import Fernet
 from operations import ACTIONS, execute, inventory, secret, validate
@@ -47,7 +47,7 @@ def admin_password():
     return password
 
 
-app = Flask(__name__, static_url_path='/static')
+app = Flask(__name__, static_url_path='/static', template_folder='static')
 app.secret_key = persistent_secret('session-key')
 API_TOKEN = persistent_secret('api-token')
 PAYLOAD_CIPHER = Fernet(base64.urlsafe_b64encode(hashlib.sha256(app.secret_key.encode()).digest()))
@@ -113,7 +113,11 @@ def headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'"
+    style_sources = "'self'"
+    if g.get('style_nonce'):
+        style_sources += f" 'nonce-{g.style_nonce}'"
+        response.headers['Cache-Control'] = 'no-store'
+    response.headers['Content-Security-Policy'] = f"default-src 'self'; style-src {style_sources}; script-src 'self'; frame-ancestors 'none'"
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Request-ID'] = diagnostics.trace.get() or ''
@@ -145,7 +149,10 @@ def error(exc):
 
 
 @app.get('/')
-def index(): return send_from_directory('static', 'index.html')
+@app.get('/static/index.html')
+def index():
+    g.style_nonce = secrets.token_urlsafe(24)
+    return render_template('index.html', style_nonce=g.style_nonce)
 
 
 @app.get('/api/health')
@@ -190,7 +197,7 @@ def jobs():
     return jsonify([job_view(r) for r in rows])
 
 
-def job_view(row):
+def job_view(row, detail_db=None):
     result = dict(row)
     if 'has_answer' in result: result['has_answer']=bool(result['has_answer'])
     payload = decode_payload(result.pop('payload'))
@@ -201,6 +208,17 @@ def job_view(row):
         result['operation']=plan.get('operation',payload['action'])
         target=plan.get('config',plan)
         result['target']={k:target[k] for k in ('node','vmid','name','label','archive') if k in target}
+        if detail_db is not None and payload['action']=='manage' and result['status']=='failed':
+            targets = connection_recovery_targets(plan, result['log'])
+            if targets:
+                # Read the server ID and archive boundary in one snapshot for historical jobs.
+                selected = detail_db.execute(
+                    'SELECT value FROM server_connection WHERE id=1 AND NOT EXISTS '
+                    '(SELECT 1 FROM server_archives WHERE created >= ?)', (result['created'],)
+                ).fetchone()
+                config = decode_payload(selected['value']) if selected else {}
+                if config.get('connected'):
+                    result['connection_recovery'] = dict(server_id=config['id'], targets=targets)
     return result
 
 
@@ -209,7 +227,8 @@ def job(job_id):
     with db() as con:
         row = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
         has_answer=bool(con.execute('SELECT 1 FROM windows_answers WHERE job_id=?',(job_id,)).fetchone())
-    return (jsonify(dict(job_view(row),has_answer=has_answer)),200) if row else (jsonify(error='Job not found'),404)
+        if row: return jsonify(dict(job_view(row,con),has_answer=has_answer))
+    return jsonify(error='Job not found'),404
 
 
 @app.get('/api/jobs/<job_id>/console')
@@ -408,7 +427,7 @@ def openapi():
 def docs(): return send_from_directory('static', 'api.html')
 
 
-from management import register
+from management import connection_recovery_targets, register
 manager = register(app, db, encode_payload, decode_payload)
 from lifecycle import register as register_lifecycle
 lifecycle = register_lifecycle(app,manager)
