@@ -145,7 +145,11 @@ test('library shortcut preselects a script, offers its defaults, and sends only 
     assert.equal(form.elements.script.value,'service-test');
     assert.equal(form.elements.credential_id,undefined);assert.equal(form.elements.packages,undefined);
     const input=form.querySelector('[data-run-param=service]');
-    assert.equal(input.value,'Spooler');input.value='W32Time';
+    assert.equal(input.value,'Spooler');input.value='Bad name';
+    assert.equal(input.validity.patternMismatch,true);
+    form.requestSubmit();await f.settle();
+    assert.equal(f.calls.some(([url])=>url==='/api/simple/existing-plan'),false);
+    input.value='W32Time';
     form.requestSubmit();await f.settle();
     assert.deepEqual(f.calls.find(([url])=>url==='/api/simple/existing-plan')[1],
       {targets:[{node:'pve',vmid:201}],tasks:[{id:'service-test',params:{service:'W32Time'}}]});
@@ -627,8 +631,13 @@ test('Windows template review preserves the name, clone mode, disks and software
     form.elements.disk_size_0.value='80';form.elements.disk_label_0.value='Data';form.elements.disk_letter_0.value='F';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     form.elements.manual_updates.checked=true;
-    assert.equal(form.querySelector('[data-script-param]').value,'Lab');
-    form.querySelector('[name=saved_script]').checked=true;
+    const parameter=form.querySelector('[data-script-param]'),selectScript=form.querySelector('[name=saved_script]');
+    assert.equal(parameter.value,'Lab');assert.ok(parameter.disabled);
+    selectScript.click();assert.ok(!parameter.disabled);
+    parameter.value='two words';assert.ok(!parameter.checkValidity());
+    assert.ok(!parameter.closest('.software-pane').hidden);
+    selectScript.click();assert.ok(parameter.disabled && parameter.checkValidity());
+    selectScript.click();parameter.value='Lab';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const payload=f.calls.find(([u])=>u==='/api/simple/plan')[1];
     assert.equal(payload.source_kind,'template');assert.equal(Number(payload.template_id),9000);
@@ -979,6 +988,52 @@ test('software categories keep choices and bulk controls respect edition and sco
     assert.equal(form.querySelector('[data-section=apps] .section-count').textContent,'1');
     await next();const plan=f.calls.find(([u])=>u==='/api/simple/plan')[1];
     assert.deepEqual(plan.windows_settings,['disable-firewall']);assert.ok(plan.manual_updates);assert.equal(plan.tasks.at(-1).params.package,'git');
+  }finally{f.close()}
+});
+
+test('Ansible input rows preserve existing settings and validate additions before saving',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    const example={id:'example-folder',name:'Folder',platform:'windows',kind:'ansible',example:true,
+      body:"- ansible.windows.win_file:\n    path: 'C:/{{ proxmate_inputs.name }}'\n    state: directory",
+      parameters:{name:'Folder name'},defaults:{name:'LabTools'}};
+    f.records.tasks.push(example);
+    const original=w.fetch;let saved;
+    w.fetch=async(url,opts)=>{
+      if(url==='/api/manage/tasks/check')return {ok:true,json:async()=>({valid:true})};
+      if(url==='/api/manage/tasks'&&opts?.body)saved=JSON.parse(opts.body);
+      return original(url,opts);
+    };
+    doc.querySelector('[data-view=scripts]').click();await f.settle();
+    doc.querySelector('[data-record=example-folder][data-mg=edit-tasks]').click();
+    const form=doc.querySelector('#manage-form'),grid=form.querySelector('.script-inputs');
+    const rows=grid.querySelector('[data-input-rows]'),add=grid.querySelector('[data-add-input]');
+    const field=(row,part)=>row.querySelector('[data-field='+part+']');
+    const set=(input,value)=>{input.value=value;input.dispatchEvent(new w.Event('input',{bubbles:true}))};
+    assert.deepEqual([...rows.firstElementChild.querySelectorAll('input')].map(i=>i.value),['name','Folder name','LabTools']);
+    add.click();
+    const second=rows.lastElementChild,key=field(second,'key'),label=field(second,'label'),value=field(second,'value');
+    assert.equal(doc.activeElement,key);
+    for(const bad of ['Bad','folder name','a-b','9name']){
+      set(key,bad);assert.ok(key.validity.patternMismatch);assert.ok(key.nextElementSibling.textContent);
+    }
+    set(key,'name');assert.match(key.validationMessage,/unique/);
+    set(label,'   ');assert.ok(label.validity.customError);
+    set(label,'Second folder | optional');set(value,'two words');assert.ok(value.validity.patternMismatch);
+    form.requestSubmit();await f.settle();assert.equal(saved,undefined);
+    form.elements.kind.value='powershell';form.elements.kind.dispatchEvent(new w.Event('change'));
+    assert.ok(grid.hidden && grid.disabled && form.checkValidity());
+    form.elements.kind.value='ansible';form.elements.kind.dispatchEvent(new w.Event('change'));
+    set(key,'second_name2');set(value,'A_2.3+tag@lab:1-ok');assert.ok(value.checkValidity());
+    set(value,'');assert.ok(form.checkValidity());
+    for(let i=rows.children.length;i<20;i++)add.click();
+    assert.ok(add.disabled);
+    while(rows.children.length>2)rows.lastElementChild.querySelector('[data-remove-input]').click();
+    assert.ok(!add.disabled);
+    form.requestSubmit();await f.settle();
+    assert.deepEqual(saved.parameters,{name:'Folder name',second_name2:'Second folder | optional'});
+    assert.deepEqual(saved.defaults,{name:'LabTools'});
+    assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
 

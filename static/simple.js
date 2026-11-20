@@ -241,7 +241,7 @@ function softwareFields(d){
     const selected=(d.scripts||[]).includes(t.id);
     return '<div class="software-script"><label class="check"><input type="checkbox" name="saved_script" value="'+esc(t.id)+'" '+(selected?'checked':'')+'>'+esc(t.name)+'</label>'+
       '<div class="script-parameters" '+(selected?'':'hidden')+'>'+Object.entries(t.parameters||{}).map(([key,label])=>
-      '<label>'+esc(label)+'<input data-script-param="'+esc(t.id+':'+key)+'" value="'+esc(d.script_params?.[t.id+':'+key]??t.defaults?.[key]??'')+'"></label>').join('')+
+      '<label>'+esc(label)+'<input required '+scriptValueAttrs+(selected?'':' disabled')+' data-script-param="'+esc(t.id+':'+key)+'" value="'+esc(d.script_params?.[t.id+':'+key]??scriptInputValue(t.defaults,key)??'')+'"></label>').join('')+
       '</div><details><summary>View source</summary><pre>'+esc(t.body)+'</pre></details></div>';
   }).join('')+(saved.length?'':'<p>Add scripts in the Script library to use them here.</p>')]);
   const preferred=d.software_section||(d.scripts?.length?'scripts':'');
@@ -288,9 +288,17 @@ function bindSoftware(root,d){
   picker.oninput=counts;
   picker.onchange=e=>{
     if(e.target.name==='chocolatey')picker.querySelector('[name=packages]').disabled=!e.target.checked;
-    if(e.target.name==='saved_script')e.target.closest('.software-script').querySelector('.script-parameters').hidden=!e.target.checked;
+    if(e.target.name==='saved_script'){
+      const params=e.target.closest('.software-script').querySelector('.script-parameters');
+      params.hidden=!e.target.checked;
+      for(const input of params.querySelectorAll('input'))input.disabled=params.hidden;
+    }
     counts();
   };
+  picker.addEventListener('invalid',e=>{
+    if(e.target.hasAttribute('data-script-param') && e.target.closest('.software-pane').hidden)
+      picker.querySelector('[data-section=scripts]').click();
+  },true);
   counts();
 }
 
@@ -305,7 +313,7 @@ function selectedSoftware(d){
   if(windows&&(d.chocolatey||packages.length))tasks.push({id:'install-chocolatey',params:{}});
   packages.forEach(p=>tasks.push({id:windows?'chocolatey-package':'linux-package',params:{package:p}}));
   if(windows)(d.features||[]).filter(f=>f!=='NET-Framework-Core').forEach(f=>tasks.push({id:'windows-feature',params:{feature:f}}));
-  (d.scripts||[]).forEach(id=>{const t=mg.tasks.find(t=>t.id===id);tasks.push({id,params:Object.fromEntries(Object.keys(t.parameters||{}).map(k=>[k,d.script_params?.[id+':'+k]??t.defaults?.[k]??'']))})});
+  (d.scripts||[]).forEach(id=>{const t=mg.tasks.find(t=>t.id===id);tasks.push({id,params:Object.fromEntries(Object.keys(t.parameters||{}).map(k=>[k,d.script_params?.[id+':'+k]??scriptInputValue(t.defaults,k)??'']))})});
   return tasks;
 }
 

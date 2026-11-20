@@ -156,7 +156,7 @@ function scriptRunForm(context,draft) {
   function renderParams(parameters,values) {
     const entries=Object.entries(parameters);
     $('#run-params').innerHTML=entries.length?'<fieldset><legend>Parameters</legend><div class="form-grid">'+entries.map(([key,label])=>
-      '<label>'+esc(label)+'<input required data-run-param="'+esc(key)+'" value="'+esc(values[key]??'')+'"></label>').join('')+'</div></fieldset>':'';
+      '<label>'+esc(label)+'<input required '+scriptValueAttrs+' data-run-param="'+esc(key)+'" value="'+esc(scriptInputValue(values,key)??'')+'"></label>').join('')+'</div></fieldset>':'';
   }
   function scriptFields(){
     const holder=$('#run-script'), library=draft.mode==='library';

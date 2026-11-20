@@ -18,23 +18,80 @@ function scriptLibrary() {
     (examples.length?'<h2>Starter scripts</h2><p>Open an example to read it or save your own copy.</p>'+cards(examples):'');
 }
 
-function scriptInputs(text) {
-  const parameters = Object.create(null), defaults = Object.create(null);
-  for (const line of text.split('\n').filter(v => v.trim())) {
-    const parts = line.split('|').map(v => v.trim()), [key,label,value] = parts;
-    if (!key || !label || parts.length > 3 || Object.hasOwn(parameters,key))
-      throw Error('Give each input a unique name, label and optional default.');
-    parameters[key] = label;
-    if (value) defaults[key] = value;
+// Match the plain values accepted by guest_tasks.compile_task, including at review time.
+const scriptValueAttrs = String.raw`maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9_.+@:\-]{0,127}" title="Start with a letter or digit. The remaining characters can be letters, digits or _ . + @ : - (no spaces)."`;
+
+function scriptInputValue(values,key) {
+  return values && Object.hasOwn(values,key) ? values[key] : undefined;
+}
+
+function bindScriptInputs(grid,record,edited) {
+  const rows=grid.querySelector('[data-input-rows]'), add=grid.querySelector('[data-add-input]');
+  let nextId=0;
+  function addRow(key='',label='',value='') {
+    const id='script-input-'+nextId++;
+    function field(part,caption,initial,attrs) {
+      const inputId=id+'-'+part;
+      return '<div><label for="'+inputId+'">'+caption+'</label><input id="'+inputId+'" data-field="'+part+'" '+
+        attrs+' value="'+esc(initial)+'" aria-describedby="'+inputId+'-error">'+
+        '<small id="'+inputId+'-error" class="input-error" aria-live="polite"></small></div>';
+    }
+    rows.insertAdjacentHTML('beforeend','<div class="script-input-row">'+
+      field('key','Variable name',key,'required maxlength="40" pattern="[a-z][a-z0-9_]{0,39}" title="Start with a lowercase letter. Use lowercase letters, digits or underscores."')+
+      field('label','Display label',label,'required maxlength="100"')+
+      field('value','Default (optional)',value,scriptValueAttrs)+
+      '<button type="button" data-remove-input>Remove</button></div>');
+    add.disabled=rows.children.length>=20;
   }
-  return {parameters, defaults};
+  function validate() {
+    const keys=[...rows.querySelectorAll('[data-field=key]')];
+    for(const key of keys){
+      const duplicate=key.value && keys.some(other=>other!==key && other.value===key.value);
+      key.setCustomValidity(duplicate?'Each variable needs a unique name.':'');
+    }
+    for(const input of rows.querySelectorAll('input')){
+      if(input.dataset.field==='label')
+        input.setCustomValidity(input.value && !input.value.trim()?'Enter a display label.':'');
+      const invalid=input.dataset.touched && !input.validity.valid;
+      input.setAttribute('aria-invalid',String(Boolean(invalid)));
+      const error=invalid?(input.validity.patternMismatch?input.title:input.validationMessage):'';
+      if(input.nextElementSibling.textContent!==error)input.nextElementSibling.textContent=error;
+    }
+  }
+  for(const [key,label] of Object.entries(record.parameters||{}))addRow(key,label,scriptInputValue(record.defaults,key));
+  add.onclick=()=>{
+    addRow();
+    rows.lastElementChild.querySelector('input').focus();
+    edited();
+  };
+  rows.onclick=e=>{
+    if(!e.target.closest('[data-remove-input]'))return;
+    const row=e.target.closest('.script-input-row'), next=row.nextElementSibling||row.previousElementSibling;
+    row.remove();add.disabled=false;validate();edited();
+    (next?.querySelector('[data-field=key]')||add).focus();
+  };
+  function showError(e) {
+    e.target.dataset.touched='true';
+    validate();
+  }
+  rows.addEventListener('input',showError);
+  rows.addEventListener('invalid',showError,true);
+  return () => {
+    validate();
+    const parameters=Object.create(null), defaults=Object.create(null);
+    if(!grid.disabled)for(const row of rows.children){
+      const key=row.querySelector('[data-field=key]').value;
+      parameters[key]=row.querySelector('[data-field=label]').value.trim();
+      const value=row.querySelector('[data-field=value]').value;
+      if(value)defaults[key]=value;
+    }
+    return {parameters,defaults};
+  };
 }
 
 function editScript(record={}) {
   const copy = Boolean(record.example);
   const heading = copy?'Edit a starter copy':record.id?'Edit script':'New script';
-  const inputs = Object.entries(record.parameters||{}).map(([key,label])=>
-    [key,label,record.defaults?.[key]||''].join(' | ')).join('\n');
   mgDialog(heading,'<div class="script-settings">'+wf('name','Script name',record.name||'','text','required maxlength="100"')+
     ws('platform','Guest OS',[['windows','Windows'],['linux','Linux']],record.platform||'windows')+
     ws('kind','Language',Object.entries(scriptFormats),record.kind||'ansible')+'</div>'+
@@ -43,12 +100,12 @@ function editScript(record={}) {
     '<div data-code-host></div><textarea name="body" aria-label="Script source" spellcheck="false" rows="12">'+esc(record.body||'')+'</textarea>'+
     '<div class="code-status"><span data-check-result role="status"></span><span data-cursor>Ln 1, Col 1</span></div></div>'+
     '<p class="script-runtime" hidden>PowerShell on Linux requires pwsh on the guest.</p>'+
-    '<details class="script-inputs"><summary>Ansible inputs</summary>'+
-      mgArea('inputs','One name | label | optional default per line',inputs,'rows="2"')+
-      '<small>Use {{ proxmate_inputs.name }} inside a module argument.</small></details>',
+    '<fieldset class="script-inputs"><legend>Ansible inputs</legend>'+
+      '<div data-input-rows></div><div class="script-input-actions"><button type="button" data-add-input>Add input</button>'+
+      '<small>Use <code>{{ proxmate_inputs.name }}</code> in a module argument.</small></div></fieldset>',
     async values => {
-      if (!await check()) return;
-      const schema = scriptInputs(values.kind==='ansible'?values.inputs:'');
+      const schema=readInputs();
+      if (!form.reportValidity() || !await check()) return;
       await saveRecord('tasks', {id:copy?undefined:record.id, name:values.name,
         platform:values.platform, kind:values.kind, body:values.body, ...schema});
     }, copy?'Save copy':'Save script');
@@ -56,6 +113,8 @@ function editScript(record={}) {
   const form = $('#manage-form'), dialog = $('#manage-dialog'), {body,platform,kind} = form.elements;
   const host = form.querySelector('[data-code-host]'), status = form.querySelector('[data-check-result]');
   const checkButton = form.querySelector('[data-check]'), find = form.querySelector('[data-find]');
+  const grid=form.querySelector('.script-inputs');
+  const readInputs=bindScriptInputs(grid,record,edited);
   let editor, version=0, request=0;
   const active = () => dialog.open && host.isConnected;
   function edited() {
@@ -67,7 +126,7 @@ function editScript(record={}) {
     const shell = kind.querySelector('[value=shell]');
     if (platform.value==='windows' && kind.value==='shell') kind.value='powershell';
     shell.disabled = platform.value==='windows';
-    form.querySelector('.script-inputs').hidden = kind.value!=='ansible';
+    grid.hidden=grid.disabled=kind.value!=='ansible';
     form.querySelector('.script-runtime').hidden = !(platform.value==='linux' && kind.value==='powershell');
     editor?.language(kind.value);
   }

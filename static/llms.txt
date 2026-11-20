@@ -63,6 +63,10 @@ Poll each returned job URL with a short delay, backing off during Windows setup.
 
 GET /api/manage/tasks for each library script's ID, platform, parameters and defaults. POST /api/simple/existing-plan with the pinned server header, the exact targets, and either library tasks or one pasted script. For example, a Linux service run uses `{"targets":[{"node":"<node>","vmid":201}],"tasks":[{"id":"linux-service","params":{"service":"cron","state":"started"}}]}`. Replace the target and service with the requested values.
 
+The Windows starter `example-win-folder` creates `C:\LabTools` by default. Use `{"id":"example-win-folder","params":{"name":"Utilities"}}` in the `tasks` list of a build or script run to create `C:\Utilities`. The review shows the resolved `name` input.
+
+Ansible scripts can declare up to 20 inputs. Each variable name starts with a lowercase ASCII letter and can contain up to 40 lowercase letters, digits and underscores in total. Display labels can include spaces. Defaults and run values start with an ASCII letter or digit and may also contain `_ . + @ : -` in the remaining characters, up to 128 characters total.
+
 For a pasted script, supply `one_off` with `platform`, `kind` and `body` in place of `tasks`. Supported kinds are ansible (guest task list), powershell, and shell (Linux). Ansible accepts a `parameters` object mapping input names to labels and a `params` object containing their values. Module arguments can use `{{ proxmate_inputs.name }}`. The review checks syntax and freezes the source without adding it to the library.
 
 Use each machine's saved connection. Only targets missing a connection need `credential_id` or a new guest credential injected by the HTTP tool. A successful review saves first-time connections. Report the reviewed target names, credential names, and inputs. Submit the authorized plan to POST /api/manage/run with its `plan_id`, `confirmed` and any required `risk_confirmed`, then poll the returned job URL.

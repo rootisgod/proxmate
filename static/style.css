@@ -239,14 +239,27 @@ nav :focus-visible { outline-offset: -3px; }
 .script-workbench .cm-scroller { overflow:auto }
 .script-workbench .cm-search label { display:inline;margin:0;font-weight:normal }
 .script-workbench .cm-search input,.script-workbench .cm-search button { display:inline-block;width:auto;margin:2px;padding:2px 4px }
-.script-inputs { padding:9px 0 }
-.script-inputs summary { cursor:pointer }
+.script-inputs { min-width:0;margin:16px 0 0;padding:10px 12px 12px;border:1px solid var(--line);border-radius:8px }
+.script-inputs legend { padding:0 5px;font-weight:650 }
+.script-input-row { display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:10px;align-items:start;padding:6px 0 }
+.script-input-row label { margin:0 0 4px;line-height:1.25rem }
+.script-input-row input,.script-input-row button { height:36px;margin:0;padding:6px 9px }
+.script-input-row button { margin-top:calc(1.25rem + 4px) }
+.script-input-row input[aria-invalid=true] { border-color:#a02929 }
+.script-input-row .input-error { display:block;margin-top:3px;color:#a02929 }
+.script-input-row .input-error:empty { display:none }
+.script-input-actions { display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px }
+.script-input-actions small { color:var(--muted) }
+.script-input-actions button { padding:6px 10px }
 @media(max-width:650px) {
   .software-sections { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) }
   .software-sections button { padding:5px 3px }
   .choice-grid,.script-parameters { grid-template-columns:1fr }
   .script-settings { grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px }
   .script-settings label:first-child { grid-column:1/-1 }
+  .script-input-row { grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px 0;border-bottom:1px solid var(--line) }
+  .script-input-row button { justify-self:end }
+  .script-input-actions { margin-top:8px }
   #manage-dialog:has(.script-workbench) { padding:12px;width:97vw }
 }
 

@@ -15,15 +15,19 @@ class ScriptDiagnostic(ValueError):
         super().__init__(f'Line {line}, column {column}: {message}')
 
 
-def example(ident, name, os_name, kind, description, body):
+def example(ident, name, os_name, kind, description, body, *, parameters=None, defaults=None):
     return dict(id='example-' + ident, name=name, platform=os_name, kind=kind, example=True,
-                dangerous=True, parameters={}, description=description, body=body)
+                dangerous=True, parameters=parameters or {}, defaults=defaults or {}, description=description, body=body)
 
 
 EXAMPLES = [
     example('win-folder', 'Create a tools folder', 'windows', 'ansible',
-            'Create C:\\LabTools if it is missing.',
-            "- name: Create a tools folder\n  ansible.windows.win_file:\n    path: C:\\LabTools\n    state: directory\n"),
+            'Create a folder on C: if it is missing. The default is C:\\LabTools.',
+            "- name: Create a tools folder\n"
+            "  ansible.windows.win_file:\n"
+            "    path: 'C:\\{{ proxmate_inputs.name }}'\n"
+            "    state: directory\n",
+            parameters={'name': 'Folder name'}, defaults={'name': 'LabTools'}),
     example('win-report', 'Write a Windows version report', 'windows', 'powershell',
             'Save the computer name and Windows build under ProgramData.',
             "$os = Get-CimInstance Win32_OperatingSystem\n"

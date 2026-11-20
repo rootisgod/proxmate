@@ -69,7 +69,7 @@ function taskPicker(values=[]){
 }
 function drawTasks(){
   const el=$('#task-sequence');if(!el)return;
-  el.innerHTML=mgSelectedTasks.map((s,i)=>{const t=mg.tasks.find(t=>t.id===s.id);return `<div class="sequence-item"><strong>${i+1}. ${esc(t?.name||'Missing task')}</strong><div class="row-actions">${mgButton('Move up','up-task',i)}${mgButton('Remove','remove-task',i)}</div>${Object.entries(t?.parameters||{}).map(([k,label])=>`<label>${esc(label)}<input data-task-index="${i}" data-param="${esc(k)}" value="${esc(s.params[k]??t.defaults?.[k]??'')}" required></label>`).join('')}${t?.body?`<details><summary>Review script</summary><pre>${esc(t.body)}</pre></details>`:''}</div>`}).join('')||'<p>No tasks selected yet.</p>';
+  el.innerHTML=mgSelectedTasks.map((s,i)=>{const t=mg.tasks.find(t=>t.id===s.id);return `<div class="sequence-item"><strong>${i+1}. ${esc(t?.name||'Missing task')}</strong><div class="row-actions">${mgButton('Move up','up-task',i)}${mgButton('Remove','remove-task',i)}</div>${Object.entries(t?.parameters||{}).map(([k,label])=>`<label>${esc(label)}<input ${scriptValueAttrs} data-task-index="${i}" data-param="${esc(k)}" value="${esc(scriptInputValue(s.params,k)??scriptInputValue(t.defaults,k)??'')}" required></label>`).join('')}${t?.body?`<details><summary>Review script</summary><pre>${esc(t.body)}</pre></details>`:''}</div>`}).join('')||'<p>No tasks selected yet.</p>';
 }
 function collectTasks(){document.querySelectorAll('[data-task-index]').forEach(i=>{mgSelectedTasks[Number(i.dataset.taskIndex)].params[i.dataset.param]=i.value});return structuredClone(mgSelectedTasks);}
 function editRecipe(record){

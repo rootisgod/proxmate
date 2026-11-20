@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from jinja2 import Template
 
 from test_api import service
 import management
@@ -376,7 +377,15 @@ def test_starters_can_be_checked_copied_and_compiled_on_each_guest(lab,tmp_path)
         assert copy['id']!=ident and not copy.get('example')
         selected=app.manager.task_selection([{'id':copy['id']}])[0]
         assert selected['item']['dangerous']
-        compiled=guest_tasks.compile_task(selected['item'],{})
+        compiled=guest_tasks.compile_task(selected['item'],selected['params'])
+        if ident=='example-win-folder':
+            assert task['parameters']=={'name':'Folder name'} and selected['params']=={'name':'LabTools'}
+            override=app.manager.task_selection([{'id':ident,'params':{'name':'Utilities'}}])[0]
+            custom=guest_tasks.compile_task(override['item'],override['params'])
+            for steps,expected in [(compiled,r'C:\LabTools'),(custom,r'C:\Utilities')]:
+                args=steps[0]['ansible.windows.win_file']
+                assert args['state']=='directory'
+                assert Template(args['path']).render(steps[0]['vars'])==expected
         if task['platform']=='linux' and task['kind']=='powershell':
             command=compiled[0]['ansible.builtin.command']
             assert command['argv'][0]=='pwsh' and command['stdin']==task['body']
