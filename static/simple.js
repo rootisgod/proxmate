@@ -159,6 +159,7 @@ function collectSimple(){
   form.querySelectorAll('input[type=checkbox][name]').forEach(i=>{if(!['feature','saved_script','common_program','windows_setting'].includes(i.name))simpleDraft[i.name]=i.checked});
   if(simpleStep===0&&simpleDraft.os==='windows')collectDataDisks(simpleDraft,form);
   if(simpleStep===1){
+    simpleDraft.packages=form.elements.packages.value;
     simpleDraft.common_programs=[...form.querySelectorAll('[name=common_program]:checked:not(:disabled)')].map(i=>i.value);
     simpleDraft.windows_settings=[...form.querySelectorAll('[name=windows_setting]:checked:not(:disabled)')].map(i=>i.value);
     for(const key of ['common_program','windows_setting'])delete simpleDraft[key];
@@ -204,10 +205,13 @@ async function loadEditions(){
   }
 }
 
+function bulkChoiceButtons(label){
+  return '<div class="choice-actions"><button type="button" data-select-group="all" aria-label="Select all '+esc(label)+'">Select all</button>'+
+    '<button type="button" data-select-group="none" aria-label="Clear '+esc(label)+'">Clear</button></div>';
+}
+
 function bulkChoices(label, options) {
-  return '<div class="bulk-choices"><div class="choices-head"><h3>'+esc(label)+'</h3>'+
-    '<div><button type="button" data-select-group="all" aria-label="Select all '+esc(label)+'">Select all</button>'+
-    '<button type="button" data-select-group="none" aria-label="Clear '+esc(label)+'">Clear</button></div></div>'+
+  return '<div class="bulk-choices"><div class="choices-head"><h3>'+esc(label)+'</h3>'+bulkChoiceButtons(label)+'</div>'+
     '<div class="choice-grid">'+options+'</div></div>';
 }
 
@@ -219,8 +223,9 @@ function softwareFields(d){
   if(fresh.settings) sections.push(['settings','Customisations',fresh.settings]);
   sections.push(['apps','Packages',(fresh.apps||'')+
     '<div class="package-entry">'+(windows?wc('chocolatey','Set up Chocolatey',d.chocolatey):'')+
-    '<label>Packages to install<textarea rows="2" name="packages" placeholder="'+(windows?'7zip, git':'curl, git')+'">'+esc(d.packages||'')+
-    '</textarea><small>Separate names with commas or spaces.'+(windows?' Selecting a package includes Chocolatey.':'')+'</small></label></div>']);
+    '<label>Packages to install<textarea rows="2" name="packages" '+(windows&&!d.chocolatey?'disabled ':'')+'placeholder="'+(windows?'7zip, git':'curl, git')+'">'+esc(d.packages||'')+
+    '</textarea></label><div class="package-help"><small>Separate package IDs with commas or spaces.</small>'+
+    (windows?'<a href="https://community.chocolatey.org/packages" target="_blank" rel="noopener noreferrer">Browse Chocolatey packages</a>':'')+'</div></div>']);
   if(windows) sections.push(['features','Server features','<h3>Windows Server features</h3><div class="choice-grid">'+simpleOptions.features.map(f=>
     '<label class="check"><input type="checkbox" name="feature" value="'+esc(f.id)+'" '+((d.features||[]).includes(f.id)?'checked':'')+'>'+esc(f.name)+'</label>').join('')+
     '</div><p class="subtle">Windows may restart to finish installing a feature.</p>']);
@@ -249,7 +254,7 @@ function bindSoftware(root,d){
       const pane=paneFor(button);
       let count=pane.querySelectorAll('input[type=checkbox]:checked:not(:disabled)').length;
       const packages=pane.querySelector('[name=packages]');
-      if(packages){
+      if(packages&&!packages.disabled){
         const names=[...pane.querySelectorAll('[name=common_program]:checked')].map(i=>i.value);
         const entered=packages.value.trim().split(/[\s,]+/).filter(Boolean);
         const unique=new Set([...names,...entered].map(p=>d.os==='windows'?p.toLowerCase():p));
@@ -274,14 +279,19 @@ function bindSoftware(root,d){
   };
   picker.oninput=counts;
   picker.onchange=e=>{
+    if(e.target.name==='chocolatey')picker.querySelector('[name=packages]').disabled=!e.target.checked;
     if(e.target.name==='saved_script')e.target.closest('.software-script').querySelector('.script-parameters').hidden=!e.target.checked;
     counts();
   };
   counts();
 }
 
+function enabledPackageText(d){
+  return d.os==='windows'&&!d.chocolatey?'':d.packages||'';
+}
+
 function selectedSoftware(d){
-  const tasks=[];const windows=d.os==='windows';const entered=(d.packages||'').split(/[\s,]+/).filter(Boolean);
+  const tasks=[];const windows=d.os==='windows';const entered=enabledPackageText(d).split(/[\s,]+/).filter(Boolean);
   const packages=windows?[...new Set([...(d.common_programs||[]),...entered].map(p=>p.toLowerCase()))]:entered;
   if(windows&&d.features?.includes('NET-Framework-Core'))tasks.push({id:'windows-feature',params:{feature:'NET-Framework-Core'}});
   if(windows&&(d.chocolatey||packages.length))tasks.push({id:'install-chocolatey',params:{}});
@@ -527,7 +537,7 @@ function reviewProgress(message){
 }
 async function reviewBuild(draft){
   reviewProgress('Checking storage and build settings…');
-  const settings={...draft,memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
+  const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
   const ticket=await api('simple/plan',settings,{Prefer:'respond-async'});
   if(!ticket.review_id)return ticket;
   const stages={inventory:'Checking available storage and machine IDs…',editions:'Checking the selected Windows edition…',drivers:'Checking guest drivers and installer integrity…'};

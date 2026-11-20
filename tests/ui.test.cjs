@@ -10,7 +10,8 @@ test('existing VMs use the same software choices with an inline saved login',asy
     const form=w.document.querySelector('#manage-form');
     form.querySelector('[name=target]').checked=true;
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
-    form.elements.packages.value='7zip';
+    assert.ok(form.elements.packages.disabled);form.elements.chocolatey.click();
+    assert.equal(form.elements.packages.disabled,false);form.elements.packages.value='7zip';
     form.elements.guest_username.value='Administrator';form.elements.guest_password.value='Test-Login#123';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const payload=f.calls.find(c=>c[0]==='/api/simple/existing-plan')[1];
@@ -137,7 +138,7 @@ test('one simple wizard selects a named Windows edition, three machines and soft
     assert.equal(form.elements.image_index,undefined);
     form.elements.count.value='3';form.elements.name.value='lab';form.elements.password.value='Password-Test#123';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
-    form.elements.packages.value='7zip, git';form.querySelector('[name=feature]').checked=true;
+    form.elements.chocolatey.click();form.elements.packages.value='7zip, git';form.querySelector('[name=feature]').checked=true;
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const plan=f.calls.find(c=>c[0]==='/api/simple/plan')[1];
     assert.equal(plan.count,'3');assert.equal(plan.edition,'7');
@@ -426,6 +427,25 @@ test('machine page keeps the selected VM through discovery, login and return to 
   }finally{f.close()}
 });
 
+test('refresh network details selects the current IPv4 when the saved address has changed',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document,original=w.fetch;
+  let address='192.0.2.92';
+  try{
+    w.fetch=async(url,opts)=>{
+      if(url==='/api/simple/machine')return {ok:true,json:async()=>({node:'pve',vmid:201,name:'Windows',identity:'vm',platform:'windows',status:'running',
+        addresses:[{host:address},{host:'fd00::1'}],jobs:[],logins:[],connection:{host:'192.0.2.92',platform:'windows',port:5986}})};
+      if(url==='/api/simple/machine/backup')return {ok:true,json:async()=>({latest:null})};
+      return original(url,opts);
+    };
+    doc.querySelector('.machine-link').click();await f.settle();
+    address='192.0.2.60';doc.querySelector('#refresh-machine-network').click();await f.settle();
+    doc.querySelector('#machine-connect').click();
+    const select=doc.querySelector('#manage-form').elements.host;
+    assert.equal(select.value,address);assert.deepEqual([...select.options].map(o=>o.value),[address,'fd00::1']);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('a late machine detail response cannot reopen a closed machine page',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
@@ -690,7 +710,7 @@ test('software review reconnects to its ticket and preserves the draft after a f
     const form=w.document.querySelector('#simple-form');
     form.elements.password.value='Test-Login#123456';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
-    form.elements.packages.value='7zip';
+    form.elements.chocolatey.click();form.elements.packages.value='7zip';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     assert.match(w.document.querySelector('#simple-progress').textContent,/Reconnecting/);
     assert.ok(w.document.querySelector('#simple-next').disabled);
@@ -721,7 +741,7 @@ test('fresh Windows choices survive Back and submit distinct apps and compatible
     await next();
     assert.equal(form.querySelectorAll('[name=windows_setting]:checked,[name=common_program]:checked').length,0);
     form.querySelector('[value=explorer]').checked=true;form.querySelector('[value="7zip"]').checked=true;
-    form.elements.packages.value='7ZIP, git';form.elements.rdp.checked=true;
+    form.elements.chocolatey.click();form.elements.packages.value='7ZIP, git';form.elements.rdp.checked=true;
     w.document.querySelector('#simple-back').click();await f.settle();
     await next();
     assert.ok(form.querySelector('[value=explorer]').checked && form.querySelector('[value="7zip"]').checked && form.elements.rdp.checked);
@@ -736,6 +756,32 @@ test('fresh Windows choices survive Back and submit distinct apps and compatible
   }finally{f.close()}
 });
 
+
+test('Chocolatey gates custom package entry and excludes disabled IDs from review',async()=>{
+  const f=await fixture({},true),{w}=f;
+  try{
+    w.document.querySelector('[data-simple="windows"]').click();await f.settle();
+    const form=w.document.querySelector('#simple-form'),fields=form.elements;
+    const next=async()=>{form.querySelector('#simple-next').click();await f.settle()};
+    fields.password.value='Example-Windows#123';
+    await next();form.querySelector('[data-section=apps]').click();
+    const badge=()=>form.querySelector('[data-section=apps] .section-count');
+    assert.ok(fields.packages.disabled);
+    const catalog=form.querySelector('.package-help a');
+    assert.equal(catalog.href,'https://community.chocolatey.org/packages');assert.equal(catalog.target,'_blank');
+    fields.chocolatey.click();assert.equal(fields.packages.disabled,false);
+    fields.packages.value='7zip';fields.packages.dispatchEvent(new w.Event('input',{bubbles:true}));
+    assert.equal(badge().textContent,'2');
+    fields.chocolatey.click();assert.ok(fields.packages.disabled);assert.ok(badge().hidden);
+    form.querySelector('#simple-back').click();await next();
+    assert.ok(fields.packages.disabled);assert.equal(fields.packages.value,'7zip');
+    fields.chocolatey.click();assert.equal(fields.packages.value,'7zip');
+    fields.chocolatey.click();await next();
+    const plan=f.calls.find(([url])=>url==='/api/simple/plan')[1];
+    assert.equal(plan.packages,'');assert.deepEqual(plan.tasks,[]);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
 
 test('software categories keep choices and bulk controls respect edition and scope',async()=>{
   const f=await fixture({},true),{w}=f;
@@ -759,6 +805,13 @@ test('software categories keep choices and bulk controls respect edition and sco
     assert.ok(form.querySelector('[value=explorer]').disabled);
     assert.equal(form.querySelector('[value=disable-firewall]').checked,false);
     assert.equal(form.elements.manual_updates.checked,false);
+    form.querySelector('.software-sensitive summary').click();
+    click('.software-sensitive [data-select-group=all]');
+    assert.ok(form.elements.manual_updates.checked && form.querySelector('[value=disable-firewall]').checked);
+    click('.software-sensitive [data-select-group=none]');
+    assert.equal(form.elements.manual_updates.checked,false);assert.equal(form.querySelector('[value=disable-firewall]').checked,false);
+    assert.ok(form.elements.rdp.checked && form.querySelector('[value=openssh]').checked);
+    click('.software-sensitive [data-select-group=all]');
     click('[data-section=apps]');assert.ok(form.querySelector('#software-settings').hidden);
     click('#software-apps [data-select-group=all]');
     assert.ok(form.querySelector('[value=git]').checked);
@@ -767,7 +820,7 @@ test('software categories keep choices and bulk controls respect edition and sco
     assert.equal(form.querySelector('[value=openssh]').checked,false);
     assert.equal(form.querySelector('[data-section=apps] .section-count').textContent,'1');
     await next();const plan=f.calls.find(([u])=>u==='/api/simple/plan')[1];
-    assert.deepEqual(plan.windows_settings,[]);assert.equal(plan.tasks.at(-1).params.package,'git');
+    assert.deepEqual(plan.windows_settings,['disable-firewall']);assert.ok(plan.manual_updates);assert.equal(plan.tasks.at(-1).params.package,'git');
   }finally{f.close()}
 });
 

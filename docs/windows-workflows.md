@@ -21,7 +21,7 @@ The source picker should read the local ISO library and accessible Proxmox ISO s
 
 Use the image metadata to verify the available editions. A filename containing `2025` is a discovery hint. Only the editions found inside that ISO belong in the edition picker, including the distinction between Server Core and Desktop Experience. Cache inspection results by media identity so opening the wizard stays fast.
 
-I choose the edition, hostname and guest login. I can enable RDP, choose **Manual patching** for this lab build, install Chocolatey and named packages, and select saved Ansible tasks with parameters. Default to the Windows update policy supplied by the image unless I explicitly choose a different policy. When I select a package, include Chocolatey automatically. With no packages or scripts selected, stop after verifying Windows is manageable.
+I choose the edition, hostname and guest login. I can enable RDP, choose **Manual patching** for this lab build, install Chocolatey and named packages, and select saved Ansible tasks with parameters. Default to the Windows update policy supplied by the image unless I explicitly choose a different policy. Selecting a common program includes Chocolatey automatically. To enter other package IDs, I tick **Set up Chocolatey** and use **Browse Chocolatey packages** to find their IDs. With no packages or scripts selected, stop after verifying Windows is manageable.
 
 Proxmate picks a compatible node, storage, network, firmware, TPM and driver media. Show the effective choices in an expandable review. Keep encryption policy under the operator’s control. Finish with the job result, verified WinRM status, console link and the answer file used for this build.
 
@@ -65,6 +65,28 @@ Each clone gets setup media for the specialize and OOBE passes, a fresh bootstra
 ISO names are grouped for discovery. The edition list comes from the selected image. Each generated answer is saved encrypted with the job. The reusable ZIP contains placeholders for the password and product key. An explicit original download includes credentials. Archives begin with builds performed on this version.
 
 The script library supports named inputs and defaults on saved Ansible task lists. Scripts and input values are frozen during build review. The machine page supports targeted WinRM inspection, a reviewed firewall scope and console commands. A successful login supplies the verification time shown in inventory. GitHub synchronization is deferred.
+
+If login reports that the address changed, close the login dialog and choose **Network → Refresh network details** on the machine page. **Verify login** offers the addresses reported by the guest agent. A successful test saves the selected address. If the VM was rebuilt and its certificate also changed, verify the new public certificate in the VM console before updating **Guest connection → Manual settings**.
+
+### Run the Windows ISO acceptance test
+
+From PowerShell in the project directory, supply the job ID of an earlier Windows Server Desktop Experience ISO build on this dashboard. The test creates one new VM with that build's edition, placement, CPU, memory and system disk. The source build must have one system disk and no extra data disks. Its ISO and driver media must still be available.
+
+~~~powershell
+$sourceJob = Read-Host 'Source Windows build job ID'
+Get-Content -Raw tests/live_windows_build.py | docker compose exec -T proxmate python -u - --source-job $sourceJob
+~~~
+
+The runner prints its random seed, machine name, VM ID and job ID. It picks two packages from Git, Notepad++ and 7-Zip, and two desktop settings from Edge first-run prompts, Server Manager at sign-in and Explorer preferences. The VM gets a fresh Administrator password. The dashboard keeps the login and build history.
+
+A pass requires a successful dashboard job and independent checks over certificate-verified WinRM. The checks cover the guest hostname, edition, system disk, installed package records and executables, and the selected registry values. The runner also compares CPU and memory to the review. The test leaves the guest running for inspection.
+
+To repeat a selection on a new VM, add `--seed <printed-seed>` to the command above. To reconnect to the **same** job after closing the terminal, use its test job ID.
+
+~~~powershell
+$testJob = Read-Host 'Live test job ID'
+Get-Content -Raw tests/live_windows_build.py | docker compose exec -T proxmate python -u - --verify-job $testJob
+~~~
 
 ### Disposable-guest acceptance
 

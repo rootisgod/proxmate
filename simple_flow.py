@@ -29,6 +29,12 @@ FEATURES=[('Web-Server','Web server (IIS)'),('NET-Framework-45-Features','.NET F
           ('NET-Framework-Core','.NET Framework 3.5'),('Telnet-Client','Telnet client')]
 
 
+def require_unbound_target(con, config):
+    key=management.target_id(config)
+    if con.execute("SELECT 1 FROM records WHERE kind='connections' AND id=?",(key,)).fetchone():
+        raise ValueError(f'{key} already has a saved guest connection. Review the build again to choose a free VM ID.')
+
+
 def choose(items,capability):
     choices=[s for s in items if s.get('active') and capability in s.get('content','').split(',')]
     if not choices: raise ValueError('No available '+capability+' storage. Check Server settings or Proxmox storage.')
@@ -217,13 +223,15 @@ class SimpleFlow:
         used={r['vmid'] for r in inv['resources'] if r.get('vmid')}
         names={r.get('name','').lower() for r in inv['resources']}
         with self.m.db() as con:
+            # Proxmox can release a VM ID while its guest connection is still pinned here.
+            saved_connections={row['id'] for row in con.execute("SELECT id FROM records WHERE kind='connections'")}
             for row in con.execute("SELECT payload FROM jobs WHERE status IN ('queued','running','waiting')"):
                 payload=self.m.decode(row['payload']);cfg=payload.get('plan',{}).get('config',payload)
                 if cfg.get('vmid'): used.add(int(cfg['vmid']))
                 if cfg.get('name'): names.add(cfg['name'].lower())
         vmid=max(100,int(inv['next_id']));configs=[]
         for i in range(count):
-            while vmid in used: vmid+=1
+            while vmid in used or f"{dest['node']}:{vmid}" in saved_connections: vmid+=1
             name=prefix if count==1 else f'{prefix}-{i+1:02}'
             if name.lower() in names: raise ValueError('A machine named '+name+' already exists. Choose a different name.')
             cfg=dict(action='provision',kind='windows' if os=='windows' else 'linux-cloud',purpose='vm',node=dest['node'],vmid=vmid,name=name,
@@ -289,6 +297,7 @@ class SimpleFlow:
                 jobs.append({'id':ident,'name':cfg['name'],'url':'/api/jobs/'+ident})
                 if con.execute('SELECT 1 FROM jobs WHERE id=?', (ident,)).fetchone():
                     continue
+                require_unbound_target(con,cfg)
                 # A still-open review may have been generated before the ISO letter reservation.
                 if cfg['kind'] == 'windows' and cfg.get('source_kind') != 'template':
                     windows_build.check_iso_disk_letters(cfg.get('data_disks', []))
@@ -303,6 +312,8 @@ class SimpleFlow:
 
     def execute(self,plan,log,job_id):
         cfg=copy.deepcopy(plan['config'])
+        with self.m.db() as con:
+            require_unbound_target(con,cfg)
         if plan.get('media_identity'):
             with diagnostics.stage('verify_windows_media'):
                 if media.inspect_source(plan['source'],cfg['node'])['identity']!=plan['media_identity']: raise ValueError('Windows media changed since review')

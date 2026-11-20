@@ -82,6 +82,41 @@ def test_batch_submission_is_confirmed_idempotent_and_encrypted(simple_lab):
     assert [m['vmid'] for m in next_plan['machines']]==[205,206,207]
 
 
+def test_auto_ids_skip_saved_connections_for_deleted_guests(simple_lab):
+    app,client,headers,_=simple_lab
+    for vmid in (202,204):
+        app.manager.put('connections',dict(id=f'lab:{vmid}',node='lab',vmid=vmid,host='192.0.2.92',updated=1))
+    result=client.post('/api/simple/plan',json=settings(),headers=headers)
+    assert result.status_code==200
+    assert [m['vmid'] for m in result.json['machines']]==[203,205,206]
+    assert app.manager.get('connections','lab:202')['updated']==1
+
+
+@pytest.mark.parametrize('when',['after-review','after-enqueue'])
+def test_new_connection_blocks_build_before_creation(simple_lab,monkeypatch,when):
+    app,client,headers,_=simple_lab
+    review=client.post('/api/simple/plan',json={**settings(),'count':3 if when=='after-review' else 1},headers=headers).json
+    body=dict(plan_id=review['id'],confirmed=True)
+    if when=='after-enqueue':
+        jobs=client.post('/api/simple/run',json=body,headers=headers).json['jobs']
+    # Collide with the second machine to exercise rollback of the whole batch at submission.
+    vmid=203 if when=='after-review' else 202
+    binding=dict(id=f'lab:{vmid}',node='lab',vmid=vmid,updated=1,host='192.0.2.92')
+    app.manager.put('connections',binding)
+    if when=='after-review':
+        response=client.post('/api/simple/run',json=body,headers=headers)
+        assert response.status_code==400 and 'saved guest connection' in response.json['error']
+        assert app.manager.all('credentials')==[]
+        assert client.get('/api/jobs',headers=headers).json==[]
+    else:
+        monkeypatch.setattr(operations,'execute',lambda *args:pytest.fail('Unexpected VM creation'))
+        assert app.run_next_job()
+        detail=client.get('/api/jobs/'+jobs[0]['id'],headers=headers).json
+        assert detail['status']=='failed' and 'saved guest connection' in detail['log']
+        assert client.post('/api/simple/run',json=body,headers=headers).json['jobs']==jobs
+    assert app.manager.get('connections',binding['id'])==binding
+
+
 def test_build_defaults_follow_verified_node(simple_lab, monkeypatch):
     app, client, headers, inv = simple_lab
     inv['nodes'].insert(0, {'node':'other', 'status':'online'})

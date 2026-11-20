@@ -66,18 +66,20 @@ function renderMachine(){
     ${connection.host?`<button data-simple="apply" data-id="${esc(d.vmid)}" class="${d.verified_at?'primary':''}">Run software</button>`:''}
     ${d.platform==='windows'&&d.identity?'<button id="machine-winrm">Check WinRM setup</button>':''}
     ${mgButton('Manual settings','connection',d.vmid)}</div></section>
-    <section class="panel machine-card"><h2>Network</h2>${hosts?`<ul class="address-list">${hosts}</ul>`:'<p>No guest addresses reported.</p>'}</section></div>
+    <section class="panel machine-card"><h2>Network</h2>${hosts?`<ul class="address-list">${hosts}</ul>`:'<p>No guest addresses reported.</p>'}<button type="button" id="refresh-machine-network">Refresh network details</button></section></div>
     <section class="panel machine-card"><h2>Latest backup for VM ${esc(d.vmid)}</h2><p id="machine-backup">${esc(page.backup||'Checking backup storage…')}</p></section>
     <section class="recent-jobs"><h2>Recent jobs for VM ${esc(d.vmid)}</h2>${rows?`<ul>${rows}</ul>`:'<p>No matching jobs in the last 100 operations.</p>'}</section>`;
   if($('#machine-winrm'))$('#machine-winrm').onclick=()=>openWinRMSetup(page);
   if($('#machine-connect'))$('#machine-connect').onclick=()=>connectMachine(page);
+  $('#refresh-machine-network').onclick=()=>openMachine(page.target);
 }
 
 function connectMachine(page){
   const d=page.data, previous=d.connection;
   const hosts=d.addresses.map(i=>[i.host,i.host+(i.interface?' · '+i.interface:'')]);
-  if(previous.host&&!hosts.some(([host])=>host===previous.host))hosts.push([previous.host,previous.host+' (saved)']);
-  const preferred=previous.host||(hosts.length===1?hosts[0][0]:'');
+  const ipv4=hosts.filter(([host])=>!host.includes(':'));
+  const preferred=hosts.some(([host])=>host===previous.host)?previous.host:
+    hosts.length===1?hosts[0][0]:ipv4.length===1?ipv4[0][0]:'';
   if(!preferred)hosts.unshift(['','Choose a guest address']);
   const platformField=d.platform?'':mgSelect('platform','Operating system',[['','Choose the guest OS'],['windows','Windows'],['linux','Linux']],previous.platform||'');
   mgDialog('Connect '+(d.name||'VM '+d.vmid),'<div class="form-grid">'+platformField+mgSelect('host','Guest address',hosts,preferred)+

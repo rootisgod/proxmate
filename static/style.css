@@ -181,8 +181,9 @@ nav :focus-visible { outline-offset: -3px; }
 .software-pane h3 { margin:0;font-size:1.1rem }
 .choices-head,.code-toolbar,.code-status { display:flex;align-items:center;justify-content:space-between;gap:8px }
 .choices-head { margin-bottom:6px }
-.choices-head button,.code-toolbar button { padding:5px 10px;font-size:.9rem }
-.choices-head button+button { margin-left:4px }
+.choice-actions { display:flex;gap:4px }
+.choice-actions button,.code-toolbar button { padding:5px 10px;font-size:.9rem }
+.software-sensitive>.choice-actions { justify-content:flex-end;margin-bottom:6px }
 .choice-grid,.script-parameters { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 14px }
 #simple-fields .choice-grid .check,.choice-grid .check {
   grid-column:auto;display:flex;align-items:baseline;gap:8px;margin:0;padding:6px 3px;line-height:1.35;min-width:0
@@ -193,6 +194,9 @@ nav :focus-visible { outline-offset: -3px; }
 .software-pane summary { cursor:pointer;color:var(--teal);font-weight:550 }
 .package-entry { margin-top:8px }
 .package-entry textarea { min-height:3.4em }
+.package-entry textarea:disabled { background:#edf1f2;color:var(--muted) }
+.package-help { display:flex;align-items:baseline;justify-content:space-between;gap:4px 12px;flex-wrap:wrap }
+.package-help a { color:var(--teal);font-size:.9rem }
 .software-script { border-bottom:1px solid var(--line);padding:6px 0;display:grid;grid-template-columns:1fr auto;gap:0 8px }
 .software-script .check { grid-column:1 }
 .software-script .script-parameters { grid-column:1/-1;grid-row:2 }

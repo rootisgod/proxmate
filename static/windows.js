@@ -15,8 +15,8 @@ function freshWindowsSettings(d){
   return {
     settings: bulkChoices('Windows settings',
       wc('rdp','Enable Remote Desktop',d.rdp)+options.filter(o=>!o.advanced).map(option).join(''))+
-      '<details class="software-sensitive"'+(d.manual_updates||security.some(o=>d.windows_settings?.includes(o.id))?' open':'')+
-      '><summary>Updates, security and console sign-in</summary><div class="choice-grid">'+
+      '<details class="software-sensitive bulk-choices"'+(d.manual_updates||security.some(o=>d.windows_settings?.includes(o.id))?' open':'')+
+      '><summary>Updates, security and console sign-in</summary>'+bulkChoiceButtons('updates, security and console sign-in options')+'<div class="choice-grid">'+
       wc('manual_updates','Use manual Windows updates',d.manual_updates)+security.map(option).join('')+'</div></details>',
     apps: apps.length?bulkChoices('Common programs',apps.join('')):''
   };
