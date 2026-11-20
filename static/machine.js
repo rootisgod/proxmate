@@ -64,10 +64,12 @@ function renderMachine(){
     <div class="machine-panels"><section class="panel machine-card"><h2>Guest connection</h2><p>${esc(guidance)}</p>${connection.host?`<p>${esc(connection.platform==='windows'?'HTTPS WinRM':'SSH')} · ${esc(connection.host)} · port ${esc(connection.port)}</p>`:''}
     <div class="row-actions">${connectable?`<button id="machine-connect" class="${d.verified_at?'':'primary'}">${d.verified_at?'Retest login':connection.host?'Verify login':'Connect this machine'}</button>`:''}
     ${connection.host?`<button data-simple="apply" data-id="${esc(d.vmid)}" class="${d.verified_at?'primary':''}">Run software</button>`:''}
+    ${d.platform==='windows'&&d.identity?'<button id="machine-winrm">Check WinRM setup</button>':''}
     ${mgButton('Manual settings','connection',d.vmid)}</div></section>
     <section class="panel machine-card"><h2>Network</h2>${hosts?`<ul class="address-list">${hosts}</ul>`:'<p>No guest addresses reported.</p>'}</section></div>
     <section class="panel machine-card"><h2>Latest backup for VM ${esc(d.vmid)}</h2><p id="machine-backup">${esc(page.backup||'Checking backup storage…')}</p></section>
     <section class="recent-jobs"><h2>Recent jobs for VM ${esc(d.vmid)}</h2>${rows?`<ul>${rows}</ul>`:'<p>No matching jobs in the last 100 operations.</p>'}</section>`;
+  if($('#machine-winrm'))$('#machine-winrm').onclick=()=>openWinRMSetup(page);
   if($('#machine-connect'))$('#machine-connect').onclick=()=>connectMachine(page);
 }
 

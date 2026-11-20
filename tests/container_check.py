@@ -39,6 +39,16 @@ with tempfile.TemporaryDirectory() as tmp:
     assert client.get('/static/server.js').status_code==200
     assert client.get('/static/machine.js').status_code==200
     assert client.post('/api/simple/machine',json={'node':'test','vmid':201},headers=headers).status_code==409
+    assert client.get('/static/editor-assets/code.js').status_code==200
+    examples = [t for t in client.get('/api/manage/tasks').json if t.get('example')]
+    assert len(examples)==5
+    for example in examples:
+        assert client.post('/api/manage/tasks/check',json=example,headers=headers).json=={'valid':True}
+    broken = dict(platform='windows',kind='powershell',body='Get-Date\nif (')
+    diagnostic = client.post('/api/manage/tasks/check',json=broken,headers=headers).json
+    assert not diagnostic['valid'] and diagnostic['line']==2,diagnostic
+    assert client.get('/static/notifications.js').status_code==200
+    assert client.get('/static/windows.js').status_code==200
     assert client.get('/static/simple.js').status_code==200
     assert client.get('/api/simple/software').json['features']
     family=client.post('/api/lifecycle/families',json={'name':'Isolated family'},headers=headers)
@@ -55,6 +65,18 @@ with tempfile.TemporaryDirectory() as tmp:
             if item['platform']!=platform:continue
             params={k:('started' if k=='state' else 'testpackage') for k in item['parameters']}
             tasks.extend(compile_task(item,params))
+        if platform=='windows':
+            import windows_setup
+            for selected in windows_setup.select([o['id'] for o in windows_setup.OPTIONS],[],app.manager,
+                                                 platform='windows',purpose='vm',subnet='192.0.2.0/24',desktop=True):
+                tasks.extend(compile_task(selected['item'],selected['params']))
+            feature = dict(app.manager.task('windows-feature'), installer_sxs=True)
+            tasks.extend(compile_task(feature, {'feature':'NET-Framework-Core'}))
+            disk=dict(serial='PM0123456789abcdef',size=32,label='Data',letter='F')
+            tasks.extend(compile_task(dict(id='prepare-created-volume',name='Prepare Data',disk=disk),{}))
+            custom=dict(id='fixture',name='Create a share directory',kind='ansible',parameters={'share':'Share name'},
+                        body='- ansible.windows.win_file:\n    path: "C:/Shares/{{ proxmate_inputs.share }}"\n    state: directory')
+            tasks.extend(compile_task(custom,{'share':'Lab'}))
         playbook=root/(platform+'.yml')
         playbook.write_text(yaml.safe_dump([{'hosts':'all','gather_facts':False,'tasks':tasks}]))
         result=subprocess.run(['ansible-playbook','--syntax-check','-i','192.0.2.20,',str(playbook)],capture_output=True,text=True)

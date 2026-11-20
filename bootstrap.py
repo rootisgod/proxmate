@@ -89,7 +89,9 @@ def windows_script(config):
     subnet=str(ipaddress.ip_network(config['management_cidr'],strict=False))
     digest=config.get('agent_sha256','')
     if digest and not re.fullmatch(r'[a-f0-9]{64}',digest): raise ValueError('Invalid guest agent SHA256')
-    return Path(__file__).with_name('windows_bootstrap.ps1').read_text(encoding='utf-8').replace('__SUBNET__',subnet).replace('__AGENT_SHA256__',digest)
+    token=config.get('clone_token','')
+    if token and not re.fullmatch('[0-9a-f]{32}',token): raise ValueError('Invalid clone identity token')
+    return Path(__file__).with_name('windows_bootstrap.ps1').read_text(encoding='utf-8').replace('__SUBNET__',subnet).replace('__AGENT_SHA256__',digest).replace('__CLONE_TOKEN__',token)
 
 
-WINDOWS_COMMAND = r'''powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop';Get-PSDrive -PSProvider FileSystem|%%{$p=Join-Path $_.Root 'ProxmateBootstrap.ps1';if(Test-Path $p){& $p;exit}};throw 'Bootstrap media missing'"'''.replace('%%','%')
+WINDOWS_COMMAND = r'''powershell.exe -NoProfile -NonI -ExecutionPolicy Bypass -Command "$d=@(Get-CimInstance Win32_CDROMDrive | Where-Object VolumeName -eq 'PROXMATE_SETUP');if($d.Count -ne 1){throw 'Check setup media'};& (Join-Path ($d[0].Drive+'\') 'ProxmateBootstrap.ps1')"'''

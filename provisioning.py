@@ -1,4 +1,5 @@
 """Pure provisioning plans, validated profiles and Windows answer media."""
+from contextvars import ContextVar
 import io
 import ipaddress
 import re
@@ -79,9 +80,12 @@ def windows_options(data):
     return d
 
 
-def answer_xml(settings, preview=False, bootstrap=None):
+answer_recorder = ContextVar('answer_recorder',default=None)
+
+
+def answer_xml(settings, preview=False, bootstrap=None, *, clone=False):
     d = windows_options(settings)
-    if not preview and (not d['accept_eula'] or not d['wipe_disk']):
+    if not preview and (not d['accept_eula'] or (not clone and not d['wipe_disk'])):
         raise ValueError('Confirm Windows licensing and formatting the new VM disk')
     ns, wcm = 'urn:schemas-microsoft-com:unattend', 'http://schemas.microsoft.com/WMIConfig/2002/State'
     ET.register_namespace('', ns); ET.register_namespace('wcm', wcm)
@@ -92,34 +96,35 @@ def answer_xml(settings, preview=False, bootstrap=None):
     def component(parent, name):
         return add(parent, 'component', name=name, processorArchitecture='amd64', publicKeyToken='31bf3856ad364e35', language='neutral', versionScope='nonSxS')
     root = ET.Element('{'+ns+'}unattend')
-    pe = add(root, 'settings', **{'pass': 'windowsPE'})
-    intl = component(pe, 'Microsoft-Windows-International-Core-WinPE')
-    add(add(intl, 'SetupUILanguage'), 'UILanguage', d['ui_language'])
-    for tag, field in [('InputLocale','keyboard'),('SystemLocale','locale'),('UILanguage','ui_language'),('UserLocale','locale')]: add(intl, tag, d[field])
-    setup = component(pe, 'Microsoft-Windows-Setup')
-    disks = add(setup, 'DiskConfiguration'); disk = add(disks, 'Disk', **{'{'+wcm+'}action':'add'})
-    add(disk, 'DiskID', 0); add(disk, 'WillWipeDisk', True)
-    partitions = add(disk, 'CreatePartitions')
-    # GPT: recovery, EFI, MSR, Windows. Only the new VM's disk 0 is targeted.
-    for order, kind, size in [(1,'Primary',1024),(2,'EFI',260),(3,'MSR',16),(4,'Primary',None)]:
-        part = add(partitions, 'CreatePartition', **{'{'+wcm+'}action':'add'})
-        add(part,'Order',order); add(part,'Type',kind); add(part,'Extend' if size is None else 'Size',True if size is None else size)
-    changes = add(disk, 'ModifyPartitions')
-    for order, part_id, fmt, label in [(1,1,'NTFS','Recovery'),(2,2,'FAT32','System'),(3,4,'NTFS','Windows')]:
-        part = add(changes,'ModifyPartition', **{'{'+wcm+'}action':'add'})
-        for tag,value in [('Order',order),('PartitionID',part_id),('Format',fmt),('Label',label)]: add(part,tag,value)
-        if part_id == 1: add(part,'TypeID','de94bba4-06d1-4d40-a16a-bfd50179d6ac')
-        if part_id == 4: add(part,'Letter','C')
-    add(disks,'WillShowUI','OnError')
-    osimage = add(add(setup,'ImageInstall'),'OSImage')
-    meta = add(add(osimage,'InstallFrom'),'MetaData', **{'{'+wcm+'}action':'add'})
-    add(meta,'Key','/IMAGE/INDEX'); add(meta,'Value',d['image_index'])
-    target = add(osimage,'InstallTo'); add(target,'DiskID',0); add(target,'PartitionID',4)
-    add(osimage,'WillShowUI','OnError')
-    user = add(setup,'UserData'); add(user,'AcceptEula',d['accept_eula'])
-    if d.get('setup_key'):
-        product = add(user,'ProductKey')
-        add(product,'Key',d['setup_key']); add(product,'WillShowUI','OnError')
+    if not clone:
+        pe = add(root, 'settings', **{'pass': 'windowsPE'})
+        intl = component(pe, 'Microsoft-Windows-International-Core-WinPE')
+        add(add(intl, 'SetupUILanguage'), 'UILanguage', d['ui_language'])
+        for tag, field in [('InputLocale','keyboard'),('SystemLocale','locale'),('UILanguage','ui_language'),('UserLocale','locale')]: add(intl, tag, d[field])
+        setup = component(pe, 'Microsoft-Windows-Setup')
+        disks = add(setup, 'DiskConfiguration'); disk = add(disks, 'Disk', **{'{'+wcm+'}action':'add'})
+        add(disk, 'DiskID', 0); add(disk, 'WillWipeDisk', True)
+        partitions = add(disk, 'CreatePartitions')
+        # GPT: recovery, EFI, MSR, Windows. Only the new VM's disk 0 is targeted.
+        for order, kind, size in [(1,'Primary',1024),(2,'EFI',260),(3,'MSR',16),(4,'Primary',None)]:
+            part = add(partitions, 'CreatePartition', **{'{'+wcm+'}action':'add'})
+            add(part,'Order',order); add(part,'Type',kind); add(part,'Extend' if size is None else 'Size',True if size is None else size)
+        changes = add(disk, 'ModifyPartitions')
+        for order, part_id, fmt, label in [(1,1,'NTFS','Recovery'),(2,2,'FAT32','System'),(3,4,'NTFS','Windows')]:
+            part = add(changes,'ModifyPartition', **{'{'+wcm+'}action':'add'})
+            for tag,value in [('Order',order),('PartitionID',part_id),('Format',fmt),('Label',label)]: add(part,tag,value)
+            if part_id == 1: add(part,'TypeID','de94bba4-06d1-4d40-a16a-bfd50179d6ac')
+            if part_id == 4: add(part,'Letter','C')
+        add(disks,'WillShowUI','OnError')
+        osimage = add(add(setup,'ImageInstall'),'OSImage')
+        meta = add(add(osimage,'InstallFrom'),'MetaData', **{'{'+wcm+'}action':'add'})
+        add(meta,'Key','/IMAGE/INDEX'); add(meta,'Value',d['image_index'])
+        target = add(osimage,'InstallTo'); add(target,'DiskID',0); add(target,'PartitionID',4)
+        add(osimage,'WillShowUI','OnError')
+        user = add(setup,'UserData'); add(user,'AcceptEula',d['accept_eula'])
+        if d.get('setup_key'):
+            product = add(user,'ProductKey')
+            add(product,'Key',d['setup_key']); add(product,'WillShowUI','OnError')
     specialize = add(root,'settings', **{'pass':'specialize'})
     if bootstrap and bootstrap.get('enabled'):
         from bootstrap import WINDOWS_COMMAND
@@ -136,7 +141,9 @@ def answer_xml(settings, preview=False, bootstrap=None):
         for tag,value in [('Active',True),('Group','@FirewallAPI.dll,-28752'),('Profile','domain,private'),('Key','RemoteDesktop')]: add(group,tag,value)
     oobe = add(root,'settings', **{'pass':'oobeSystem'})
     intl = component(oobe,'Microsoft-Windows-International-Core')
-    for tag,field in [('InputLocale','keyboard'),('SystemLocale','locale'),('UILanguage','ui_language'),('UserLocale','locale')]: add(intl,tag,d[field])
+    for tag,field in [('InputLocale','keyboard'),('SystemLocale','locale'),('UILanguage','ui_language'),('UserLocale','locale')]:
+        # A template may have a different installed display language from the ISO defaults.
+        if tag!='UILanguage' or not clone: add(intl,tag,d[field])
     shell = component(oobe,'Microsoft-Windows-Shell-Setup')
     if d.get('admin_password'):
         password = add(add(shell,'UserAccounts'),'AdministratorPassword')
@@ -145,16 +152,19 @@ def answer_xml(settings, preview=False, bootstrap=None):
     return ET.tostring(root, encoding='utf-8', xml_declaration=True)
 
 
-def answer_iso(settings, path, bootstrap=None):
+def answer_iso(settings, path, bootstrap=None, *, clone=False):
     import pycdlib
-    xml = answer_xml(settings, bootstrap=bootstrap)
+    xml = answer_xml(settings, bootstrap=bootstrap, clone=clone)
+    from bootstrap import windows_script
+    companion=windows_script(bootstrap) if bootstrap and bootstrap.get('enabled') else ''
+    recorder=answer_recorder.get()
+    if recorder: recorder(xml,companion)
     iso = pycdlib.PyCdlib(); iso.new(interchange_level=3, joliet=3, vol_ident='PROXMATE_SETUP')
     stream = io.BytesIO(xml)
     try:
         iso.add_fp(stream, len(xml), iso_path='/AUTOUNATTEND.XML;1', joliet_path='/Autounattend.xml')
-        if bootstrap and bootstrap.get('enabled'):
-            from bootstrap import windows_script
-            script = windows_script(bootstrap).encode('utf-8-sig')
+        if companion:
+            script = companion.encode('utf-8-sig')
             script_stream = io.BytesIO(script)
             iso.add_fp(script_stream,len(script),iso_path='/BOOTSTRAP.PS1;1',joliet_path='/ProxmateBootstrap.ps1')
         iso.write(str(path))

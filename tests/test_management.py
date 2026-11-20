@@ -288,3 +288,51 @@ def test_dns_alias_cannot_route_guest_tasks_to_hypervisor(monkeypatch):
     monkeypatch.setattr(management.operations,'configured_url',lambda:'https://192.168.1.244:8006')
     monkeypatch.setattr(management.socket,'getaddrinfo',lambda *a,**kw:[(2,1,6,'',('192.168.1.244',5986))])
     with pytest.raises(ValueError,match='Proxmox host'):management.endpoint_addresses({'host':'guest.example','port':5986})
+
+
+@pytest.mark.parametrize('platform,kind,body,line', [
+    ('windows','powershell',"Write-Output ok\nif (",2),
+    ('linux','powershell',"if (1) {",1),
+    ('linux','shell',"echo ok\nif true; then\n",3),
+    ('windows','ansible',"- name: demo\n  ansible.windows.win_copy: [",2),
+    ('linux','ansible',"- ansible.builtin.command: uptime\n- hosts: all\n",2),
+])
+def test_script_diagnostics_match_save_and_preserve_library(lab,platform,kind,body,line):
+    app,c,h,_,_=lab
+    draft=dict(name='Validation test',platform=platform,kind=kind,body=body)
+    before=app.manager.all('tasks')
+    assert c.post('/api/manage/tasks/check',json=draft).status_code==401
+    check=c.post('/api/manage/tasks/check',headers=h,json=draft)
+    assert check.status_code==200 and not check.json['valid']
+    assert check.json['line']==line and check.json['column']>=1
+    saved=c.post('/api/manage/tasks',headers=h,json=draft)
+    assert saved.status_code==400 and 'Line ' in saved.json['error']
+    assert app.manager.all('tasks')==before
+
+
+def test_starters_can_be_checked_copied_and_compiled_on_each_guest(lab,tmp_path):
+    app,c,h,_,_=lab
+    originals={t['id']:t for t in c.get('/api/manage/tasks',headers=h).json if t.get('example')}
+    assert {(t['platform'],t['kind']) for t in originals.values()}=={
+        ('windows','ansible'),('windows','powershell'),('linux','ansible'),('linux','powershell'),('linux','shell')}
+    for ident,task in originals.items():
+        assert c.post('/api/manage/tasks/check',headers=h,json=task).json=={'valid':True}
+        assert c.post('/api/manage/tasks',headers=h,json=task).status_code==400
+        draft={k:v for k,v in task.items() if k!='id'}
+        copy=c.post('/api/manage/tasks',headers=h,json=draft).json
+        assert copy['id']!=ident and not copy.get('example')
+        selected=app.manager.task_selection([{'id':copy['id']}])[0]
+        assert selected['item']['dangerous']
+        compiled=guest_tasks.compile_task(selected['item'],{})
+        if task['platform']=='linux' and task['kind']=='powershell':
+            command=compiled[0]['ansible.builtin.command']
+            assert command['argv'][0]=='pwsh' and command['stdin']==task['body']
+        assert app.manager.task(ident)==task
+    marker=tmp_path/'must-remain-absent'
+    for kind,body in [('shell',f"echo checked > '{marker.as_posix()}'"),('powershell',f"Set-Content '{marker.as_posix()}' 'checked'")]:
+        assert c.post('/api/manage/tasks/check',json=dict(platform='linux',kind=kind,body=body),headers=h).json['valid']
+        assert not marker.exists()
+
+def test_powershell_parser_accepts_native_storage_and_pipeline_syntax():
+    from script_library import check_script
+    check_script('windows','powershell',"Get-Disk | Select-Object Number,SerialNumber,Size\nif (2GB -gt 1KB) { Get-Volume }")

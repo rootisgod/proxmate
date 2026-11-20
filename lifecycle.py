@@ -314,6 +314,15 @@ class Lifecycle:
     def after_provision(self,d,result,job_id,log,extra=None):
         p=operations.Proxmox();cfg=p.call('GET',vm_path(d)+'/config')
         record=dict(id=job_id,node=d['node'],vmid=d['vmid'],machine_identity=machine_identity(cfg),created=time.time(),config=provenance(d),source=result or {},tasks=[],**(extra or {}))
+        if (result or {}).get('created_smbios') and cfg.get('smbios1')!=result['created_smbios']:
+            raise ValueError('New VM identity changed since allocation')
+        if (result or {}).get('machine_identity') and result['machine_identity']!=record['machine_identity']:
+            raise ValueError('Clone identity changed after first boot')
+        if d.get('data_disks'):
+            from windows_build import disk_volumes
+            record['data_volumes']=disk_volumes(d,cfg)
+            if record['data_volumes']!=(result or {}).get('data_volumes'):
+                raise ValueError('Data volumes changed since allocation')
         self.m.put('builds',record)
         if d.get('bootstrap',{}).get('verify'):
             if not (cfg.get('smbios1') or cfg.get('vmgenid')):
@@ -378,6 +387,13 @@ class Lifecycle:
             waiting='Guest agent is running; waiting for completed remote-access setup'
             marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
             if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
+            if opts.get('clone_token'):
+                proof=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\clone-ready')
+                if proof.get('content','').strip().casefold()!=(opts['clone_token']+'|'+d['name']).casefold():
+                    raise ValueError('Waiting for the new Windows hostname and clone-specific setup')
+                hostinfo=p.call('GET',path+'/agent/get-host-name').get('result',{})
+                if hostinfo.get('host-name','').split('.')[0].casefold()!=d['name'].casefold():
+                    raise ValueError('Waiting for Windows to report its reviewed hostname')
             interfaces=p.call('GET',path+'/agent/network-get-interfaces')
             addresses={str(ipaddress.ip_address(a['ip-address'])) for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]) if a.get('ip-address-type')=='ipv4' and not ipaddress.ip_address(a['ip-address']).is_loopback and not ipaddress.ip_address(a['ip-address']).is_link_local}
             host=opts.get('host')
@@ -405,7 +421,9 @@ class Lifecycle:
         except management.TrustChanged as exc:
             raise BootstrapFailed(str(exc)) from None
         except Exception as exc:
-            raise BootstrapPending(str(exc) if isinstance(exc,ValueError) else waiting) from None
+            pending=BootstrapPending(str(exc) if isinstance(exc,ValueError) else waiting)
+            pending.phase=waiting
+            raise pending from None
 
     def save_policy(self,d):
         if not isinstance(d,dict): raise ValueError('Policy must be a JSON object')

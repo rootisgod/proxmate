@@ -1820,7 +1820,7 @@
       },
       "post": {
         "summary": "Create or update a record",
-        "description": "Updates use the existing id. Connections are keyed by node:vmid. Secrets and records are encrypted at rest. Schedules default disabled; first due occurrence is interval-based and aligned to the UTC maintenance window. No missed-run catch-up.",
+        "description": "Updates use the existing id. Connections are keyed by node:vmid. Secrets and records are encrypted at rest. Schedules default disabled; first due occurrence is interval-based and aligned to the UTC maintenance window. No missed-run catch-up. Saved Ansible task lists accept parameters mapping input names to labels and defaults mapping input names to plain strings. Use proxmate_inputs.<name> in the task body.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2523,7 +2523,7 @@
     "/api/simple/options": {
       "get": {
         "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
-        "description": "Discover available build destinations, ISO media, Ubuntu releases and common features",
+        "description": "Discovers build destinations, ISO media and Ubuntu releases. Includes iso_setup_letters reserved by Windows ISO builds, Windows Server features, common_programs with Chocolatey package IDs, and windows_settings with desktop, vm_only and advanced flags where applicable.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2678,7 +2678,7 @@
     "/api/simple/plan": {
       "post": {
         "summary": "Review a batch of new Windows Server or Ubuntu machines and software",
-        "description": "Supply os=windows|ubuntu, name (1-12 characters), count (1-20), purpose=vm|template, and tasks=[{id,params}]. Windows requires source, edition index returned by /editions, and password. Ubuntu accepts profile and username. Optional overrides: node, storage, iso_storage, bridge, cores, memory in MB, disk in GB, locale, timezone, rdp, agent_iso and management_cidr. Template count must be one. Plans freeze targets, credentials and task bodies; expire after 30 minutes. Passwords and generated private keys are encrypted and excluded from responses. Metadata identity is checked again before installing; this is not a full ISO file checksum.",
+        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu accepts profile and username. Optional placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, task bodies and inputs for 30 minutes. The response omits credentials.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2691,6 +2691,9 @@
           },
           "409": {
             "description": "Disconnected or stale server selection"
+          },
+          "202": {
+            "description": "Review submitted. Poll /api/simple/reviews/{id} using review_id. The request_id identifies its container log entries."
           }
         },
         "parameters": [
@@ -2702,6 +2705,18 @@
               "type": "string"
             },
             "description": "Current ID from GET /api/server"
+          },
+          {
+            "name": "Prefer",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "respond-async"
+              ]
+            },
+            "description": "Return a ticket while the server prepares the review."
           }
         ],
         "requestBody": {
@@ -2718,6 +2733,85 @@
                   "credential": {
                     "type": "object",
                     "writeOnly": true
+                  },
+                  "source_kind": {
+                    "type": "string",
+                    "enum": [
+                      "iso",
+                      "template"
+                    ]
+                  },
+                  "template_id": {
+                    "type": "integer",
+                    "minimum": 100
+                  },
+                  "generalized": {
+                    "type": "boolean",
+                    "description": "Confirm the selected Windows template was generalized and contains QEMU Guest Agent."
+                  },
+                  "clone_mode": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "linked"
+                    ],
+                    "default": "full"
+                  },
+                  "manual_updates": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "windows_settings": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "openssh",
+                        "edge-first-run",
+                        "explorer",
+                        "server-manager",
+                        "ie-esc",
+                        "disable-firewall",
+                        "console-sign-in"
+                      ]
+                    },
+                    "default": [],
+                    "description": "Optional settings for newly provisioned Windows guests. Automatic console sign-in is limited to working VMs. Desktop preferences require Desktop Experience when the edition is known."
+                  },
+                  "rdp": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable Remote Desktop with Network Level Authentication on the new Windows guest."
+                  },
+                  "edition_identity": {
+                    "type": "string",
+                    "description": "Image metadata identity from the edition inspection."
+                  },
+                  "data_disks": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "size"
+                      ],
+                      "properties": {
+                        "size": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 4096
+                        },
+                        "label": {
+                          "type": "string",
+                          "maxLength": 32
+                        },
+                        "letter": {
+                          "type": "string",
+                          "pattern": "^([D-Zd-z])?$",
+                          "description": "Omit or leave empty for automatic assignment. Windows ISO builds reserve D, E and F for setup DVDs. Explicit letters must be unique across data disks."
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -2729,7 +2823,7 @@
     "/api/simple/run": {
       "post": {
         "summary": "Queue the reviewed batch once, with one tracked job per machine",
-        "description": "Supply plan_id and confirmed=true, plus risk_confirmed=true for trusted custom scripts. Confirmation covers starting the listed new guests, guest setup/software and Windows licensing. Returns jobs=[{id,name,url}]. Repeated submissions return the same jobs. Poll each job for actual installation, authenticated bootstrap, software and optional template generalization results. No failed guest is deleted.",
+        "description": "Supply plan_id and confirmed=true, plus risk_confirmed=true for advanced Windows settings or trusted custom scripts when the plan is flagged dangerous. Confirmation covers starting the listed new guests, guest setup/software and Windows licensing. Returns jobs=[{id,name,url}]. Repeated submissions return the same jobs. Poll each job for actual installation, authenticated bootstrap, software and optional template generalization results. No failed guest is deleted.",
         "responses": {
           "202": {
             "description": "Successful; passwords/private keys omitted"
@@ -3035,6 +3129,306 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/simple/machine/winrm/review": {
+      "post": {
+        "summary": "Inspect WinRM and review a scoped HTTPS listener setup",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Guest inspection status, proposed scope, elevated PowerShell commands and optional plan ID."
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "node",
+                  "vmid",
+                  "identity"
+                ],
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "vmid": {
+                    "type": "integer"
+                  },
+                  "identity": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "description": "Management client address or subnet. Defaults to the selected machine bridge subnet where available."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/machine/winrm/run": {
+      "post": {
+        "summary": "Queue the reviewed WinRM setup",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          },
+          "202": {
+            "description": "Queued setup job ID."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "plan_id",
+                  "confirmed"
+                ],
+                "properties": {
+                  "plan_id": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/answer": {
+      "get": {
+        "summary": "Download reusable Windows answer files with placeholders",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZIP with Autounattend.xml, build.json and the companion bootstrap script when generated.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No answer archived for this job."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        }
+      },
+      "post": {
+        "summary": "Download the exact original Windows answer files including credentials",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ZIP with Autounattend.xml, build.json and the companion bootstrap script when generated.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No answer archived for this job."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "include_secrets"
+                ],
+                "properties": {
+                  "include_secrets": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/console": {
+      "get": {
+        "summary": "Open the recorded build VM console after validating its current identity",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the selected Proxmox guest console. Proxmox authentication may be required."
+          },
+          "404": {
+            "description": "Build unavailable for the selected server."
+          },
+          "400": {
+            "description": "Machine identity changed or unavailable."
+          }
+        }
+      }
+    },
+    "/api/simple/reviews/{id}": {
+      "get": {
+        "summary": "Check a background build review on the selected server",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State is checking (stage), ready (plan) or failed (error). Includes the original request_id."
+          },
+          "404": {
+            "description": "Review expired, unknown or belongs to another server."
+          }
+        }
+      }
+    },
+    "/api/manage/tasks/check": {
+      "post": {
+        "summary": "Check guest script syntax without saving or running it",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "platform",
+                  "kind",
+                  "body"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "windows",
+                      "linux"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ansible",
+                      "powershell",
+                      "shell"
+                    ]
+                  },
+                  "body": {
+                    "type": "string",
+                    "maxLength": 100000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns valid plus message and one-based line and column for located parse errors."
+          },
+          "401": {
+            "description": "Authentication required"
           }
         }
       }

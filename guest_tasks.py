@@ -1,5 +1,6 @@
 """Guest-only task catalog and isolated Ansible invocation (trusted administrator code)."""
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -12,6 +13,8 @@ import tempfile
 import paramiko
 import yaml
 
+from script_library import EXAMPLES, validate_script
+
 
 BUILTINS = [
     dict(id='install-chocolatey', name='Install Chocolatey', platform='windows', description='Install the Chocolatey package manager.', parameters={}),
@@ -20,12 +23,25 @@ BUILTINS = [
     dict(id='enable-rdp', name='Enable Remote Desktop', platform='windows', description='Enable RDP with NLA and open domain/private firewall profiles.', parameters={}),
     dict(id='disable-firewall', name='Disable Windows firewall', platform='windows', description='Disables all three firewall profiles. Requires separate risk confirmation.', dangerous=True, parameters={}),
     dict(id='enable-firewall', name='Enable Windows firewall', platform='windows', description='Enable all three firewall profiles.', parameters={}),
+    dict(id='windows-manual-updates',name='Use manual Windows updates',platform='windows',description='Disable automatic updates for this lab machine using its local update policy.',parameters={}),
     dict(id='windows-updates', name='Install Windows updates', platform='windows', description='Install security and critical updates. Does not reboot automatically.', parameters={}),
     dict(id='linux-package', name='Install a Linux package', platform='linux', description='Install using the guest package manager. Requires sudo.', parameters={'package': 'Package name, e.g. curl'}),
     dict(id='linux-updates', name='Update Linux packages', platform='linux', description='Refresh metadata and upgrade packages on Ubuntu, Fedora or Rocky. Does not reboot.', parameters={}),
     dict(id='linux-service', name='Manage a Linux service', platform='linux', description='Start, stop or restart a service. Requires sudo.', parameters={'service': 'Service name', 'state': 'started, stopped or restarted'}),
     dict(id='windows-service', name='Manage a Windows service', platform='windows', description='Start, stop or restart a service.', parameters={'service': 'Service name', 'state': 'started, stopped or restarted'}),
-]
+] + EXAMPLES
+
+
+def script_parameters(schema, defaults):
+    if not isinstance(schema,dict) or len(schema)>20 or not isinstance(defaults,dict) or set(defaults)-set(schema):
+        raise ValueError('Define up to 20 named inputs and defaults for those inputs')
+    for key,label in schema.items():
+        if not re.fullmatch(r'[a-z][a-z0-9_]{0,39}',key) or not isinstance(label,str) or not 1<=len(label.strip())<=100:
+            raise ValueError('Give each input a lowercase name and a short label')
+    for value in defaults.values():
+        if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}',value):
+            raise ValueError('Use a single plain value for each input default')
+    return schema,defaults
 
 
 def compile_task(item, params):
@@ -34,20 +50,33 @@ def compile_task(item, params):
     for key, value in params.items():
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}', value):
             raise ValueError('Invalid task parameter: ' + key)
-    if 'state' in params and params['state'] not in ('started', 'stopped', 'restarted'):
+    if item['id'] in ('linux-service','windows-service') and 'state' in params and params['state'] not in ('started', 'stopped', 'restarted'):
         raise ValueError('Service state must be started, stopped or restarted')
     ident = item['id']
+    if item.get('kind')=='windows-setup': return copy.deepcopy(item['steps'])
     if ident == 'install-chocolatey': return [{'chocolatey.chocolatey.win_chocolatey': {'name': 'chocolatey', 'state': 'present'}}]
     if ident == 'chocolatey-package': return [{'chocolatey.chocolatey.win_chocolatey': {'name': params['package'], 'state': 'present'}}]
     if ident == 'windows-feature':
-        return [{'ansible.windows.win_feature':{'name':params['feature'],'state':'present','include_management_tools':True},'register':'proxmate_feature'},
-                {'ansible.windows.win_reboot':{'reboot_timeout':900},'when':'proxmate_feature.reboot_required'}]
+        feature = {'name': params['feature'], 'state': 'present', 'include_management_tools': True}
+        tasks = []
+        if item.get('installer_sxs') and params['feature'] == 'NET-Framework-Core':
+            from windows_setup import NETFX_MEDIA
+            tasks.append({'name': 'Find .NET feature files on Windows installation media',
+                          'ansible.windows.win_powershell': {'script': NETFX_MEDIA}, 'register': 'proxmate_netfx_media'})
+            feature['source'] = '{{ proxmate_netfx_media.result | default(omit, true) }}'
+        return tasks + [{'ansible.windows.win_feature': feature, 'register': 'proxmate_feature'},
+                        {'ansible.windows.win_reboot': {'reboot_timeout': 900}, 'when': 'proxmate_feature.reboot_required'}]
     if ident == 'enable-rdp':
         return [{'ansible.windows.win_regedit': {'path': r'HKLM:\System\CurrentControlSet\Control\Terminal Server', 'name': 'fDenyTSConnections', 'data': 0, 'type': 'dword'}},
                 {'ansible.windows.win_regedit': {'path': r'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp', 'name': 'UserAuthentication', 'data': 1, 'type': 'dword'}},
                 {'ansible.windows.win_powershell': {'script': "Get-NetFirewallRule -Name 'RemoteDesktop-UserMode-In-TCP','RemoteDesktop-UserMode-In-UDP' | Set-NetFirewallRule -Enabled True -Profile Domain,Private"}}]
     if ident in ('disable-firewall', 'enable-firewall'):
         return [{'ansible.windows.win_powershell': {'script': 'Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled $' + ('false' if ident == 'disable-firewall' else 'true')}}]
+    if ident == 'windows-manual-updates':
+        return [{'ansible.windows.win_regedit':{'path':r'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU','name':'NoAutoUpdate','type':'dword','data':1}}]
+    if ident == 'prepare-created-volume':
+        from windows_build import volume_task
+        return [volume_task(item['disk'])]
     if ident == 'windows-updates': return [{'ansible.windows.win_updates': {'category_names': ['SecurityUpdates', 'CriticalUpdates'], 'reboot': False}}]
     if ident == 'linux-package': return [{'ansible.builtin.package': {'name': params['package'], 'state': 'present'}}]
     if ident == 'linux-updates':
@@ -55,32 +84,18 @@ def compile_task(item, params):
                 {'ansible.builtin.dnf': {'name': '*', 'state': 'latest', 'update_cache': True}, 'when': "ansible_facts['os_family'] == 'RedHat'"}]
     if ident in ('linux-service', 'windows-service'):
         return [{('ansible.builtin.service' if ident == 'linux-service' else 'ansible.windows.win_service'): {'name': params['service'], 'state': params['state']}}]
+    if item['kind'] == 'powershell' and item['platform'] == 'linux':
+        return [{'ansible.builtin.command': {
+            'argv': ['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                     "$ErrorActionPreference='Stop'; & ([scriptblock]::Create([Console]::In.ReadToEnd()))"],
+            'stdin': item['body'], 'stdin_add_newline': False, 'expand_argument_vars': False}}]
     if item['kind'] == 'powershell': return [{'ansible.windows.win_powershell': {'script': item['body']}}]
     if item['kind'] == 'shell': return [{'ansible.builtin.shell': {'cmd': item['body']}}]
     # Saved Ansible snippets are task lists. This is deliberately an admin code feature,
     # not an untrusted multi-tenant execution sandbox.
-    return yaml.safe_load(item['body'])
-
-
-def validate_script(body):
-    try: tasks = yaml.safe_load(body)
-    except yaml.YAMLError: raise ValueError('Invalid Ansible task YAML') from None
-    if not isinstance(tasks, list) or not tasks or len(tasks) > 100:
-        raise ValueError('Provide a YAML list of 1-100 Ansible tasks, not a full playbook')
-    # Prevent accidental host/controller delegation and inventory/connection overrides.
-    allowed_modules = {'ansible.builtin.command', 'ansible.builtin.shell', 'ansible.builtin.package',
-                       'ansible.builtin.apt', 'ansible.builtin.dnf', 'ansible.builtin.service',
-                       'ansible.builtin.copy', 'ansible.builtin.file', 'ansible.builtin.lineinfile',
-                       'ansible.windows.win_powershell', 'ansible.windows.win_shell',
-                       'ansible.windows.win_command', 'ansible.windows.win_service',
-                       'ansible.windows.win_copy', 'ansible.windows.win_file',
-                       'ansible.windows.win_regedit', 'ansible.windows.win_updates', 'ansible.windows.win_feature',
-                       'chocolatey.chocolatey.win_chocolatey'}
-    for task in tasks:
-        if not isinstance(task, dict): raise ValueError('Each task must be an object')
-        modules = set(task) & allowed_modules
-        if len(modules) != 1 or set(task) - allowed_modules - {'name'}:
-            raise ValueError('Use one supported fully qualified guest module per task, with an optional name; delegation and connection overrides are not supported')
+    tasks=validate_script(item['body'])
+    if params:
+        for task in tasks: task['vars']={'proxmate_inputs':dict(params)}
     return tasks
 
 

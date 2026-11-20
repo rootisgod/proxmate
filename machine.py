@@ -1,5 +1,7 @@
 """Targeted machine details and authenticated, guest-agent-assisted connection setup."""
 import ipaddress
+import ssl
+import socket
 
 from flask import jsonify, request
 
@@ -64,6 +66,17 @@ def scoped_jobs(manager, target):
                                    status=row['status'],created=row['created']))
                 if len(result)==5: break
     return result
+
+
+def login_failure(binding,credential):
+    if binding['platform']=='linux': return 'SSH login failed. Check the service, host fingerprint and credentials.'
+    try:
+        ctx=ssl.create_default_context(cadata=binding.get('ca_pem') or credential.get('ca_pem') or None)
+        with socket.create_connection((binding['host'],binding['port']),timeout=4) as sock:
+            with ctx.wrap_socket(sock,server_hostname=binding['host']): pass
+    except ssl.SSLError: return 'WinRM TLS verification failed. Check the listener certificate, trusted CA and address.'
+    except OSError: return 'The WinRM endpoint is unreachable. Check the address, service and firewall scope.'
+    return 'WinRM HTTPS is reachable. The authenticated runtime check failed. Check the guest login and remote permissions.'
 
 
 def register(app, manager, lifecycle):
@@ -143,6 +156,9 @@ def register(app, manager, lifecycle):
             except RuntimeError:
                 if platform=='linux' and not previous.get('fingerprint'):
                     raise ValueError('Read the SSH host fingerprint in the VM console and enter it under Manual settings.') from None
+        approved=manager.find('winrm-trust',management.target_id(target)) if platform=='windows' else None
+        if approved and approved['identity']==identity and not (previous.get('ca_pem') or credential.get('ca_pem')):
+            trust={'ca_pem':approved['ca_pem']}
         management.check_saved_trust(previous,trust,identity)
         binding.update(trust)
         if platform=='linux' and not binding.get('fingerprint'): binding['fingerprint']=previous.get('fingerprint')
@@ -150,7 +166,7 @@ def register(app, manager, lifecycle):
         verify_identity(p,target,identity)
         try: run_guest(binding,credential,[],lambda _msg:None,readiness=True)
         except Exception:
-            raise ValueError('Login test failed. Check the login, guest firewall and '+('HTTPS WinRM certificate.' if platform=='windows' else 'SSH service and host fingerprint.')) from None
+            raise ValueError(login_failure(binding,credential)) from None
         verify_identity(p,target,identity)
         with manager.db() as con:
             con.execute('BEGIN IMMEDIATE')

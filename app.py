@@ -4,6 +4,7 @@ import base64
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -12,7 +13,11 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
+import diagnostics
 import job_queue
+import windows_artifacts
+import winrm_setup
+from provisioning import answer_recorder
 from lifecycle import BootstrapPending, WaitForGuest
 from flask import Flask, jsonify, request, session, send_from_directory, g
 from werkzeug.exceptions import HTTPException
@@ -70,9 +75,20 @@ def db():
 with db() as con:
     con.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT, status TEXT, created REAL, updated REAL, payload TEXT, log TEXT)')
     job_queue.initialize(con)
+    windows_artifacts.initialize(con)
 
 login_attempts = {}
 login_lock = threading.Lock()
+
+
+@app.before_request
+def start_trace():
+    if not request.path.startswith('/api/'): return
+    candidate=request.headers.get('X-Request-ID','')
+    g.trace_token=diagnostics.trace.set(candidate if re.fullmatch('[a-f0-9]{32}',candidate) else uuid.uuid4().hex)
+    g.request_start=time.monotonic()
+    if request.method=='POST':
+        diagnostics.event('request.start',route=request.url_rule.rule if request.url_rule else 'unknown')
 
 
 @app.before_request
@@ -98,7 +114,13 @@ def headers(response):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'"
-    if request.path.startswith('/api/'): response.headers['Cache-Control'] = 'no-store'
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Request-ID'] = diagnostics.trace.get() or ''
+        elapsed=round((time.monotonic()-g.request_start)*1000)
+        if request.method=='POST' or response.status_code>=400 or elapsed>=1000:
+            diagnostics.event('request.finished',route=request.url_rule.rule if request.url_rule else 'unknown',
+                              status=response.status_code,elapsed_ms=elapsed)
     return response
 
 
@@ -116,6 +138,7 @@ def redact(value):
 
 @app.errorhandler(Exception)
 def error(exc):
+    diagnostics.event('request.failed',route=request.url_rule.rule if request.url_rule else 'unknown',**diagnostics.failure(exc))
     if isinstance(exc, HTTPException): return jsonify(error=exc.description), exc.code
     if isinstance(exc, (ValueError, KeyError)): return jsonify(error=redact(str(exc))), 400
     return jsonify(error=redact(str(exc))), 502
@@ -162,17 +185,17 @@ def state(): return jsonify(inventory())
 @app.get('/api/jobs')
 def jobs():
     with db() as con:
-        if request.args.get('summary') == '1':
-            rows = con.execute('SELECT id, action, status, created, updated, payload FROM jobs ORDER BY created DESC LIMIT 100').fetchall()
-        else:
-            rows = con.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 100').fetchall()
+        columns = 'id, action, status, created, updated, payload' if request.args.get('summary') == '1' else 'jobs.*'
+        rows = con.execute(f'SELECT {columns}, EXISTS(SELECT 1 FROM windows_answers a WHERE a.job_id=jobs.id) AS has_answer FROM jobs ORDER BY created DESC LIMIT 100').fetchall()
     return jsonify([job_view(r) for r in rows])
 
 
 def job_view(row):
     result = dict(row)
+    if 'has_answer' in result: result['has_answer']=bool(result['has_answer'])
     payload = decode_payload(result.pop('payload'))
     result['target'] = {k: payload[k] for k in ('node', 'vmid', 'source', 'name', 'filename') if k in payload}
+    if payload['action']=='simple': result['server_id']=payload.get('server_id')
     if payload['action'] in ('manage','lifecycle','simple'):
         plan=payload.get('plan',{})
         result['operation']=plan.get('operation',payload['action'])
@@ -185,12 +208,39 @@ def job_view(row):
 def job(job_id):
     with db() as con:
         row = con.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
-    return (jsonify(job_view(row)), 200) if row else (jsonify(error='Job not found'), 404)
+        has_answer=bool(con.execute('SELECT 1 FROM windows_answers WHERE job_id=?',(job_id,)).fetchone())
+    return (jsonify(dict(job_view(row),has_answer=has_answer)),200) if row else (jsonify(error='Job not found'),404)
+
+
+@app.get('/api/jobs/<job_id>/console')
+def build_console(job_id):
+    from flask import redirect
+    from urllib.parse import urlencode
+    from machine import verify_identity
+    with db() as con: row=con.execute('SELECT payload FROM jobs WHERE id=?',(job_id,)).fetchone()
+    if not row: return jsonify(error='Job not found'),404
+    payload=decode_payload(row['payload'])
+    selected=server.current()
+    build=manager.find('builds',job_id)
+    if payload.get('action')!='simple' or payload.get('server_id')!=selected['id'] or not build:
+        return jsonify(error='No recorded machine on this server for this build'),404
+    verify_identity(operations.Proxmox(),build,build['machine_identity'])
+    query=urlencode(dict(console='kvm',novnc=1,node=build['node'],vmid=build['vmid']))
+    return redirect(selected['url'].rstrip('/')+'/?'+query)
+
+
+@app.route('/api/jobs/<job_id>/answer',methods=['GET','POST'])
+def job_answer(job_id):
+    original=request.method=='POST'
+    if original and (request.get_json() or {}).get('include_secrets') is not True:
+        raise ValueError('Confirm the download includes original setup credentials')
+    return windows_artifacts.download(db,decode_payload,job_id,original)
 
 
 @app.post('/api/jobs')
 def submit():
     payload = validate(request.get_json())
+    if 'data_disks' in payload: raise ValueError('Use the reviewed Windows build wizard to allocate data disks')
     if payload.get('bootstrap') and payload['action']!='provision': raise ValueError('Use the provision action for guest bootstrap')
     if payload.get('bootstrap',{}).get('verify'):
         credential=manager.get('credentials',payload['bootstrap']['credential_id'])
@@ -224,6 +274,7 @@ def resume_guest(row, wait, payload, log):
     try:
         binding=lifecycle.probe_bootstrap(cfg,wait['identity'],credential,previous,log)
     except BootstrapPending as pending:
+        if time.time()-wait['last_report']>=60: diagnostics.event('job.waiting',stage=getattr(pending,'phase','guest_readiness'),seconds_remaining=max(0,int(wait['deadline']-time.time())))
         with db() as con: job_queue.postpone(con,wait,redact(str(pending)))
         return False
     if time.time()>=wait['deadline']: raise RuntimeError('Guest verification deadline expired. The VM is retained.')
@@ -258,15 +309,20 @@ def run_next_job():
         with db() as con:
             con.execute('UPDATE jobs SET log=substr(log || ?, -150000),updated=? WHERE id=?',
                         ('\n'+redact(message),time.time(),row['id']))
+    job_token=diagnostics.job.set(row['id'])
+    started=time.monotonic()
+    recording=answer_recorder.set(lambda xml,helper:windows_artifacts.save(db,encode_payload,row['id'],xml,helper))
     try:
         payload=decode_payload(row['payload'])
         config=job_queue.job_config(payload)
+        if not wait: diagnostics.event('job.started',action=row['action'],vmid=config.get('vmid'),queued_ms=round((time.time()-row['created'])*1000))
         password=config.get('windows',{}).get('admin_password','')
         revision=None
         if not wait and config.get('bootstrap',{}).get('verify'):
             revision=manager.get('credentials',config['bootstrap']['credential_id'])['updated']
         if wait:
             if not resume_guest(row,wait,payload,log): return True
+        elif payload['action']=='winrm-setup': winrm_setup.execute(manager,payload,log)
         elif payload['action']=='manage':
             manager.execute(payload['plan'],log)
             if payload['plan']['operation']=='tasks': lifecycle.record_tasks(payload['plan'],row['id'])
@@ -279,15 +335,22 @@ def run_next_job():
     except WaitForGuest as paused:
         if paused.checkpoint['credential_revision']==revision:
             with db() as con: job_queue.park(con,row['id'],paused.checkpoint)
+            diagnostics.event('job.waiting',stage='guest_readiness',vmid=paused.checkpoint['vmid'])
             return True
         log('Guest login changed during creation. Inspect the retained VM before continuing.')
         status='failed'
     except Exception as exc:
+        diagnostics.event('job.error',**diagnostics.failure(exc))
         log(f'ERROR: {exc}')
         status='failed'
+    finally:
+        answer_recorder.reset(recording)
+        diagnostics.job.reset(job_token)
     with db() as con:
         con.execute('DELETE FROM job_waits WHERE job_id=?',(row['id'],))
         con.execute('UPDATE jobs SET status=?,updated=? WHERE id=?',(status,time.time(),row['id']))
+    diagnostics.event('job.finished',job_id=row['id'],status=status,total_ms=round((time.time()-row['created'])*1000),
+                      step_ms=round((time.monotonic()-started)*1000))
     return True
 
 
@@ -358,6 +421,7 @@ server = ServerConnection(db,encode_payload,decode_payload)
 operations.connection_provider = server
 from machine import register as register_machine
 register_machine(app,manager,lifecycle)
+winrm_setup.register(app,manager,lifecycle)
 
 
 @app.before_request
@@ -366,9 +430,12 @@ def connection_boundary():
         return
     # These authenticated local reads are valid across server replacements.
     # Host-bound plans, inventory and writes still serialize with connection changes.
-    if request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
+    if request.endpoint in ('job_answer','check_guest_script') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
         return
+    started=time.monotonic()
     server.lock.acquire()
+    lock_ms=round((time.monotonic()-started)*1000)
+    if lock_ms>=250: diagnostics.event('server.lock_wait',elapsed_ms=lock_ms)
     g.connection_locked = True
     host_write = request.method == 'POST' and (request.path == '/api/jobs' or request.path.startswith('/api/simple/') or
         request.path.startswith('/api/manage/') and request.path.split('/')[3] not in ('credentials','tasks') or
@@ -381,7 +448,7 @@ def connection_boundary():
 
     # A guided login may take a transport timeout. Keep the selected server pinned
     # while allowing unrelated inventory, job and record requests to proceed.
-    if request.endpoint in ('machine_details','machine_connect','machine_backup'):
+    if request.endpoint in ('machine_details','machine_connect','machine_backup','winrm_review','editions','options') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
         server.machine_requests += 1
         g.machine_request = True
         g.connection_locked = False
@@ -390,6 +457,9 @@ def connection_boundary():
 
 @app.teardown_request
 def release_connection_boundary(exc):
+    if getattr(g,'trace_token',None) is not None:
+        diagnostics.trace.reset(g.trace_token)
+        g.trace_token=None
     if getattr(g,'machine_request',False):
         with server.lock: server.machine_requests -= 1
         g.machine_request = False
@@ -433,6 +503,7 @@ def scheduler():
 if __name__ == '__main__':
     from waitress import serve
     admin_password()
+    diagnostics.event('service.started',workers=1,http_threads=8)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     serve(app, host='0.0.0.0', port=int(os.getenv('PORT', '8080')), threads=8)

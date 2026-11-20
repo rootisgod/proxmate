@@ -1,5 +1,17 @@
 # Proxmate implementation plan
 
+The [everyday Windows workflows](docs/windows-workflows.md) describe the intended template, clone and ISO experience, acceptance criteria and disposable-guest validation.
+
+## Windows workflow implementation
+
+1. Extend the existing Windows build wizard and encrypted simple-build plan with a source choice. For a template, freeze its node, VM ID, configuration identity and clone mode. Clone to a fresh ID while stopped, attach first-boot answer media, then start. Use a specialize/oobe-only answer for clones. Verify the requested Windows hostname and per-guest TLS login through the existing restart-safe readiness wait before running follow-up tasks. Full copies are the default.
+2. Classify Windows ISO filenames in the picker and verify the edition using actual WIM/ESD metadata. Keep unrecognized media browsable. Record generated XML and companion PowerShell at the media-generation boundary in encrypted job artifacts, including on failure. Offer a reusable download and a separate, explicit original download. Support opt-in manual updates and named inputs on saved Ansible task lists.
+3. Review optional NTFS data disks by size, label and drive letter. Allocate fresh disks with unique serials on the new VM before boot. Verify the VM, recorded Proxmox volume, guest serial, size and partition state before formatting. An uncertain mutation ends in an inspectable job.
+4. Add targeted WinRM diagnostics and a reviewed, subnet-scoped HTTPS setup action to the machine page, with console instructions for guests lacking an agent. Show historical verification in inventory using local records. Keep GitHub library synchronization as a later integration.
+5. Verify with temporary databases, fake Proxmox/guest endpoints, generated XML and PowerShell, browser workflow tests, and a network-isolated Docker image. Roll back the application image with the queue idle. Keep the data volume and retained guests for inspection. Live Windows install, Sysprep and disk-format validation requires disposable targets.
+
+The four Windows workflow changes are implemented. The automated acceptance checks exercise both clone modes, stale guest identity and hostname, archived answers after a failed upload, disk ownership and repeat runs, and the reviewed WinRM setup path. Live Windows acceptance is tracked in the workflow spec.
+
 ## Approved lifecycle milestone: bootstrap, recovery and template versions
 
 Implementation checkpoint: all three selected features are implemented and deployed locally as API 0.4.0. 89 backend tests, 5 DOM workflow tests, generated script syntax and isolated Docker checks passed. Existing eight-job history and credentials are preserved; no new policy is enabled. Real guest/backup/template validation remains explicitly outside this milestone's automated verification and requires approved disposable targets.

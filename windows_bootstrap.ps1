@@ -3,6 +3,7 @@
 $ErrorActionPreference = 'Stop'
 $script:Root = 'C:\ProgramData\Proxmate'
 $script:RetryTask = 'Proxmate-Bootstrap'
+$script:CloneToken = '__CLONE_TOKEN__'
 
 function Initialize-ProxmateBootstrap {
     New-Item -ItemType Directory -Force -Path $script:Root | Out-Null
@@ -92,6 +93,7 @@ function Enable-ProxmateWinRM {
 
     # Retry without rotating the certificate or dropping working WinRM sessions.
     $identity = $env:COMPUTERNAME + '|' + ($addresses -join ',')
+    if ($script:CloneToken) { $identity += '|' + $script:CloneToken }
     $stateFile = Join-Path $script:Root 'winrm-state.json'
     $cert = $null
     if (Test-Path -LiteralPath $stateFile) {
@@ -137,7 +139,12 @@ function Assert-ProxmateInstaller([string]$msi, [string]$expected) {
 }
 
 function Install-ProxmateGuestTools {
-    $msi = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'guest-agent\qemu-ga-x86_64.msi' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    $msi = $null
+    if ($script:CloneToken) {
+        if (-not (Get-Service QEMU-GA -ErrorAction SilentlyContinue)) { throw 'Guest agent is missing from the selected template' }
+    } else {
+        $msi = Get-CimInstance Win32_CDROMDrive | Where-Object Drive | ForEach-Object { Join-Path ($_.Drive+'\') 'guest-agent\qemu-ga-x86_64.msi' } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    }
     if ($msi -and -not (Test-ProxmateSerialDriver)) {
         $os = Get-CimInstance Win32_OperatingSystem
         $build = [int]$os.BuildNumber
@@ -160,6 +167,7 @@ function Install-ProxmateGuestTools {
 }
 
 function Set-ProxmateReady {
+    if ($script:CloneToken) { [IO.File]::WriteAllText((Join-Path $script:Root 'clone-ready'), ($script:CloneToken + '|' + $env:COMPUTERNAME)) }
     [IO.File]::WriteAllText((Join-Path $script:Root 'bootstrap-ready'), 'ready')
 }
 

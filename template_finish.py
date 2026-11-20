@@ -24,11 +24,16 @@ if (Test-Path "$root\winrm.pem") {
 Get-ChildItem WSMan:\localhost\Listener | Where-Object { $_.Keys -contains 'Transport=HTTPS' } | Remove-Item -Recurse -Force
 Unregister-ScheduledTask -TaskName 'Proxmate-Bootstrap' -Confirm:$false -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath "$root\winrm.pem","$root\bootstrap-ready","$root\winrm-ready","$root\winrm-state.json","$root\bootstrap-attempt","$root\bootstrap-status.json" -Force -ErrorAction SilentlyContinue
-foreach ($file in @('C:\Windows\Panther\unattend.xml','C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml')) {
-  Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+function Remove-ProxmateCachedAnswer {
+  foreach ($file in @('C:\Windows\Panther\unattend.xml','C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml')) {
+    if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force -ErrorAction Stop }
+  }
 }
+Remove-ProxmateCachedAnswer
 $process=Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" -ArgumentList '/generalize /oobe /quit /quiet' -WindowStyle Hidden -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw 'Sysprep failed; VM retained for inspection' }
+# Generalization can cache the still-attached installer answer again.
+Remove-ProxmateCachedAnswer
 '''
 
 

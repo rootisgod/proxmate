@@ -27,12 +27,12 @@ def simple_lab(service,monkeypatch):
         'details':{'lab':{'storage':[{'storage':'disks','active':1,'content':'images','avail':10**12},{'storage':'local','active':1,'content':'iso','avail':10**11}],
             'network':[{'type':'bridge','iface':'vmbr0','cidr':'192.0.2.10/24'}],
             'isos':[{'volid':'local:iso/server.iso'},{'volid':'local:iso/virtio-win-0.1.266.iso'}]}}}
-    def build_inventory(*, include_backups):
+    def build_inventory(*, include_backups, only_node=None):
         assert not include_backups
         return copy.deepcopy(inv)
     monkeypatch.setattr(operations,'inventory',build_inventory)
     monkeypatch.setattr(media,'inspect_source',lambda *a:dict(identity='media-v1',editions=[dict(index=7,name='Windows Server Standard',label='Standard (Desktop Experience)',desktop=True,language='en-US',build='26100',edition_id='ServerStandard')]))
-    monkeypatch.setattr(media,'supports_guest_agent',lambda *a:True)
+    monkeypatch.setattr(media,'review_guest_agent',lambda *a:'a'*64)
     monkeypatch.setattr(media,'guest_agent_sha256',lambda *a:'a'*64)
     monkeypatch.setattr(media,'verify_ssh_node',lambda *a:None)
     def no_host(*a,**kw): raise AssertionError('No live Proxmox call permitted')
@@ -147,7 +147,7 @@ def test_low_storage_and_stale_server_fail_before_queue(simple_lab):
 
 def test_missing_guest_driver_blocks_before_creation(simple_lab,monkeypatch):
     app,c,h,inv=simple_lab
-    monkeypatch.setattr(media,'supports_guest_agent',lambda *a:False)
+    monkeypatch.setattr(media,'review_guest_agent',lambda *a:None)
     response=c.post('/api/simple/plan',json=settings(),headers=h)
     assert response.status_code==400 and 'serial driver' in response.json['error']
     assert c.get('/api/jobs',headers=h).json==[]
@@ -165,7 +165,7 @@ def test_virtio_rock_ridge_filenames_are_inspected(tmp_path,monkeypatch,flavour,
     iso.add_fp(io.BytesIO(b'inf'),3,iso_path='/SERIAL/WINDOWS/AMD64/SERIAL.INF;1',rr_name='vioser.inf')
     iso.write(str(path));iso.close()
     monkeypatch.setattr(media,'source_file',lambda *args:path.open('rb'))
-    assert media.supports_guest_agent('local:iso/virtio.iso','lab',26100) is expected
+    assert bool(media.review_guest_agent('local:iso/virtio.iso','lab',26100)) is expected
     if include_agent:
         import hashlib
         assert media.guest_agent_sha256('local:iso/virtio.iso','lab')==hashlib.sha256(b'msi').hexdigest()
@@ -291,3 +291,110 @@ def test_template_conversion_only_follows_successful_generalization(monkeypatch,
     else:
         template_finish.finish(cfg,manager,lambda *a:None,template_finish.machine_identity(config))
         assert events.index('finish-setup')<events.index('convert-template')
+
+def test_review_cache_uses_server_observed_revisions_and_fresh_worker_check(simple_lab,monkeypatch):
+    app,c,h,inv=simple_lab
+    os_iso,driver=inv['details']['lab']['isos']
+    for item in (os_iso,driver): item.update(ctime=100,size=9000)
+    inspect=media.inspect_source
+    calls=[]
+    def read(source,node):
+        calls.append('os')
+        return dict(inspect(source,node),revision=media.volume_revision(os_iso))
+    def driver_pin(*args):
+        calls.append('driver')
+        return 'a'*64
+    monkeypatch.setattr(media,'inspect_source',read)
+    monkeypatch.setattr(media,'review_guest_agent',driver_pin)
+    c.post('/api/simple/editions',json={'source':os_iso['volid'],'node':'lab'},headers=h)
+    for _ in range(2): assert c.post('/api/simple/plan',json=settings(),headers=h).status_code==200
+    assert calls==['os','driver']
+    driver['ctime']+=1
+    assert c.post('/api/simple/plan',json=settings(),headers=h).status_code==200
+    assert calls==['os','driver','driver']
+    os_iso['ctime']+=1
+    plan=c.post('/api/simple/plan',json=settings(),headers=h).json
+    assert calls[-1]=='os' and calls.count('os')==2
+    submission=c.post('/api/simple/run',json={'plan_id':plan['id'],'confirmed':True},headers=h)
+    monkeypatch.setattr(media,'inspect_source',lambda *a:{'identity':'replaced'})
+    assert app.run_next_job()
+    assert c.get(submission.json['jobs'][0]['url'],headers=h).json['status']=='failed'
+
+
+def test_async_review_releases_http_and_records_diagnostics(simple_lab,monkeypatch):
+    import logging
+    import threading
+    import diagnostics
+    app,c,h,inv=simple_lab
+    entered,release=threading.Event(),threading.Event()
+    def slow_driver(*args):
+        entered.set()
+        assert release.wait(5)
+        return 'a'*64
+    monkeypatch.setattr(media,'review_guest_agent',slow_driver)
+    output=io.StringIO()
+    handler=logging.StreamHandler(output)
+    diagnostics.log.addHandler(handler)
+    ident='d'*32
+    try:
+        ticket=c.post('/api/simple/plan',json=settings(),headers={**h,'Prefer':'respond-async','X-Request-ID':ident})
+        assert ticket.status_code==202 and ticket.headers['X-Request-ID']==ident
+        url='/api/simple/reviews/'+ticket.json['review_id']
+        assert entered.wait(2)
+        assert c.get(url,headers=h).json['stage']=='drivers'
+        assert c.get('/api/jobs',headers=h).json==[]
+        assert app.server.machine_requests==1
+        release.set()
+        for _ in range(100):
+            result=c.get(url,headers=h).json
+            if result['state']!='checking':break
+            time.sleep(.01)
+        assert result['state']=='ready' and app.server.machine_requests==0
+        records=[json.loads(line) for line in output.getvalue().splitlines()]
+        assert any(r.get('event')=='stage.finished' and r.get('stage')=='drivers' and r.get('request_id')==ident and 'elapsed_ms' in r for r in records)
+        assert settings()['password'] not in output.getvalue()
+    finally:
+        release.set()
+        diagnostics.log.removeHandler(handler)
+
+
+def test_async_review_failure_keeps_reference_and_queue_empty(simple_lab):
+    app,c,h,inv=simple_lab
+    ticket=c.post('/api/simple/plan',json={**settings(),'count':-1},headers={**h,'Prefer':'respond-async'})
+    assert ticket.status_code==202
+    for _ in range(100):
+        result=c.get('/api/simple/reviews/'+ticket.json['review_id'],headers=h).json
+        if result['state']!='checking':break
+        time.sleep(.01)
+    assert result['state']=='failed' and result['error'] and result['request_id']==ticket.json['request_id']
+    assert c.get('/api/jobs',headers=h).json==[]
+
+
+def test_buffered_iso_reads_only_nearby_sectors_and_handles_eof():
+    contents=bytes(range(256))*4096
+    image=media.RemoteISO(io.BytesIO(contents),len(contents))
+    for index in range(120):
+        image.seek(index*2048)
+        assert image.read(8)==contents[index*2048:index*2048+8]
+    assert image.block_reads==2 and image.bytes_fetched<len(contents)
+    image.seek(-7,2)
+    assert image.read(8)==contents[-7:] and image.read(1)==b''
+
+def test_upstream_failure_logs_status_and_omits_paths_payload_and_error_body(monkeypatch):
+    import logging
+    import diagnostics
+    p=operations.Proxmox.__new__(operations.Proxmox)
+    p.url='https://example.invalid'
+    secret='EXAMPLE-PRIVATE-PAYLOAD'
+    p.session=SimpleNamespace(request=lambda *args,**kwargs:SimpleNamespace(status_code=503,text=secret))
+    output=io.StringIO()
+    handler=logging.StreamHandler(output)
+    diagnostics.log.addHandler(handler)
+    try:
+        with pytest.raises(RuntimeError):
+            p.call('POST','nodes/lab/storage/'+secret,token=secret)
+    finally:
+        diagnostics.log.removeHandler(handler)
+    record=json.loads(output.getvalue())
+    assert record['event']=='proxmox.response' and record['status']==503 and record['method']=='POST'
+    assert secret not in output.getvalue()

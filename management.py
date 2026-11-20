@@ -14,7 +14,8 @@ from urllib.parse import urlparse
 
 from flask import jsonify, request
 import operations
-from guest_tasks import BUILTINS, compile_task, run_guest, validate_script
+from guest_tasks import BUILTINS, compile_task, run_guest, script_parameters
+from script_library import check_script, ScriptDiagnostic
 
 KINDS = {'credentials', 'connections', 'tasks', 'groups', 'recipes', 'schedules'}
 OPS = {'tasks', 'readiness', 'start', 'shutdown', 'stop', 'resize', 'backup', 'snapshot', 'restore'}
@@ -175,7 +176,9 @@ class Manager:
         result = []
         for value in values:
             item = self.task(value['id'])
-            params = value.get('params', {})
+            supplied = value.get('params', {})
+            if not isinstance(supplied,dict): raise ValueError('Task inputs must be an object')
+            params = {**item.get('defaults',{}),**supplied}
             compile_task(item, params)
             result.append({'item': item, 'params': params})
         return result
@@ -225,11 +228,12 @@ class Manager:
                 if value['ca_pem'] and '-----BEGIN CERTIFICATE-----' not in value['ca_pem']: raise ValueError('Supply a PEM CA certificate')
             if kind == 'tasks':
                 platform, script_kind, body = d.get('platform'), d.get('kind'), d.get('body')
-                if platform not in ('linux', 'windows') or script_kind not in ('powershell', 'shell', 'ansible'): raise ValueError('Choose a platform and script type')
-                if (script_kind=='powershell' and platform!='windows') or (script_kind=='shell' and platform!='linux'): raise ValueError('Script type does not match platform')
-                if not isinstance(body, str) or not body.strip() or len(body)>100000: raise ValueError('Script must contain 1-100000 characters')
-                if script_kind=='ansible': validate_script(body)
-                value.update(platform=platform, kind=script_kind, body=body, parameters={}, dangerous=True,
+                check_script(platform, script_kind, body)
+                if script_kind == 'shell':
+                    body = body.replace('\r\n', '\n')
+                schema,defaults=script_parameters(d.get('parameters',{}),d.get('defaults',{}))
+                if schema and script_kind!='ansible': raise ValueError('Named inputs require an Ansible task list')
+                value.update(platform=platform, kind=script_kind, body=body, parameters=schema, defaults=defaults, dangerous=True,
                              description='Saved administrator script. Review the code before use.')
             if kind == 'groups':
                 value['targets'] = targets(d.get('targets'))
@@ -238,6 +242,7 @@ class Manager:
             if kind == 'recipes':
                 config = copy.deepcopy(d.get('config', {}))
                 if not isinstance(config, dict): raise ValueError('Recipe config must be an object')
+                if config.get('data_disks'): raise ValueError('Specify new data disks in a reviewed Windows build')
                 if config.get('windows', {}).get('admin_password'): raise ValueError('Remove the Windows setup password before saving; recipes use credential references')
                 config.pop('confirmed', None)
                 config.pop('vmid', None)
@@ -459,6 +464,19 @@ def register(app, db, encode, decode):
                     row = con.execute('SELECT status,log FROM jobs WHERE id=?',(value.get('last_job'),)).fetchone()
                     value['last_status'] = row['status'] if row else None
         return jsonify(values)
+
+    @app.post('/api/manage/tasks/check')
+    def check_guest_script():
+        data = request.get_json()
+        if not isinstance(data, dict):
+            raise ValueError('Supply a guest script')
+        try:
+            check_script(data.get('platform'), data.get('kind'), data.get('body'))
+        except ScriptDiagnostic as exc:
+            return jsonify(valid=False, message=exc.message, line=exc.line, column=exc.column)
+        except ValueError as exc:
+            return jsonify(valid=False, message=str(exc))
+        return jsonify(valid=True)
 
     @app.post('/api/manage/<kind>')
     def save_record(kind): return jsonify(manager.save(kind,request.get_json()))

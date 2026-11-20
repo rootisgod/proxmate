@@ -15,6 +15,7 @@ import paramiko
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 import yaml
+import diagnostics
 from provisioning import PROFILES, linux_options, windows_options, answer_iso, checksum_for
 from bootstrap import options as bootstrap_options, cloud_vendor, cloud_seed
 
@@ -51,11 +52,23 @@ class Proxmox:
         self.session.headers['CSRFPreventionToken'] = data['CSRFPreventionToken']
 
     def call(self, method, path, **data):
-        r = self.session.request(method, self.url + '/api2/json/' + path,
-                                 params=data if method == 'GET' else None,
-                                 data=data if method != 'GET' else None, timeout=60, allow_redirects=False)
+        start=time.monotonic()
+        # Paths and upstream error bodies can contain tickets, filenames or guest commands.
+        leaf=path.rsplit('/',1)[-1]
+        known={'ticket','nodes','resources','nextid','storage','content','network','config','status','current','qemu',
+               'start','shutdown','clone','template','get-osinfo','get-host-name','file-read','exec','exec-status','network-get-interfaces'}
+        operation=leaf if leaf in known else 'other'
+        try:
+            r = self.session.request(method, self.url + '/api2/json/' + path,
+                                     params=data if method == 'GET' else None,
+                                     data=data if method != 'GET' else None, timeout=60, allow_redirects=False)
+        except requests.RequestException as exc:
+            diagnostics.event('proxmox.error',operation=operation,method=method,elapsed_ms=round((time.monotonic()-start)*1000),**diagnostics.failure(exc))
+            raise
+        elapsed=round((time.monotonic()-start)*1000)
+        if not 200 <= r.status_code < 300 or elapsed>=1000:
+            diagnostics.event('proxmox.response',operation=operation,method=method,status=r.status_code,elapsed_ms=elapsed)
         if not 200 <= r.status_code < 300:
-            # Proxmox errors may echo arguments; callers redact credentials as well.
             raise RuntimeError(f'Proxmox HTTP {r.status_code}: {r.text[:1500]}')
         return r.json()['data']
 
@@ -114,13 +127,13 @@ def upload_generated(p,node,storage,path,log):
     return storage+':iso/'+path.name
 
 
-def inventory(*, include_backups=True):
+def inventory(*, include_backups=True, only_node=None):
     p = Proxmox()
     nodes = p.call('GET', 'nodes')
     details = {}
     for n in nodes:
         node = n['node']
-        if n['status'] != 'online':
+        if n['status'] != 'online' or (only_node and node!=only_node):
             continue
         stores = p.call('GET', f'nodes/{node}/storage')
         isos, backups = [], []
@@ -133,10 +146,16 @@ def inventory(*, include_backups=True):
     root = Path(os.getenv('ISO_DIR', 'D:/ISOs'))
     return {'nodes': nodes, 'resources': p.resources(), 'details': details,
             'next_id': int(p.call('GET', 'cluster/nextid')),
-            'local_isos': [{'name': f.name, 'bytes': f.stat().st_size} for f in sorted(root.glob('*.iso')) if f.is_file()]}
+            'local_isos': [{'name': f.name, 'bytes': f.stat().st_size,'mtime': f.stat().st_mtime_ns} for f in sorted(root.glob('*')) if f.suffix.lower()=='.iso' and f.is_file()]}
 
 
 ACTIONS = {'provision', 'finish-setup', 'linux-template', 'installer', 'clone', 'backup', 'convert-template', 'ansible', 'upload-iso', 'start'}
+
+
+def upload_iso_name(filename):
+    if not isinstance(filename,str) or not re.fullmatch(r'[A-Za-z0-9_. -]+\.iso',filename,re.I):
+        raise ValueError('Choose an ISO filename without directory components')
+    return filename[:-4].replace(' ','_')+'.iso'
 
 
 def validate(data):
@@ -161,7 +180,7 @@ def validate(data):
             if d.get('source_kind') not in ('local', 'proxmox'): raise ValueError('Choose a media source')
             if d['source_kind'] == 'local':
                 validate(dict(action='upload-iso', node=d.get('node'), storage=d.get('iso_storage'), filename=d.get('filename')))
-                translated['iso'] = f'{d["iso_storage"]}:iso/{d["filename"]}'
+                translated['iso'] = f'{d["iso_storage"]}:iso/{upload_iso_name(d["filename"])}'
             translated['os'] = 'windows' if d['kind'] == 'windows' else 'linux'
         checked = validate(translated)
         checked['action'] = 'provision'
@@ -197,13 +216,11 @@ def validate(data):
     if d['action'] == 'installer':
         if d.get('os', 'linux') not in ('linux', 'windows'):
             raise ValueError('os must be linux or windows')
-        if not isinstance(d['iso'], str) or not re.fullmatch(r'[A-Za-z0-9_.-]+:iso/[A-Za-z0-9_.-]+\.iso', d['iso']):
+        if not isinstance(d['iso'], str) or not re.fullmatch(r'[A-Za-z0-9_.-]+:iso/[A-Za-z0-9_. -]+\.iso', d['iso'], re.I):
             raise ValueError('Select an ISO already on Proxmox')
     if d['action'] == 'linux-template': linux_options(d)
     if d['action'] == 'upload-iso':
-        name = d['filename']
-        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+\.iso', name):
-            raise ValueError('ISO filenames must use letters, digits, dots, underscores or hyphens and end in .iso')
+        upload_iso_name(d['filename'])
     if d['action'] == 'ansible':
         try:
             parsed = yaml.safe_load(d['playbook']) if isinstance(d['playbook'], str) else None
@@ -304,6 +321,9 @@ def execute(d, log):
                       efidisk0=f'{d["storage"]}:0,efitype=4m,pre-enrolled-keys=1',
                       sata0=f'{d["storage"]}:{d.get("disk", 64)}', ide2=d['iso']+',media=cdrom',
                       net0=f'{"e1000" if windows else "virtio"},bridge={d["bridge"]}', boot='order=ide2;sata0', agent=1)
+        if d.get('_data_disks'):
+            from windows_build import drive_options
+            config.update(drive_options({'storage':d['storage'],'data_disks':d['_data_disks']}))
         if windows: config['tpmstate0'] = f'{d["storage"]}:0,version=v2.0'
         if d.get('_answer_volume'): config['sata1'] = d['_answer_volume'] + ',media=cdrom'
         if d.get('bootstrap',{}).get('agent_iso'): config['sata2'] = d['bootstrap']['agent_iso']+',media=cdrom'
@@ -312,20 +332,30 @@ def execute(d, log):
             config['boot'] = 'order=sata0;ide2'
             config['smbios1'] = f'uuid={uuid.uuid4()}'
         task(base, **config)
+        allocated={}
+        if unattended:
+            allocated['created_smbios']=config['smbios1']
+            if d.get('_data_disks'):
+                from windows_build import disk_volumes
+                actual=p.call('GET',f'{base}/{vmid}/config')
+                if actual.get('smbios1')!=config['smbios1']: raise ValueError('New VM identity changed before boot')
+                allocated['data_volumes']=disk_volumes(dict(storage=d['storage'],data_disks=d['_data_disks']),actual)
         if d.get('start'):
             started = time.monotonic()
             task(f'{base}/{vmid}/status/start')
             if unattended:
                 windows_first_boot(p, f'{base}/{vmid}', config['smbios1'], d['_answer_volume'], started, log)
         log('Installer VM ready. Open its Proxmox console, install the OS, then generalize before converting to a template.')
+        if unattended: return allocated
     elif a == 'upload-iso':
         root = Path(os.getenv('ISO_DIR', 'D:/ISOs')).resolve()
         f = (root / d['filename']).resolve()
         if f.parent != root or not f.is_file(): raise ValueError('ISO not found in configured library')
         existing = p.call('GET', f'nodes/{node}/storage/{d["storage"]}/content', content='iso')
-        if any(x['volid'].endswith('/' + f.name) for x in existing): raise ValueError('ISO already exists; refusing to overwrite')
+        upload_name=upload_iso_name(f.name)
+        if any(x['volid'].endswith('/' + upload_name) for x in existing): raise ValueError('ISO already exists; refusing to overwrite')
         with f.open('rb', buffering=8 * 1024 * 1024) as stream:
-            encoder = MultipartEncoder(fields={'content': 'iso', 'filename': (f.name, stream, 'application/octet-stream')})
+            encoder = MultipartEncoder(fields={'content': 'iso', 'filename': (upload_name, stream, 'application/octet-stream')})
             progress = [-1]
             def report(monitor):
                 step = int(100 * monitor.bytes_read / monitor.len) // 5
@@ -444,7 +474,8 @@ def execute_flow(d, log):
         drivers=p.call('GET',f'nodes/{d["node"]}/storage/{vol.split(":")[0]}/content',content='iso')
         if not any(m['volid']==vol for m in drivers): raise ValueError('Selected guest agent ISO is not present')
         from media import guest_agent_sha256
-        actual=guest_agent_sha256(vol,d['node'])
+        with diagnostics.stage('verify_guest_tools'):
+            actual=guest_agent_sha256(vol,d['node'])
         if d['bootstrap'].get('agent_sha256') and d['bootstrap']['agent_sha256']!=actual:
             raise ValueError('Guest agent MSI changed since review; create a new plan')
         d['bootstrap']['agent_sha256']=actual
@@ -455,6 +486,7 @@ def execute_flow(d, log):
         if not any(m['volid'] == d['iso'] for m in media): raise ValueError('Selected ISO is not present')
     guest = dict(d, action='installer')
     if d['kind'] == 'windows':
+        guest['_data_disks']=d.get('data_disks',[])
         name = f'proxmate-unattend-{d["vmid"]}-{uuid.uuid4().hex}.iso'
         with tempfile.TemporaryDirectory(prefix='proxmate-answer-') as temp:
             path = Path(temp) / name
@@ -463,6 +495,7 @@ def execute_flow(d, log):
             log('Uploading generated answer media. It contains setup credentials if supplied; restrict storage access.')
             guest['_answer_volume'] = upload_generated(p, d['node'], d['iso_storage'], path, log)
             log('Answer media: ' + guest['_answer_volume'])
-    execute(guest, log)
+    allocated=execute(guest, log)
     log('Installer prepared, not installation verified. Open the console; Windows may require the DVD boot key or activation/account prompts. After installation shut down and use Finish setup to remove answer media.' if d['kind'] == 'windows' else 'Install Linux through the Proxmox console. ISO installs are interactive.')
     if d.get('purpose') == 'template': log('Template flow: finish installation, generalize the guest, shut it down, then use Convert to template. No automatic conversion has been performed.')
+    return allocated

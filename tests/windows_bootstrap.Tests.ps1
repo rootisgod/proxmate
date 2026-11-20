@@ -1,6 +1,7 @@
 # Only the orchestration is executed. All OS/file/service operations it calls
 # are mocked. The real generated helper is separately parsed and ISO-tested.
 $source = Get-Content (Join-Path $PSScriptRoot '..\windows_bootstrap.ps1') -Raw
+$source = $source.Replace('__CLONE_TOKEN__','').Replace('__SUBNET__','192.0.2.0/24').Replace('__AGENT_SHA256__','')
 $tokens = $null; $errors = $null
 $null = [Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
@@ -81,6 +82,7 @@ Describe 'Windows bootstrap without a user login' {
 
 Describe 'Stable WinRM certificate across retries' {
     BeforeEach {
+        $script:CloneToken = ''
         $script:Root = $TestDrive
         $script:ip = '192.0.2.20'
         $script:thumb = 'A' * 40
@@ -111,6 +113,13 @@ Describe 'Stable WinRM certificate across retries' {
             $script:created++
             return [pscustomobject]@{Thumbprint=$script:newThumb;HasPrivateKey=$true;NotAfter=(Get-Date).AddYears(1);RawData=[byte[]](4,5,6)}
         }
+    }
+    It 'issues a distinct certificate when a clone inherits a name and address' {
+        $script:CloneToken = 'c' * 32
+        Enable-ProxmateWinRM
+        $script:created | Should Be 1
+        $state = Get-Content (Join-Path $TestDrive 'winrm-state.json') -Raw | ConvertFrom-Json
+        $state.identity | Should Be ($env:COMPUTERNAME+'|192.0.2.20|'+$script:CloneToken)
     }
     It 'preserves the trusted certificate and working listener on a retry' {
         Enable-ProxmateWinRM

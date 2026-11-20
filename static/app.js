@@ -1,6 +1,29 @@
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state=null,jobs=[],view='machines',csrf='',action='',fixed={};
-async function api(path,body){const selectedId=typeof serverInfo!=='undefined'?(serverInfo?.id??null):null;const r=await fetch('/api/'+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-CSRF-Token':csrf,'X-Proxmate-Server':typeof serverInfo!=='undefined'?(serverInfo?.id||''):''}:{},body:body?JSON.stringify(body):undefined});const data=await r.json();if(!path.startsWith('server')&&typeof serverInfo!=='undefined'&&selectedId!==(serverInfo?.id??null))throw Error('Server changed. Reload before continuing.');if(!r.ok){if(r.status===401&&!$('#login').open)$('#login').showModal();throw Error(data.error||'Request failed')}return data}
+function requestId(){
+  const bytes=crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function api(path,body,extraHeaders={}){
+  const selectedId=typeof serverInfo!=='undefined'?(serverInfo?.id??null):null;
+  const headers=body?{'Content-Type':'application/json','X-CSRF-Token':csrf,'X-Proxmate-Server':selectedId||'','X-Request-ID':requestId(),...extraHeaders}:{...extraHeaders};
+  let r,data;
+  try{
+    r=await fetch('/api/'+path,{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined});
+    data=await r.json();
+  }catch{
+    const id=r?.headers?.get('X-Request-ID')||headers['X-Request-ID'];
+    const error=Error('The dashboard could not reach the server. Check the connection and retry.'+(id?' Request '+id:''));
+    error.transport=true;throw error;
+  }
+  if(!path.startsWith('server')&&typeof serverInfo!=='undefined'&&selectedId!==(serverInfo?.id??null))throw Error('Server changed. Reload before continuing.');
+  if(!r.ok){
+    if(r.status===401&&!$('#login').open)$('#login').showModal();
+    const ref=r.headers?.get('X-Request-ID');
+    throw Error((data.error||'Request failed')+(ref&&r.status>=500?' · Request '+ref:''));
+  }
+  return data;
+}
 function notice(message){$('#notice').textContent=message;$('#notice').hidden=false}
 let refreshVersion=0;
 function needsInventoryDetails(){
@@ -39,7 +62,7 @@ async function refresh(){
     serverInfo=selected;
     const results=await Promise.all([selected.connected?readInventory():Promise.resolve(null),api('jobs?summary=1')]);
     if(revision!==refreshVersion)return;
-    [state,jobs]=results;$('#connection').className=state?'online':'';
+    [state,jobs]=results;observeJobs(jobs,selected.connected?selected.id:null);$('#connection').className=state?'online':'';
     $('#connection-label').textContent=state?selected.url:'Disconnected';
     if(view==='machines'&&state&&typeof restoreMachineLocation==='function'&&restoreMachineLocation())return;
     render();
@@ -49,7 +72,7 @@ async function refresh(){
 function title(name,sub,button=''){return `<div class="title"><div><h1>${name}</h1><p>${sub}</p></div>${button}</div>`}
 function btn(label,a,id){return `<button data-action="${a}" ${id?`data-id="${id}"`:''}>${label}</button>`}
 function table(head,rows){return `<div class="panel table-wrap"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')||`<tr><td colspan="${head.length}" class="empty">Nothing here yet. Your next operation will appear here.</td></tr>`}</tbody></table></div>`}
-function guestRows(items,template=false){return items.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${r.type.toUpperCase()} · ${r.vmid}</small></td><td><span class="pill ${esc(r.status)}">${template?'template':esc(r.status)}</span></td><td>${esc(r.node)}</td><td>${r.maxcpu} cores · ${(r.maxmem/1073741824).toFixed(0)} GB</td><td><div class="row-actions">${r.type==='qemu'?(template?btn('Clone →','clone',r.vmid):`<button data-simple="apply" data-id="${r.vmid}">Run scripts</button>`+mgButton('Power / settings','manage-vm',r.vmid)+mgButton('Connection','connection',r.vmid)+mgButton('Snapshots','snapshots',r.vmid)+btn('Backup','backup',r.vmid)+btn('Start','start',r.vmid)+btn('Finish setup','finish-setup',r.vmid)+btn('Template','convert-template',r.vmid)):''}</div></td></tr>`)}
+function guestRows(items,template=false){return items.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${r.type.toUpperCase()} · ${r.vmid}</small></td><td><span class="pill ${esc(r.status)}">${template?'template':esc(r.status)}</span></td><td>${esc(r.node)}</td><td>${r.maxcpu} cores · ${(r.maxmem/1073741824).toFixed(0)} GB</td><td><div class="row-actions">${r.type==='qemu'?(template?'<button data-clone-template="'+esc(r.vmid)+'">Clone →</button>':`<button data-simple="apply" data-id="${r.vmid}">Run scripts</button>`+mgButton('Power / settings','manage-vm',r.vmid)+mgButton('Connection','connection',r.vmid)+mgButton('Snapshots','snapshots',r.vmid)+btn('Backup','backup',r.vmid)+btn('Start','start',r.vmid)+btn('Finish setup','finish-setup',r.vmid)+btn('Template','convert-template',r.vmid)):''}</div></td></tr>`)}
 function activity(){return table(['Operation','Status','Submitted','Details'],jobs.map(j=>`<tr><td>${esc(j.operation||j.action)}<small>${esc(j.target?.name||j.target?.label||j.target?.filename||j.target?.vmid||j.target?.node||'')}</small></td><td><span class="pill ${j.status}">${j.status}</span></td><td>${new Date(j.created*1000).toLocaleString()}</td><td><button data-log="${j.id}">View log</button></td></tr>`))}
 function render(){
   if(state&&!state.details&&needsInventoryDetails()){loadInventoryDetails();return}
@@ -60,7 +83,7 @@ if(view==='machines')html=title('Virtual machines','Clone a template and get str
 if(view==='backups')html=title('Backups','Snapshot-mode backups, compressed with Zstandard.','<button class="primary" data-action="backup">＋ Take backup</button>')+table(['Backup archive','Node','Size'],Object.entries(state.details).flatMap(([node,d])=>(d.backups||[]).map(b=>`<tr><td>${esc(b.volid)}</td><td>${esc(node)}</td><td>${(b.size/1073741824).toFixed(2)} GB</td></tr>`)))+'<p><button data-view="recovery">Restore, test backups and manage retention</button></p><h2>Backup activity</h2>'+activityFiltered('backup');
 if(view==='ansible')html=title('Ansible','Your playbooks. Your inventory. One place to run them.','<button class="primary" data-action="ansible">＋ Run playbook</button>')+`<p>Playbooks run as the Proxmate service user inside the container. Configure SSH credentials and known_hosts for your targets. This is an administrator code-execution feature.</p>`+activityFiltered('ansible');
 if(view==='jobs')html=title('Activity','Every operation, with its outcome and log.')+activity();
-if(view==='media')html=title('ISO library','Local media mounted read-only. Upload an image to Proxmox when you need it.')+table(['Image','Size','Action'],state.local_isos.map(f=>`<tr><td>${esc(f.name)}</td><td>${(f.bytes/1073741824).toFixed(2)} GB</td><td><button data-wizard="${/windows/i.test(f.name)?'windows':'linux-iso'}" data-filename="${esc(f.name)}">Use in wizard</button> <button data-upload="${esc(f.name)}">Upload only</button></td></tr>`));
+if(view==='media')html=title('ISO library','Local media mounted read-only. Upload an image to Proxmox when you need it.')+table(['Image','Size','Action'],state.local_isos.map(f=>`<tr><td>${esc(f.name)}</td><td>${(f.bytes/1073741824).toFixed(2)} GB</td><td><button ${mediaCategory({label:f.name})?'data-simple="windows"':'data-wizard="linux-iso"'} data-filename="${esc(f.name)}">Use in wizard</button> <button data-upload="${esc(f.name)}">Upload only</button></td></tr>`));
 $('#content').innerHTML=html;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));}
 function activityFiltered(a){const old=jobs;jobs=jobs.filter(j=>j.action===a);const out=activity();jobs=old;return out}
 function options(items,value,label){return items.map(x=>`<option value="${esc(value(x))}">${esc(label(x))}</option>`).join('')}
@@ -89,6 +112,7 @@ async function readJobLog(log){
     const job=await api('jobs/'+encodeURIComponent(log.dataset.job));
     if(!log.isConnected||!$('#editor').open)return;
     log.textContent=job.log;
+    if(typeof jobWindowsActions==='function')jobWindowsActions(job,log);
     log.dataset.updated=String(job.updated);
     log.dataset.status=job.status;
     $('#form-title').textContent=job.action+' · '+job.status;
@@ -121,7 +145,7 @@ $('#editor').addEventListener('close',()=>$('.modal-footer').hidden=false);$('#c
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await api('login',{password:new FormData(e.target).get('password')});csrf=r.csrf;$('#login').close();e.target.reset();$('#notice').hidden=true;await refresh()}catch(err){$('#login-error').textContent=err.message}};
 $('#action-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const d={action,...fixed,...Object.fromEntries(new FormData(e.target))};if(!d.ssh_key)delete d.ssh_key;if(d.prepared)d.prepared=true;if(d.host_confirmed)d.host_confirmed=true;await api('jobs',d);$('#editor').close();view='jobs';notice('Operation queued. Follow its progress below.');await refresh()}catch(err){$('#form-error').textContent=err.message}finally{b.disabled=false}};
 async function startDashboard(){try{csrf=(await api('session')).csrf;await refresh()}catch{if(!$('#login').open)$('#login').showModal()}}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',startDashboard,{once:true});else startDashboard();
+if(document.readyState==='complete')startDashboard();else document.addEventListener('DOMContentLoaded',startDashboard,{once:true});
 let polling=false,lastInventoryRead=Date.now();
 
 async function pollDashboard(){
@@ -135,7 +159,7 @@ async function pollDashboard(){
     const previous=jobs.map(j=>j.id+':'+j.status).join(',');
     const nextJobs=await api('jobs?summary=1');
     if(revision!==refreshVersion)return;
-    jobs=nextJobs;
+    jobs=nextJobs;observeJobs(jobs,selected.id);
     const changed=previous!==jobs.map(j=>j.id+':'+j.status).join(',');
     const log=$('#job-log');
     if(log){
@@ -168,3 +192,4 @@ async function pollDashboard(){
   }finally{polling=false}
 }
 setInterval(pollDashboard,4000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollDashboard()});

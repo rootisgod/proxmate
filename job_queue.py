@@ -29,9 +29,10 @@ def target_ids(payload):
     elif action=='lifecycle':
         plan=payload['plan']
         values=[job_config(payload).get('vmid'),plan.get('vmid'),plan.get('source'),plan.get('source_vmid')]
-    elif action in ('simple','provision','start','backup','clone','convert-template','finish-setup','installer','linux-template'):
+    elif action in ('winrm-setup','simple','provision','start','backup','clone','convert-template','finish-setup','installer','linux-template'):
         values=[job_config(payload).get('vmid')]
         if action=='clone': values.append(payload.get('source'))
+        if action=='simple': values.append(job_config(payload).get('template',{}).get('source'))
     else:
         return set()
     return {int(v) for v in values if str(v).isdigit()}
@@ -41,7 +42,7 @@ def claim(con, decode, now, prefer_probe):
     con.execute('BEGIN IMMEDIATE')
     due = con.execute("SELECT * FROM job_waits WHERE next_check<=? ORDER BY next_check,job_id LIMIT 1",(now,)).fetchone()
     reserved = {r['vmid'] for r in con.execute('SELECT vmid FROM job_waits')}
-    for row in con.execute("SELECT id,action,payload FROM jobs WHERE status='queued' ORDER BY created,id"):
+    for row in con.execute("SELECT id,action,payload,created FROM jobs WHERE status='queued' ORDER BY created,id"):
         if due and prefer_probe: break
         if reserved:
             ids = target_ids(decode(row['payload']))
@@ -50,7 +51,7 @@ def claim(con, decode, now, prefer_probe):
         return row, None
     if due:
         # Keep status waiting during the read-only check. A crash here repeats just that check.
-        return con.execute('SELECT id,action,payload FROM jobs WHERE id=?',(due['job_id'],)).fetchone(), due
+        return con.execute('SELECT id,action,payload,created FROM jobs WHERE id=?',(due['job_id'],)).fetchone(), due
     return None, None
 
 
