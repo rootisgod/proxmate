@@ -190,6 +190,14 @@ def test_ubuntu_uses_generated_key_and_seed_iso_without_snippets(simple_lab):
     assert cfg['bootstrap']['seed_storage']=='local' and 'snippet_storage' not in cfg['bootstrap']
     assert cfg['ssh_key'].startswith('ssh-ed25519 ')
     assert 'PRIVATE KEY' not in r.text and 'PRIVATE KEY' in plan['credential']['private_key']
+    key=cfg['ssh_key']
+    request=dict(os='ubuntu',name='workstation',username='ubuntu',ssh_public_key=key+' my-laptop')
+    accepted=c.post('/api/simple/plan',json=request,headers=h)
+    assert accepted.status_code==200,accepted.json
+    keys=app.manager.load_plan(accepted.json['id'])['configs'][0]['ssh_key'].splitlines()
+    assert len(keys)==2 and keys[1]==key and keys[0]!=key
+    assert c.post('/api/simple/plan',headers=h,json=dict(request,ssh_public_key=key+'\n'+key)).status_code==400
+    assert c.post('/api/simple/plan',headers=h,json=dict(request,ssh_public_key='private key')).status_code==400
 
 
 @pytest.mark.parametrize('change',[{'edition':2},{'count':0},{'count':21},{'name':'existing','count':1},{'storage':'missing'},{'bridge':'missing'},{'password':''},{'purpose':'template','count':3}])

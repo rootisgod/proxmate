@@ -173,7 +173,7 @@ function collectSimple(){
     for(const key of ['common_program','windows_setting'])delete simpleDraft[key];
     simpleDraft.features=[...form.querySelectorAll('[name=feature]:checked')].map(i=>i.value);
     simpleDraft.scripts=[...form.querySelectorAll('[name=saved_script]:checked')].map(i=>i.value);
-    form.querySelectorAll('[data-script-param]').forEach(i=>{simpleDraft.script_params[i.dataset.scriptParam]=i.value});
+    form.querySelectorAll('[data-script-param]').forEach(i=>{simpleDraft.script_params[i.dataset.scriptParam]=paramValue(i)});
   }
 }
 
@@ -241,7 +241,9 @@ function softwareFields(d){
     const selected=(d.scripts||[]).includes(t.id);
     return '<div class="software-script"><label class="check"><input type="checkbox" name="saved_script" value="'+esc(t.id)+'" '+(selected?'checked':'')+'>'+esc(t.name)+'</label>'+
       '<div class="script-parameters" '+(selected?'':'hidden')+'>'+Object.entries(t.parameters||{}).map(([key,label])=>
-      '<label>'+esc(label)+'<input required '+scriptValueAttrs+(selected?'':' disabled')+' data-script-param="'+esc(t.id+':'+key)+'" value="'+esc(d.script_params?.[t.id+':'+key]??scriptInputValue(t.defaults,key)??'')+'"></label>').join('')+
+      '<label>'+esc(label)+paramControl(scriptInputValue(t.input_types,key),d.script_params?.[t.id+':'+key]??scriptInputValue(t.defaults,key),
+        'data-script-param="'+esc(t.id+':'+key)+'"'+(selected?'':' disabled'),
+        [...(d.source_kind==='template'?[]:simpleOptions.iso_setup_letters||[]),...(d.data_disks||[]).map(disk=>disk.letter)])+'</label>').join('')+
       '</div><details><summary>View source</summary><pre>'+esc(t.body)+'</pre></details></div>';
   }).join('')+(saved.length?'':'<p>Add scripts in the Script library to use them here.</p>')]);
   const preferred=d.software_section||(d.scripts?.length?'scripts':'');
@@ -260,7 +262,7 @@ function bindSoftware(root,d){
   function counts(){
     for(const button of buttons){
       const pane=paneFor(button);
-      let count=pane.querySelectorAll('input[type=checkbox]:checked:not(:disabled)').length;
+      let count=pane.querySelectorAll('input[type=checkbox]:checked:not(:disabled,[data-script-param])').length;
       const packages=pane.querySelector('[name=packages]');
       if(packages&&!packages.disabled){
         const names=[...pane.querySelectorAll('[name=common_program]:checked')].map(i=>i.value);
@@ -291,7 +293,7 @@ function bindSoftware(root,d){
     if(e.target.name==='saved_script'){
       const params=e.target.closest('.software-script').querySelector('.script-parameters');
       params.hidden=!e.target.checked;
-      for(const input of params.querySelectorAll('input'))input.disabled=params.hidden;
+      for(const input of params.querySelectorAll('[data-script-param]'))input.disabled=params.hidden;
     }
     counts();
   };
@@ -403,7 +405,8 @@ function drawSimple(){
       '<div class="machine-name-count">'+wf('name','Machine name',d.name,'text','required maxlength="12" pattern="[A-Za-z][A-Za-z0-9\\-]{0,11}"')+
       (d.purpose==='vm'?wf('count','Quantity',d.count,'number','required min="1" max="20"'):'')+'</div><small id="batch-names" hidden></small>'+
       (d.os==='windows'?wf('password','Administrator password',d.password,'password','required minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"'):
-        wf('username','SSH login name',d.username,'text','required pattern="[a-z_][a-z0-9_\\-]{0,31}"'))+
+        wf('username','SSH login name',d.username,'text','required pattern="[a-z_][a-z0-9_\\-]{0,31}"')+
+        wf('ssh_public_key','Your SSH public key (optional)',d.ssh_public_key||'','text','maxlength="8192" placeholder="ssh-ed25519 …"'))+
       '</section><section aria-labelledby="machine-source"><h3 id="machine-source">Installation source</h3>'+
       (d.os==='windows'?windowsSourceFields(d):
         ws('profile','Ubuntu version',Object.entries(simpleOptions.profiles),d.profile)+'<p class="subtle">Proxmate uses the official Ubuntu cloud image and generates an SSH key for this login.</p>')+'</section>';

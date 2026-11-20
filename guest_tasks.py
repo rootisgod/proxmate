@@ -16,6 +16,8 @@ import yaml
 from script_library import EXAMPLES, validate_script
 
 
+SERVICE_STATE_INPUT = {'state': {'type': 'choice', 'choices': ['started', 'stopped', 'restarted']}}
+
 BUILTINS = [
     dict(id='install-chocolatey', name='Install Chocolatey', platform='windows', description='Install the Chocolatey package manager.', parameters={}),
     dict(id='chocolatey-package', name='Install a Chocolatey package', platform='windows', description='Install a named package without allowing checksum bypass.', parameters={'package': 'Package ID, e.g. 7zip'}),
@@ -27,9 +29,45 @@ BUILTINS = [
     dict(id='windows-updates', name='Install Windows updates', platform='windows', description='Install security and critical updates. Does not reboot automatically.', parameters={}),
     dict(id='linux-package', name='Install a Linux package', platform='linux', description='Install using the guest package manager. Requires sudo.', parameters={'package': 'Package name, e.g. curl'}),
     dict(id='linux-updates', name='Update Linux packages', platform='linux', description='Refresh metadata and upgrade packages on Ubuntu, Fedora or Rocky. Does not reboot.', parameters={}),
-    dict(id='linux-service', name='Manage a Linux service', platform='linux', description='Start, stop or restart a service. Requires sudo.', parameters={'service': 'Service name', 'state': 'started, stopped or restarted'}),
-    dict(id='windows-service', name='Manage a Windows service', platform='windows', description='Start, stop or restart a service.', parameters={'service': 'Service name', 'state': 'started, stopped or restarted'}),
+    dict(id='linux-service', name='Manage a Linux service', platform='linux', description='Start, stop or restart a service. Requires sudo.', parameters={'service': 'Service name', 'state': 'Service action'}, input_types=SERVICE_STATE_INPUT),
+    dict(id='windows-service', name='Manage a Windows service', platform='windows', description='Start, stop or restart a service.', parameters={'service': 'Service name', 'state': 'Service action'}, input_types=SERVICE_STATE_INPUT),
 ] + EXAMPLES
+
+PLAIN_VALUE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}')
+
+
+def input_type_schema(parameters, defaults, types, platform):
+    if not isinstance(types,dict) or set(types)-set(parameters):
+        raise ValueError('Specify input types only for declared variables')
+    for key, spec in types.items():
+        if not isinstance(spec,dict) or spec.get('type') not in ('text','choice','boolean','drive'):
+            raise ValueError('Invalid input type for '+key)
+        kind=spec['type']
+        if set(spec) != ({'type','choices'} if kind=='choice' else {'type'}):
+            raise ValueError('Unexpected input settings for '+key)
+        if kind=='choice':
+            choices=spec['choices']
+            if (not isinstance(choices,list) or not 1<=len(choices)<=50 or
+                    not all(isinstance(v,str) and PLAIN_VALUE.fullmatch(v) for v in choices) or len(set(choices))!=len(choices)):
+                raise ValueError('Supply 1–50 unique plain choices for '+key)
+        if kind=='drive' and platform!='windows':
+            raise ValueError('Drive-letter inputs require a Windows script')
+        if key in defaults: validate_input(key, defaults[key], spec)
+    return types
+
+
+def validate_input(key,value,spec):
+    if not isinstance(value,str) or not PLAIN_VALUE.fullmatch(value):
+        raise ValueError('Invalid task parameter: '+key)
+    kind=spec.get('type')
+    if kind=='choice' and value not in spec['choices']: raise ValueError('Choose a listed value for '+key)
+    if kind=='boolean' and value not in ('true','false'): raise ValueError('Choose yes or no for '+key)
+    if kind=='drive' and not re.fullmatch('[D-Z]',value): raise ValueError('Choose a drive letter from D to Z for '+key)
+
+
+def selected_drive_letters(selections):
+    return {s['params'][key] for s in selections for key,spec in s['item'].get('input_types',{}).items()
+            if spec['type']=='drive'}
 
 
 def script_parameters(schema, defaults):
@@ -39,7 +77,7 @@ def script_parameters(schema, defaults):
         if not re.fullmatch(r'[a-z][a-z0-9_]{0,39}',key) or not isinstance(label,str) or not 1<=len(label.strip())<=100:
             raise ValueError('Give each input a lowercase name and a short label')
     for value in defaults.values():
-        if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}',value):
+        if not isinstance(value,str) or not PLAIN_VALUE.fullmatch(value):
             raise ValueError('Use a single plain value for each input default')
     return schema,defaults
 
@@ -48,8 +86,7 @@ def compile_task(item, params):
     if not isinstance(params, dict) or set(params) != set(item.get('parameters', {})):
         raise ValueError('Supply exactly the parameters listed for ' + item['name'])
     for key, value in params.items():
-        if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}', value):
-            raise ValueError('Invalid task parameter: ' + key)
+        validate_input(key,value,item.get('input_types',{}).get(key,{}))
     if item['id'] in ('linux-service','windows-service') and 'state' in params and params['state'] not in ('started', 'stopped', 'restarted'):
         raise ValueError('Service state must be started, stopped or restarted')
     ident = item['id']
@@ -95,7 +132,8 @@ def compile_task(item, params):
     # not an untrusted multi-tenant execution sandbox.
     tasks=validate_script(item['body'])
     if params:
-        for task in tasks: task['vars']={'proxmate_inputs':dict(params)}
+        inputs={k:(v=='true' if item.get('input_types',{}).get(k,{}).get('type')=='boolean' else v) for k,v in params.items()}
+        for task in tasks: task['vars']={'proxmate_inputs':inputs}
     return tasks
 
 

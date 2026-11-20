@@ -241,9 +241,13 @@ nav :focus-visible { outline-offset: -3px; }
 .script-workbench .cm-search input,.script-workbench .cm-search button { display:inline-block;width:auto;margin:2px;padding:2px 4px }
 .script-inputs { min-width:0;margin:16px 0 0;padding:10px 12px 12px;border:1px solid var(--line);border-radius:8px }
 .script-inputs legend { padding:0 5px;font-weight:650 }
-.script-input-row { display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:10px;align-items:start;padding:6px 0 }
+.script-input-row { display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:10px;align-items:start;padding:6px 0 }
 .script-input-row label { margin:0 0 4px;line-height:1.25rem }
-.script-input-row input,.script-input-row button { height:36px;margin:0;padding:6px 9px }
+.script-input-row input,.script-input-row select,.script-input-row button { height:36px;margin:0;padding:6px 9px }
+.script-input-row .input-choices { grid-column:1/-1 }
+.script-input-row input[type=checkbox] { width:20px;accent-color:var(--teal) }
+.toast-remote-actions { display:flex;flex-wrap:wrap;gap:4px;max-height:8rem;overflow:auto }
+#machine-remote:empty { display:none }
 .script-input-row button { margin-top:calc(1.25rem + 4px) }
 .script-input-row input[aria-invalid=true] { border-color:#a02929 }
 .script-input-row .input-error { display:block;margin-top:3px;color:#a02929 }

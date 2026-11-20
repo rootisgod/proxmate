@@ -25,10 +25,30 @@ function scriptInputValue(values,key) {
   return values && Object.hasOwn(values,key) ? values[key] : undefined;
 }
 
+function paramValue(control){
+  return control.type==='checkbox'?String(control.checked):control.value;
+}
+
+function paramControl(spec,value,attrs,occupied=[],required=true){
+  const kind=spec?.type;
+  if(kind==='boolean')return '<input type="checkbox" '+attrs+(value==='true'?' checked':'')+'>';
+  const needed=required?' required':'';
+  if(kind==='choice'||kind==='drive'){
+    const choices=kind==='drive'?[...'DEFGHIJKLMNOPQRSTUVWXYZ']:spec.choices;
+    return '<select '+attrs+needed+'><option value="">'+(required?'Choose…':'No default')+'</option>'+
+      choices.map(v=>{
+        const used=kind==='drive' && occupied.includes(v);
+        return '<option value="'+esc(v)+'"'+(used?' disabled':value===v?' selected':'')+'>'+esc(v)+
+          (kind==='drive'?':':'')+(used?' — in use':'')+'</option>';
+      }).join('')+'</select>';
+  }
+  return '<input '+scriptValueAttrs+' '+attrs+needed+' value="'+esc(value??'')+'">';
+}
+
 function bindScriptInputs(grid,record,edited) {
   const rows=grid.querySelector('[data-input-rows]'), add=grid.querySelector('[data-add-input]');
   let nextId=0;
-  function addRow(key='',label='',value='') {
+  function addRow(key='',label='',value='',spec={type:'text'}) {
     const id='script-input-'+nextId++;
     function field(part,caption,initial,attrs) {
       const inputId=id+'-'+part;
@@ -39,8 +59,36 @@ function bindScriptInputs(grid,record,edited) {
     rows.insertAdjacentHTML('beforeend','<div class="script-input-row">'+
       field('key','Variable name',key,'required maxlength="40" pattern="[a-z][a-z0-9_]{0,39}" title="Start with a lowercase letter. Use lowercase letters, digits or underscores."')+
       field('label','Display label',label,'required maxlength="100"')+
-      field('value','Default (optional)',value,scriptValueAttrs)+
-      '<button type="button" data-remove-input>Remove</button></div>');
+      '<div><label for="'+id+'-type">Type</label><select id="'+id+'-type" data-input-type>'+
+      Object.entries({text:'Text',choice:'Dropdown',boolean:'Yes / no',drive:'Free drive letter'}).map(([k,v])=>
+        '<option value="'+k+'"'+(spec.type===k?' selected':'')+'>'+v+'</option>').join('')+'</select></div>'+
+      '<div data-default-box><label for="'+id+'-value">Default (optional)</label></div>'+
+      '<button type="button" data-remove-input>Remove</button>'+
+      '<div class="input-choices" hidden></div></div>');
+    const row=rows.lastElementChild,type=row.querySelector('[data-input-type]'),choicesBox=row.querySelector('.input-choices');
+    const defaultBox=row.querySelector('[data-default-box]');
+    const options=()=>choicesBox.querySelector('input')?.value.split(',').map(v=>v.trim()).filter(Boolean)||[];
+    function drawDefault(v){
+      const control=paramControl({type:type.value,choices:options()},v,'id="'+id+'-value" data-field="value" aria-describedby="'+id+'-value-error"',[],false);
+      defaultBox.querySelector('[data-field=value]')?.remove();
+      defaultBox.querySelector('small')?.remove();
+      defaultBox.insertAdjacentHTML('beforeend',control+'<small id="'+id+'-value-error" class="input-error" aria-live="polite"></small>');
+    }
+    function drawChoices(){
+      choicesBox.hidden=type.value!=='choice';
+      choicesBox.innerHTML=choicesBox.hidden?'':field('choices','Choices (comma separated)',(spec.choices||[]).join(', '),'required maxlength="6499"');
+      drawDefault(value);
+    }
+    type.onchange=()=>{value=paramValue(defaultBox.querySelector('[data-field=value]'));drawChoices();platformChanged();validate();edited()};
+    choicesBox.oninput=()=>drawDefault(defaultBox.querySelector('[data-field=value]').value);
+    drawChoices();
+    function platformChanged(){
+      const driveOption=type.querySelector('[value=drive]');
+      driveOption.disabled=grid.form.elements.platform.value!=='windows';
+      type.setCustomValidity(type.value==='drive'&&driveOption.disabled?'Free drive letters require Windows.':'');
+    }
+    platformChanged();
+    row.updatePlatform=platformChanged;
     add.disabled=rows.children.length>=20;
   }
   function validate() {
@@ -52,13 +100,19 @@ function bindScriptInputs(grid,record,edited) {
     for(const input of rows.querySelectorAll('input')){
       if(input.dataset.field==='label')
         input.setCustomValidity(input.value && !input.value.trim()?'Enter a display label.':'');
+      if(input.dataset.field==='choices'){
+        const options=input.value.split(',').map(v=>v.trim());
+        const valid=options.length<=50 && new Set(options).size===options.length && options.every(v=>/^[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}$/.test(v));
+        input.setCustomValidity(valid?'':'Enter 1–50 unique plain values, separated by commas.');
+      }
+      if(!input.nextElementSibling)continue;
       const invalid=input.dataset.touched && !input.validity.valid;
       input.setAttribute('aria-invalid',String(Boolean(invalid)));
       const error=invalid?(input.validity.patternMismatch?input.title:input.validationMessage):'';
       if(input.nextElementSibling.textContent!==error)input.nextElementSibling.textContent=error;
     }
   }
-  for(const [key,label] of Object.entries(record.parameters||{}))addRow(key,label,scriptInputValue(record.defaults,key));
+  for(const [key,label] of Object.entries(record.parameters||{}))addRow(key,label,scriptInputValue(record.defaults,key),scriptInputValue(record.input_types,key));
   add.onclick=()=>{
     addRow();
     rows.lastElementChild.querySelector('input').focus();
@@ -78,14 +132,16 @@ function bindScriptInputs(grid,record,edited) {
   rows.addEventListener('invalid',showError,true);
   return () => {
     validate();
-    const parameters=Object.create(null), defaults=Object.create(null);
+    const parameters=Object.create(null), defaults=Object.create(null), input_types=Object.create(null);
     if(!grid.disabled)for(const row of rows.children){
       const key=row.querySelector('[data-field=key]').value;
       parameters[key]=row.querySelector('[data-field=label]').value.trim();
-      const value=row.querySelector('[data-field=value]').value;
+      const type=row.querySelector('[data-input-type]').value;
+      if(type!=='text')input_types[key]=type==='choice'?{type,choices:row.querySelector('[data-field=choices]').value.split(',').map(v=>v.trim())}:{type};
+      const value=paramValue(row.querySelector('[data-field=value]'));
       if(value)defaults[key]=value;
     }
-    return {parameters,defaults};
+    return {parameters,defaults,input_types};
   };
 }
 
@@ -127,6 +183,7 @@ function editScript(record={}) {
     if (platform.value==='windows' && kind.value==='shell') kind.value='powershell';
     shell.disabled = platform.value==='windows';
     grid.hidden=grid.disabled=kind.value!=='ansible';
+    for(const row of grid.querySelectorAll('.script-input-row'))row.updatePlatform();
     form.querySelector('.script-runtime').hidden = !(platform.value==='linux' && kind.value==='powershell');
     editor?.language(kind.value);
   }

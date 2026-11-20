@@ -621,6 +621,23 @@
             "type": "string",
             "maxLength": 100000,
             "description": "Trusted administrator script; Ansible format is a restricted list of guest tasks, not a full playbook."
+          },
+          "parameters": {
+            "type": "object",
+            "maxProperties": 20,
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "defaults": {
+            "type": "object",
+            "maxProperties": 20,
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "input_types": {
+            "$ref": "#/components/schemas/ScriptInputTypes"
           }
         },
         "required": [
@@ -1383,7 +1400,95 @@
           "target": {
             "type": "object",
             "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
+          },
+          "remote_kind": {
+            "type": "string",
+            "enum": [
+              "rdp",
+              "ssh"
+            ],
+            "description": "Connection shortcut candidate for a successful guided VM build. Resolve it using the job ID and target on the selected server."
           }
+        }
+      },
+      "ScriptInputTypes": {
+        "type": "object",
+        "description": "Optional per-variable metadata. Unspecified variables use text. Windows drive inputs select a currently unused letter D through Z.",
+        "maxProperties": 20,
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "text"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "choice"
+                  ]
+                },
+                "choices": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+@:-]{0,127}$"
+                  },
+                  "uniqueItems": true,
+                  "minItems": 1,
+                  "maxItems": 50
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "choices"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "boolean"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "drive"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "type"
+              ]
+            }
+          ]
         }
       }
     }
@@ -2945,6 +3050,11 @@
                         }
                       }
                     }
+                  },
+                  "ssh_public_key": {
+                    "type": "string",
+                    "maxLength": 8192,
+                    "description": "Optional workstation OpenSSH public key for a guided Ubuntu guest. Installed alongside the generated automation key."
                   }
                 },
                 "required": [
@@ -3155,6 +3265,7 @@
                       },
                       "parameters": {
                         "type": "object",
+                        "maxProperties": 20,
                         "additionalProperties": {
                           "type": "string"
                         }
@@ -3164,6 +3275,16 @@
                         "additionalProperties": {
                           "type": "string"
                         }
+                      },
+                      "defaults": {
+                        "type": "object",
+                        "maxProperties": 20,
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      "input_types": {
+                        "$ref": "#/components/schemas/ScriptInputTypes"
                       }
                     }
                   },
@@ -3731,6 +3852,225 @@
           },
           "401": {
             "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/simple/machine/remote-access": {
+      "post": {
+        "summary": "Resolve current desktop or SSH access for a running VM by machine identity or successful build ID",
+        "description": "The saved address must still belong to the guest. Otherwise the service prefers addresses on a NIC configured in Proxmox, then IPv4. If multiple candidates remain, select an address in Refresh connection.",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "vmid": {
+                    "type": "integer"
+                  },
+                  "identity": {
+                    "type": "string"
+                  },
+                  "job_id": {
+                    "type": "string"
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "identity"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "job_id"
+                    ]
+                  }
+                ],
+                "required": [
+                  "node",
+                  "vmid"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Guest discovery result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "rdp"
+                          ]
+                        },
+                        "host": {
+                          "type": "string"
+                        },
+                        "port": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "host",
+                        "port"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "ssh"
+                          ]
+                        },
+                        "host": {
+                          "type": "string"
+                        },
+                        "port": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "command": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "host",
+                        "port",
+                        "command"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            null
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        }
+      }
+    },
+    "/api/simple/drive-letters": {
+      "post": {
+        "summary": "Discover the union of occupied drive letters on the selected Windows guests",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Target"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "targets"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Guest discovery result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "occupied": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Z]$"
+                      }
+                    }
+                  },
+                  "required": [
+                    "occupied"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
           }
         }
       }

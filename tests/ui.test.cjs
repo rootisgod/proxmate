@@ -1037,6 +1037,63 @@ test('Ansible input rows preserve existing settings and validate additions befor
   }finally{f.close()}
 });
 
+test('typed library inputs round trip from editor to the operations review',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    const record={id:'typed',name:'Typed script',platform:'windows',kind:'ansible',body:'- ansible.windows.win_file: {}',
+      parameters:{action:'Action',enabled:'Enable',letter:'Free drive letter'},
+      input_types:{action:{type:'choice',choices:['start','stop']},enabled:{type:'boolean'},letter:{type:'drive'}},
+      defaults:{action:'start',enabled:'false',letter:'D'}};
+    f.records.tasks.push(record);
+    f.records.connections.push({node:'pve',vmid:201,platform:'windows'});
+    const original=w.fetch;let saved;
+    w.fetch=async(url,opts)=>{
+      if(url==='/api/simple/drive-letters')return {ok:true,json:async()=>({occupied:['C','D']})};
+      if(url==='/api/manage/tasks/check')return {ok:true,json:async()=>({valid:true})};
+      if(url==='/api/manage/tasks' && opts?.body)saved=JSON.parse(opts.body);
+      return original(url,opts);
+    };
+    doc.querySelector('[data-view=scripts]').click();await f.settle();
+    doc.querySelector('[data-record=typed][data-mg=edit-tasks]').click();
+    const form=doc.querySelector('#manage-form');
+    assert.deepEqual([...form.querySelectorAll('[data-input-type]')].map(el=>el.value),['choice','boolean','drive']);
+    form.requestSubmit();await f.settle();
+    assert.deepEqual(saved.input_types,record.input_types);assert.deepEqual(saved.defaults,record.defaults);
+    doc.querySelector('[data-simple-task=typed]').click();form.querySelector('[name=target]').click();
+    form.requestSubmit();await f.settle();
+    const param=k=>form.querySelector('[data-run-param='+k+']');
+    assert.equal(param('action').tagName,'SELECT');param('action').value='stop';
+    assert.equal(param('enabled').type,'checkbox');param('enabled').click();
+    assert.ok(param('letter').querySelector('[value=D]').disabled);assert.equal(param('letter').value,'');
+    param('letter').value='G';form.requestSubmit();await f.settle();
+    const request=f.calls.find(([url])=>url==='/api/simple/existing-plan')[1];
+    assert.deepEqual(request.tasks,[{id:'typed',params:{action:'stop',enabled:'true',letter:'G'}}]);
+  }finally{f.close()}
+});
+
+test('completed build shortcuts resolve the original job again before exporting a connection',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    let details,blob,filename;
+    const original=w.fetch;
+    w.fetch=async(url,opts)=>{
+      if(url==='/api/simple/machine/remote-access'){
+        details=JSON.parse(opts.body);
+        return {ok:true,json:async()=>({kind:'rdp',host:'2001:db8::9',port:3391})};
+      }
+      return original(url,opts);
+    };
+    w.URL.createObjectURL=b=>{blob=b;return 'blob:rdp'};w.URL.revokeObjectURL=()=>{};
+    w.HTMLAnchorElement.prototype.click=function(){filename=this.download};
+    w.eval("selectNotifications(serverInfo.id);announceJobs([{action:'simple',id:'done',server_id:serverInfo.id,remote_kind:'rdp',target:{node:'pve',vmid:201,name:'demo'}}],'succeeded')");
+    const button=doc.querySelector('.toast-remote-actions button');assert.equal(button.textContent,'Open desktop');
+    button.click();await f.settle();
+    assert.deepEqual(details,{node:'pve',vmid:201,job_id:'done'});assert.equal(filename,'demo.rdp');
+    const text=await new Promise(resolve=>{const reader=new w.FileReader();reader.onload=()=>resolve(reader.result);reader.readAsText(blob)});
+    assert.match(text,/full address:s:\[2001:db8::9\]:3391\r\n/);assert.doesNotMatch(text,/password|username/i);
+  }finally{f.close()}
+});
+
 test('editor checks drafts, keeps an invalid copy open, and saves a corrected copy',async()=>{
   const f=await fixture({},true),{w}=f;
   try{

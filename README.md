@@ -20,6 +20,8 @@ Upgrade from environment-based configuration: retain the existing `.env` and `.e
 
 ## Build machines
 
+For a guided Ubuntu VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Ubuntu in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
+
 After connecting, **Operations** lists the discovered VMs across the cluster. Search by name, node or VM ID, or filter by power state. While the inventory is open, Proxmate refreshes cluster resources about once a minute. **Create** offers Windows Server and Ubuntu wizards for working VMs and reusable templates. On a multi-node cluster, the wizard prefers the node reached through the verified SSH connection.
 
 1. Choose **Working machines** or **A reusable template**, then enter the name and quantity. When cloning a Windows machine, choose a stopped, Sysprep-generalized Windows Server template with the QEMU guest agent installed. Set the new Administrator password. The **Clone** action under **Create → Available templates** also opens this wizard for Windows guests. A full copy is independent. A linked copy uses its template’s base disks. Proxmate applies the chosen name inside Windows on first boot.
@@ -79,6 +81,8 @@ The advanced wizard’s raw XML download and the job’s original-file download 
 Built-ins cover Chocolatey installation/packages, RDP with NLA, separate Windows firewall disabling/enabling, Windows security/critical updates, Linux packages/updates and Windows/Linux services. Firewall disabling is never bundled with RDP. Updates do not automatically reboot. Chocolatey can require .NET 4.8 and Internet/package-repository access inside the guest.
 
 Open **Script library** to start from Windows or Linux Ansible and PowerShell examples, or a Linux shell example. **Open example** opens an editable copy. The editor supports highlighting, line numbers, find and replace, indentation and undo. Use **Check syntax** (Ctrl/Cmd+Enter) while editing or **Save script** (Ctrl/Cmd+S) to check and save. Diagnostics include a line and column when the parser can locate the error.
+
+In **Ansible inputs**, choose **Text**, **Dropdown**, **Yes / no**, or **Free drive letter**. Enter the allowed dropdown values separated by commas. A yes/no input becomes a boolean in the playbook. The built-in Windows and Linux service tasks use a dropdown for their action. Operations disables letters used by any selected Windows VM. During creation the picker shows known setup and disk reservations, and the worker checks the running guest immediately before executing the script.
 
 Proxmate checks Ansible YAML and supported guest modules, uses the PowerShell language parser, and checks POSIX shell syntax with `sh -n`. Runtime dependencies and guest permissions are checked during the actual run. Linux PowerShell scripts require `pwsh` on the target. Docker builds and serves the editor assets locally. For a source checkout, run `npm ci` and `npm run build:editor` to build the same assets.
 

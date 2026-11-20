@@ -208,6 +208,10 @@ def job_view(row, detail_db=None):
         result['operation']=plan.get('operation',payload['action'])
         target=plan.get('config',plan)
         result['target']={k:target[k] for k in ('node','vmid','name','label','archive') if k in target}
+        if payload['action']=='simple' and result['status']=='succeeded' and plan.get('purpose')=='vm':
+            if target.get('kind')=='linux-cloud': result['remote_kind']='ssh'
+            elif target.get('windows',{}).get('rdp') or any(t.get('item',{}).get('id')=='enable-rdp' for t in plan.get('tasks',[])):
+                result['remote_kind']='rdp'
         if detail_db is not None and payload['action']=='manage' and result['status']=='failed':
             targets = connection_recovery_targets(plan, result['log'])
             if targets:
@@ -467,7 +471,7 @@ def connection_boundary():
 
     # A guided login may take a transport timeout. Keep the selected server pinned
     # while allowing unrelated inventory, job and record requests to proceed.
-    if request.endpoint in ('machine_details','machine_connect','machine_backup','winrm_review','editions','options') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
+    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
         server.machine_requests += 1
         g.machine_request = True
         g.connection_locked = False

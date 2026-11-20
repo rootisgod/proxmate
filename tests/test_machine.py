@@ -1,4 +1,7 @@
+import base64
 import ssl
+import shutil
+import subprocess
 import time
 from contextlib import nullcontext
 
@@ -10,6 +13,33 @@ from test_lifecycle import recovery
 
 TARGET=dict(node='pve',vmid=201)
 PUBLIC_PEM='-----BEGIN CERTIFICATE-----\nZ3Vlc3Q=\n-----END CERTIFICATE-----'
+
+
+def test_rdp_listener_uses_local_setting_when_policy_value_is_absent():
+    shell=shutil.which('pwsh') or shutil.which('powershell')
+    if not shell: pytest.skip('PowerShell is required to exercise the Windows listener probe')
+    script="""
+function Get-ItemProperty { [PSCustomObject]$script:policy }
+function Get-ItemPropertyValue {
+    param($Path,$Name)
+    if ($Path -like '*Policies*') { throw 'Missing policy value' }
+    if ($Name -eq 'PortNumber') { return 3391 }
+    if ($Name -eq 'fDenyTSConnections') { return 0 }
+    throw 'Unexpected property'
+}
+function Get-Service { [PSCustomObject]@{Status='Running'} }
+function Probe {
+"""+machine.RDP_LISTENER+"""
+}
+$script:policy=@{}
+Probe
+$script:policy=@{fDenyTSConnections=1}
+Probe
+"""
+    encoded=base64.b64encode(script.encode('utf-16le')).decode()
+    result=subprocess.run([shell,'-NoProfile','-NonInteractive','-EncodedCommand',encoded],
+                          capture_output=True,text=True,timeout=10,check=True)
+    assert result.stdout.splitlines()==['3391','disabled']
 
 
 def details(client,headers):
@@ -44,6 +74,63 @@ def windows_listener(fake, monkeypatch):
         return b'guest'
     monkeypatch.setattr(machine, 'tls_peer', tls_peer)
     return read
+
+
+@pytest.mark.parametrize('platform',['linux','windows'])
+def test_remote_access_uses_live_ip_and_identity_and_returns_no_secret(recovery,monkeypatch,platform):
+    app,c,h,fake=recovery
+    fake.guests[201]['status']='running'
+    fake.configs[201]['ostype']='win11' if platform=='windows' else 'l26'
+    if platform=='windows':
+        base=fake.call
+        fake.call=lambda method,path,**kw: {'result':{'id':'mswindows'}} if path.endswith('get-osinfo') else base(method,path,**kw)
+    identity=details(c,h)['identity']
+    cred=app.manager.save('credentials',dict(name='Login',platform=platform,username='labuser',password='secret123'))
+    binding=app.manager.prepare('connections',dict(TARGET,platform=platform,credential_id=cred['id'],
+        host='192.0.2.99',port=2222,fingerprint='SHA256:'+'x'*43))
+    app.manager.put('connections',dict(binding,machine_identity=identity))
+    monkeypatch.setattr(machine.winrm_setup,'agent_script',lambda *a:'3391')
+    route='/api/simple/machine/remote-access'
+    body=dict(TARGET,identity=identity)
+    result=c.post(route,json=body,headers=h)
+    assert result.status_code==200,result.json
+    if platform=='linux':
+        assert result.json==dict(kind='ssh',host='192.0.2.20',port=2222,command='ssh -p 2222 -l labuser 192.0.2.20')
+    else:
+        assert result.json==dict(kind='rdp',host='192.0.2.20',port=3391)
+        monkeypatch.setattr(machine.winrm_setup,'agent_script',lambda *a:'disabled')
+        assert c.post(route,json=body,headers=h).json=={'kind':None}
+    assert c.post(route,json=body).status_code==401
+    assert c.post(route,json=body,headers=dict(h,**{'X-Proxmate-Server':'old'})).status_code==409
+    job=dict(action='simple',server_id=app.server.current()['id'],plan=dict(purpose='vm',
+             config=dict(TARGET,name='built',kind='linux-cloud' if platform=='linux' else 'windows',windows={'rdp':True})))
+    app.manager.put('builds',dict(TARGET,id='finished',machine_identity=identity))
+    with app.db() as con:
+        con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',('finished','simple','succeeded',1,2,app.encode_payload(job),'done'))
+    summary=c.get('/api/jobs?summary=1',headers=h).json[0]
+    assert summary['remote_kind']==('ssh' if platform=='linux' else 'rdp')
+    assert c.post(route,json=dict(TARGET,job_id='finished'),headers=h).status_code==200
+    fake.configs[201]['smbios1']='uuid=replaced'
+    assert c.post(route,json=dict(TARGET,job_id='finished'),headers=h).status_code==400
+    assert c.post(route,json=body,headers=h).status_code==400
+    assert not fake.writes
+
+
+def test_shortcut_prefers_proxmox_adapter_over_guest_bridges(recovery):
+    _,client,headers,fake=recovery
+    setup_guest(fake,'linux')
+    original=fake.call
+    nic={'name':'ens18','hardware-address':'aa:bb:cc:dd:ee:ff','ip-addresses':[{'ip-address':'192.0.2.21'}]}
+    bridge={'name':'docker0','hardware-address':'aa:00:00:00:00:01','ip-addresses':[{'ip-address':'172.17.0.1'}]}
+    def read(method,path,**kwargs):
+        if path.endswith('/network-get-interfaces'): return {'result':[bridge,nic]}
+        return original(method,path,**kwargs)
+    fake.call=read
+    body=dict(TARGET,identity=details(client,headers)['identity'])
+    route='/api/simple/machine/remote-access'
+    assert client.post(route,json=body,headers=headers).json['command']=='ssh 192.0.2.21'
+    nic['ip-addresses'].append({'ip-address':'192.0.2.22'})
+    assert 'select a current guest address' in client.post(route,json=body,headers=headers).json['error']
 
 
 def test_connection_refresh_rechecks_the_vm_from_the_failed_job(recovery):

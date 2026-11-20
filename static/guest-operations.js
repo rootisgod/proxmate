@@ -126,7 +126,7 @@ function scriptRunForm(context,draft) {
     '<div id="run-setup"></div>',async()=>{
     if(!draft.os)throw Error('Choose the guest operating system.');
     const form=$('#manage-form'),fields=form.elements;
-    const params=Object.fromEntries([...form.querySelectorAll('[data-run-param]')].map(el=>[el.dataset.runParam,el.value]));
+    const params=Object.fromEntries([...form.querySelectorAll('[data-run-param]')].map(el=>[el.dataset.runParam,paramValue(el)]));
     const payload={targets};
     let source='';
     if(draft.mode==='library'){
@@ -153,10 +153,33 @@ function scriptRunForm(context,draft) {
       reviewGuestOperation(plan,()=>openScriptRun(guests,draft.mode==='library'?draft.script:'',draft),source);
   },'Review run');
   const setup=$('#run-setup');
-  function renderParams(parameters,values) {
+  let driveRequest;
+  function renderParams(parameters,values,types={}) {
     const entries=Object.entries(parameters);
-    $('#run-params').innerHTML=entries.length?'<fieldset><legend>Parameters</legend><div class="form-grid">'+entries.map(([key,label])=>
-      '<label>'+esc(label)+'<input required '+scriptValueAttrs+' data-run-param="'+esc(key)+'" value="'+esc(scriptInputValue(values,key)??'')+'"></label>').join('')+'</div></fieldset>':'';
+    const box=$('#run-params');
+    box.innerHTML=entries.length?'<fieldset><legend>Parameters</legend><div class="form-grid">'+entries.map(([key,label])=>
+      '<label>'+esc(label)+paramControl(scriptInputValue(types,key),scriptInputValue(values,key),'data-run-param="'+esc(key)+'"')+'</label>').join('')+'</div></fieldset>':'';
+    const drives=[...box.querySelectorAll('[data-run-param]')].filter(el=>scriptInputValue(types,el.dataset.runParam)?.type==='drive');
+    if(!drives.length)return;
+    for(const el of drives)el.innerHTML='<option value="">Checking drive letters…</option>';
+    const retry=document.createElement('button');retry.type='button';retry.textContent='Retry drive discovery';retry.hidden=true;box.append(retry);
+    async function loadLetters(){
+      retry.hidden=true;
+      try{
+        driveRequest??=api('simple/drive-letters',{targets});
+        const {occupied}=await driveRequest;
+        if(!retry.isConnected)return;
+        for(const el of drives){
+          const key=el.dataset.runParam;
+          el.outerHTML=paramControl(types[key],scriptInputValue(values,key),'data-run-param="'+esc(key)+'"',occupied);
+        }
+      }catch(err){
+        driveRequest=null;if(!retry.isConnected)return;
+        for(const el of drives)el.innerHTML='<option value="">Drive discovery unavailable</option>';
+        retry.hidden=false;$('#manage-error').textContent=err.message;
+      }
+    }
+    retry.onclick=()=>{$('#manage-error').textContent='';loadLetters()};loadLetters();
   }
   function scriptFields(){
     const holder=$('#run-script'), library=draft.mode==='library';
@@ -169,7 +192,7 @@ function scriptRunForm(context,draft) {
         const task=available.find(t=>t.id===select.value);
         if(select.value!==draft.script)draft.params={};
         draft.script=select.value;
-        renderParams(task?.parameters||{},{...task?.defaults,...draft.params});
+        renderParams(task?.parameters||{},{...task?.defaults,...draft.params},task?.input_types);
         $('#run-script-details').innerHTML=task?.body?'<details><summary>View script source</summary><pre class="run-source">'+esc(task.body)+'</pre></details>':'';
       };
       select.onchange=choose;choose();

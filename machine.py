@@ -1,5 +1,7 @@
 """Targeted machine details and authenticated, guest-agent-assisted connection setup."""
 import ipaddress
+import re
+import shlex
 import ssl
 import socket
 
@@ -8,16 +10,31 @@ from flask import jsonify, request
 import management
 import operations
 import diagnostics
+import winrm_setup
 from guest_tasks import run_guest
 from job_queue import target_ids
 from lifecycle import machine_identity, source_vmid, vm_path
 
 
-def guest_addresses(p, target):
-    return interface_addresses(p.call('GET', vm_path(target)+'/agent/network-get-interfaces'))
+RDP_LISTENER = r"""
+$ErrorActionPreference='Stop'
+$terminal='HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+$policy=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -ErrorAction SilentlyContinue).fDenyTSConnections
+if ($null -eq $policy) { $policy=Get-ItemPropertyValue -Path $terminal -Name fDenyTSConnections }
+if ($policy -ne 0 -or (Get-Service TermService).Status -ne 'Running') { 'disabled'; return }
+Get-ItemPropertyValue -Path "$terminal\WinStations\RDP-Tcp" -Name PortNumber
+"""
 
 
-def interface_addresses(data):
+def guest_addresses(p, target, config=None):
+    macs = set()
+    for key, value in (config or {}).items():
+        if re.fullmatch(r'net\d+', key):
+            macs.update(re.findall(r'(?:^|=)((?:[0-9a-f]{2}:){5}[0-9a-f]{2})(?:,|$)', str(value).lower()))
+    return interface_addresses(p.call('GET', vm_path(target)+'/agent/network-get-interfaces'), macs)
+
+
+def interface_addresses(data, vm_macs=()):
     addresses = {}
     for interface in data.get('result', []):
         for entry in interface.get('ip-addresses', []):
@@ -26,7 +43,9 @@ def interface_addresses(data):
                 host = management.address(str(ip))
             except (KeyError, ValueError):
                 continue
-            addresses.setdefault(host, dict(host=host, interface=interface.get('name','')))
+            address = addresses.setdefault(host, dict(host=host, interface=interface.get('name','')))
+            if (interface.get('hardware-address') or '').lower() in vm_macs:
+                address['vm_nic'] = True
     return list(addresses.values())
 
 
@@ -34,7 +53,7 @@ def discover(p, target, resource, config):
     reported = {}
     ips = []
     if resource.get('status')=='running':
-        try: ips = guest_addresses(p, target)
+        try: ips = guest_addresses(p, target, config)
         except RuntimeError: pass
         try: reported = p.call('GET', vm_path(target)+'/agent/get-osinfo').get('result',{})
         except RuntimeError: pass
@@ -155,6 +174,63 @@ def windows_trust(p, target, identity, binding, credential, previous, replaced, 
 
 
 def register(app, manager, lifecycle):
+    @app.post('/api/simple/machine/remote-access')
+    def machine_remote_access():
+        data=request.get_json()
+        target=management.target(data)
+        expected=data.get('identity')
+        if 'job_id' in data:
+            with manager.db() as con:
+                row=con.execute('SELECT status,payload FROM jobs WHERE id=?',(data['job_id'],)).fetchone()
+            job=manager.decode(row['payload']) if row else {}
+            build=manager.find('builds',data['job_id'])
+            if (not row or row['status']!='succeeded' or job.get('action')!='simple' or
+                    job.get('server_id')!=request.headers['X-Proxmate-Server'] or job['plan'].get('purpose')!='vm' or
+                    not build or management.target(build)!=target):
+                raise ValueError('This build has no finished machine on the selected server.')
+            expected=build['machine_identity']
+        p=operations.Proxmox()
+        resource,cfg=lifecycle.guest(p,target,False)
+        if not expected or expected!=stable_identity(cfg) or resource.get('status')!='running':
+            raise ValueError('The machine changed or stopped. Refresh it before connecting.')
+        details=discover(p,target,resource,cfg)
+        binding=manager.find('connections',management.target_id(target)) or {}
+        if binding.get('machine_identity')!=expected or binding.get('platform')!=details['platform']: binding={}
+        ips=[a['host'] for a in details['addresses']]
+        candidates=[a['host'] for a in details['addresses'] if a.get('vm_nic')] or ips
+        candidates=[ip for ip in candidates if ':' not in ip] or candidates
+        host=binding['host'] if binding.get('host') in ips else candidates[0] if len(candidates)==1 else None
+        if not host: raise ValueError('Refresh the connection and select a current guest address.')
+        if details['platform']=='windows':
+            port=winrm_setup.agent_script(p,target,expected,RDP_LISTENER)
+            if port=='disabled': return jsonify(kind=None)
+            port=management.number(port,1,65535)
+            result=dict(kind='rdp',host=host,port=port)
+        elif details['platform']=='linux':
+            credential=manager.find('credentials',binding.get('credential_id')) or {}
+            port=binding.get('port',22)
+            command=['ssh']
+            if port!=22: command+=['-p',str(port)]
+            if credential.get('username'): command+=['-l',credential['username']]
+            result=dict(kind='ssh',command=shlex.join([*command,host]),host=host,port=port)
+        else: return jsonify(kind=None)
+        management.endpoint_addresses(result)
+        if host not in {entry['host'] for entry in guest_addresses(p,target)}:
+            raise ValueError('The guest address changed. Refresh the machine before connecting.')
+        verify_identity(p,target,expected)
+        return jsonify(**result)
+
+    @app.post('/api/simple/drive-letters')
+    def discover_drive_letters():
+        targets=management.targets(request.get_json().get('targets'))
+        p=operations.Proxmox()
+        occupied=set()
+        for target in targets:
+            resource,cfg=lifecycle.guest(p,target,False)
+            if resource.get('status')!='running': raise ValueError('Start the selected machines to discover drive letters.')
+            occupied.update(winrm_setup.used_drive_letters(p,target,cfg))
+        return jsonify(occupied=sorted(occupied))
+
     @app.post('/api/simple/machine')
     def machine_details():
         data=request.get_json()

@@ -53,6 +53,8 @@ Review creates no VM. Compare the returned `machines`, `edition`, `tasks`, `data
 
 ## 3. Create and follow the job
 
+For Ubuntu, `POST /api/simple/plan` accepts an optional `ssh_public_key` containing one OpenSSH public key from the operator’s workstation. The build installs it alongside the generated automation key. Without a workstation key the operator needs another authorized login to connect from their own SSH client.
+
 When the operator authorizes the reviewed machines, software and Windows licensing, POST /api/simple/run with `{"plan_id":"<plan.id>","confirmed":true}`. If `plan.dangerous` is true, identify the flagged tasks and include `"risk_confirmed":true` only with authorization for those tasks.
 
 HTTP 202 returns one entry per machine in `jobs`. Save each `id`, `name` and `url`. If the response is lost, retry the same plan ID while it is valid to retrieve the same jobs. If execution is uncertain after expiry, reconcile the reviewed VM IDs and names with GET /api/jobs?summary=1 and GET /api/simple/resources before considering a new plan.
@@ -60,6 +62,10 @@ HTTP 202 returns one entry per machine in `jobs`. Save each `id`, `name` and `ur
 Poll each returned job URL with a short delay, backing off during Windows setup. Report the name, VM ID and job ID when queued. Report completion when the job reaches `succeeded`. On `failed` or `interrupted`, report the job ID and relevant error. The new VM can remain available for inspection.
 
 ## 4. Run a script on an existing VM
+
+After a successful guided VM build, a job summary may include `remote_kind` (`rdp` or `ssh`). POST /api/simple/machine/remote-access with the selected server header, the job target’s node and vmid, and `job_id`. From the machine page, use its current `identity` in place of the job ID. The server checks the running VM identity and guest-agent addresses. It prefers the current saved address, then an address on a Proxmox-configured network adapter. The response contains kind, host, port and, for SSH, a copyable command. Windows with RDP disabled returns a null kind. Use the operator’s own client credentials. Refresh the machine connection to resolve ambiguous addresses.
+
+Read each library task’s optional `input_types` from GET /api/manage/tasks along with its parameters and defaults. Each entry is keyed by the variable name. Supported declarations are `{"type":"text"}` (also the default), `{"type":"choice","choices":["started","stopped"]}`, `{"type":"boolean"}`, and Windows-only `{"type":"drive"}`. Submit plain strings in params. Yes/no uses `"true"` or `"false"` and reaches Ansible as a boolean. Unspecified boolean defaults are false. Drive values are single uppercase letters D through Z. Before reviewing an existing run, POST /api/simple/drive-letters with the selected server header and exact targets to discover the occupied letters across those VMs. Build reviews reject known setup and disk reservations. The worker rechecks current drive use before invoking a script. Verify the resolved values in the review and poll the job for success.
 
 GET /api/manage/tasks for each library script's ID, platform, parameters and defaults. POST /api/simple/existing-plan with the pinned server header, the exact targets, and either library tasks or one pasted script. For example, a Linux service run uses `{"targets":[{"node":"<node>","vmid":201}],"tasks":[{"id":"linux-service","params":{"service":"cron","state":"started"}}]}`. Replace the target and service with the requested values.
 

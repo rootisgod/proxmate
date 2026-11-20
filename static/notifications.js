@@ -8,11 +8,19 @@ function toastHost(){
   return host;
 }
 
-function showToast(message,{kind='info',jobId}={}){
+function showToast(message,{kind='info',jobId,remoteJobs=[],showTargetNames=false}={}){
   const host=toastHost(),card=document.createElement('div'),text=document.createElement('span');
   card.className='toast toast-'+kind;
   text.setAttribute('role',kind==='failure'?'alert':'status');
   card.append(text);host.append(card);text.textContent=message;
+  if(remoteJobs.length){
+    const actions=document.createElement('div');actions.className='toast-remote-actions';
+    for(const job of remoteJobs){
+      const {node,vmid,name}=job.target;
+      actions.append(remoteButton(job.remote_kind,{node,vmid,job_id:job.id},job.server_id,name,showTargetNames?name||String(vmid):''));
+    }
+    card.append(actions);
+  }
   if(jobId){
     const details=document.createElement('button');
     details.type='button';details.textContent='View log';
@@ -23,7 +31,7 @@ function showToast(message,{kind='info',jobId}={}){
   close.type='button';close.className='toast-close';close.setAttribute('aria-label','Dismiss notification');close.textContent='×';
   close.onclick=()=>card.remove();card.append(close);
   while(host.childElementCount>4)host.firstElementChild.remove();
-  const dismiss=()=>{if(!card.matches(':hover, :focus-within'))card.remove()};
+  const dismiss=()=>{if(!card.matches(':hover, :focus-within')&&!card.querySelector('button:disabled,[data-ssh-command]'))card.remove()};
   if(kind!=='failure'){
     setTimeout(dismiss,9000);
     card.addEventListener('focusout',()=>setTimeout(dismiss,9000));
@@ -54,7 +62,8 @@ function announceJobs(rows,status){
   const first=rows[0],single=rows.length===1;
   const label=first.target?.name||first.name||first.target?.vmid;
   const title=single?(first.action==='simple'?'Build':first.action||'Job')+(label?' · '+label:''):rows.length+' jobs';
-  showToast(title+' '+labels[status],{kind:['failed','interrupted','cancelled'].includes(status)?'failure':status==='succeeded'?'success':'info',jobId:single?first.id:null});
+  const remoteJobs=status==='succeeded'?rows.filter(j=>j.action==='simple' && j.server_id===notificationServer && ['rdp','ssh'].includes(j.remote_kind)):[];
+  showToast(title+' '+labels[status],{kind:['failed','interrupted','cancelled'].includes(status)?'failure':status==='succeeded'?'success':'info',jobId:single?first.id:null,remoteJobs,showTargetNames:!single});
 }
 
 function submittedBuilds(rows){

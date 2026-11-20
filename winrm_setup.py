@@ -1,6 +1,7 @@
 """Inspect a selected Windows guest and queue a fixed, scoped HTTPS listener setup."""
 import base64
 import ipaddress
+import json
 import re
 import time
 import uuid
@@ -80,6 +81,23 @@ def agent_script(p,target,identity,script):
             return result.get('out-data','').strip()
         time.sleep(.5)
     raise RuntimeError('Guest command timed out. Inspect Windows before retrying.')
+
+
+def used_drive_letters(p,target,config):
+    if not (config.get('smbios1') or config.get('vmgenid')):
+        raise ValueError('Guest identity is unavailable for drive discovery.')
+    probe = r"""$ErrorActionPreference='Stop'
+$letters=@([System.IO.Directory]::GetLogicalDrives() | ForEach-Object { $_.Substring(0,1) })
+ConvertTo-Json -Compress -InputObject $letters"""
+    result=json.loads(agent_script(p,target,machine_identity(config),probe))
+    if not isinstance(result,list) or not result or not all(isinstance(v,str) and re.fullmatch('[A-Z]',v) for v in result):
+        raise ValueError('Windows did not report its occupied drive letters.')
+    return set(result)
+
+
+def check_letters(letters,occupied):
+    conflicts=sorted(letters & occupied)
+    if conflicts: raise ValueError('Drive letter already in use or reserved: '+', '.join(conflicts)+'. Choose another letter.')
 
 
 def execute(manager,plan,log):

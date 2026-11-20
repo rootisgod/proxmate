@@ -10,6 +10,7 @@ from urllib.parse import quote
 from requests import RequestException
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from flask import jsonify,request
 
@@ -21,7 +22,7 @@ import operations
 import windows_build
 import windows_setup
 from provisioning import PROFILES,LOCALES,windows_setup_key,windows_options
-from guest_tasks import run_guest
+from guest_tasks import run_guest, selected_drive_letters
 
 
 FEATURES=[('Web-Server','Web server (IIS)'),('NET-Framework-45-Features','.NET Framework 4.x'),
@@ -114,7 +115,8 @@ class SimpleFlow:
             if not isinstance(draft,dict) or 'tasks' in d:
                 raise ValueError('Choose library tasks or one pasted script for this run')
             item=self.m.prepare('tasks',dict(name='One-off script',platform=draft.get('platform'),
-                kind=draft.get('kind'),body=draft.get('body'),parameters=draft.get('parameters',{})))
+                kind=draft.get('kind'),body=draft.get('body'),parameters=draft.get('parameters',{}),
+                input_types=draft.get('input_types',{}),defaults=draft.get('defaults',{})))
             selections=[self.m.select_task(item,draft.get('params',{}))]
         else:
             selections=self.m.task_selection(d.get('tasks'))
@@ -218,8 +220,17 @@ class SimpleFlow:
             if profile not in options['profiles']: raise ValueError('Choose a supported Ubuntu release')
             media.verify_ssh_node(dest['node'])
             if not isinstance(d.get('username','ubuntu'),str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',d.get('username','ubuntu')): raise ValueError('Choose an Ubuntu login name using lowercase letters, numbers, underscores or hyphens')
+            personal=d.get('ssh_public_key','')
+            if not isinstance(personal,str) or len(personal)>8192 or len(personal.strip().splitlines())>1:
+                raise ValueError('Enter one OpenSSH public key from your workstation.')
+            if personal.strip():
+                try:
+                    personal=serialization.load_ssh_public_key(personal.strip().encode()).public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).decode()
+                except (ValueError,TypeError,UnsupportedAlgorithm):
+                    raise ValueError('Enter a valid OpenSSH public key from your workstation.') from None
             key=ed25519.Ed25519PrivateKey.generate()
             public_key=key.public_key().public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).decode()
+            if personal.strip(): public_key+='\n'+personal
             credential.update(username=d.get('username','ubuntu'),private_key=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.OpenSSH,serialization.NoEncryption()).decode(),password='')
         selections=windows_setup.select(d.get('windows_settings',[]),selections,self.m,platform=os,purpose=purpose,
                                         subnet=dest['management_cidr'],desktop=edition.get('desktop') if edition else None)
@@ -251,6 +262,10 @@ class SimpleFlow:
             b=dict(enabled=True,verify=True,credential_id=credential['id'],timeout=3600)
             if os=='windows':
                 cfg['data_disks']=windows_build.disks_requested(d.get('data_disks',[]),template['slots'] if cloning else ('sata3','sata4','sata5'))
+                from winrm_setup import check_letters
+                reserved={disk['letter'] for disk in cfg['data_disks']}
+                if not cloning: reserved.update(windows_build.ISO_SETUP_LETTERS)
+                check_letters(selected_drive_letters(selections),reserved)
                 cfg['cores']=management.number(cfg['cores'],1,128)
                 cfg['memory']=management.number(cfg['memory'],4096,1048576)
                 if cloning:
@@ -285,7 +300,8 @@ class SimpleFlow:
         return dict(id=ident,machines=[{k:c[k] for k in ('vmid','name','node','memory','cores','disk','storage','bridge')} for c in configs],
             edition=plan['edition'],purpose=purpose,tasks=[{'name':t['item']['name'],'params':t['params'],'dangerous':bool(t['item'].get('dangerous'))} for t in selections],dangerous=plan['dangerous'],
             rdp=bool(configs[0].get('windows',{}).get('rdp')),clone_mode=template['mode'] if cloning else None,data_disks=[{k:v for k,v in disk.items() if k in ('size','label','letter')} for disk in configs[0].get('data_disks',[])],
-            remote_access='HTTPS WinRM' if os=='windows' else 'SSH',management_cidr=dest['management_cidr'] if os=='windows' else None,
+            remote_access='HTTPS WinRM' if os=='windows' else ('SSH with your workstation key' if personal.strip() else 'SSH'),
+            management_cidr=dest['management_cidr'] if os=='windows' else None,
             guest_tools=dest['agent_iso'] if os=='windows' else 'Installed automatically',
             notes=['Windows specializes each new clone and verifies its new name and HTTPS login before software runs.'] if cloning else ['The new machines start automatically. Each gets its own progress report.',
                 'Guest tools come from your selected VirtIO ISO. The MSI checksum is frozen and verified before installation; Windows enforces driver signatures.' if os=='windows' else 'Guest tools come from the operating system package repositories.',

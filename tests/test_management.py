@@ -364,6 +364,37 @@ def test_script_diagnostics_match_save_and_preserve_library(lab,platform,kind,bo
     assert app.manager.all('tasks')==before
 
 
+def test_typed_script_inputs_freeze_choices_and_recheck_drive_letters(lab,monkeypatch):
+    import winrm_setup
+    app,client,headers,fake,runs=lab
+    setup_guest(app)
+    occupied={'C','D'}
+    monkeypatch.setattr(winrm_setup,'agent_script',lambda *a:json.dumps(sorted(occupied)))
+    types=dict(action=dict(type='choice',choices=['start','stop']),enabled=dict(type='boolean'),letter=dict(type='drive'))
+    draft=dict(name='Typed',platform='windows',kind='ansible',body='- ansible.windows.win_file:\n    path: C:/Tools\n    state: directory',
+               parameters=dict(action='Action',enabled='Enable',letter='Available letter'),input_types=types,defaults={'action':'start'})
+    saved=app.manager.save('tasks',draft)
+    assert saved['defaults']=={'action':'start','enabled':'false'}
+    def selection(**params):
+        return app.manager.task_selection([dict(id=saved['id'],params=params)])
+    task=selection(enabled='true',letter='G')[0]
+    assert guest_tasks.compile_task(task['item'],task['params'])[0]['vars']['proxmate_inputs']==dict(action='start',enabled=True,letter='G')
+    for invalid in (dict(action='other',letter='G'),dict(letter='C'),dict(letter='G',enabled='maybe')):
+        with pytest.raises(ValueError):selection(**invalid)
+    for invalid in (dict(defaults={'action':'other'}),dict(input_types={'letter':{'type':'drive','choices':[]}}),
+                    dict(platform='linux',body='- ansible.builtin.command: whoami'),dict(input_types={'extra':{'type':'boolean'}})):
+        with pytest.raises(ValueError):app.manager.save('tasks',{**draft,**invalid})
+    target=dict(node='pve',vmid=201)
+    assert client.post('/api/simple/drive-letters',json=dict(targets=[target]),headers=headers).json=={'occupied':['C','D']}
+    request=dict(operation='tasks',targets=[target])
+    with pytest.raises(ValueError,match='in use'):app.manager.create_plan(request,selections=selection(letter='D'))
+    reviewed=app.manager.create_plan(request,selections=[task])
+    occupied.add('G')
+    logs=[]
+    with pytest.raises(RuntimeError):app.manager.execute(app.manager.load_plan(reviewed['id']),logs.append)
+    assert all(readiness for _,_,_,readiness in runs) and any('in use' in line for line in logs)
+
+
 def test_starters_can_be_checked_copied_and_compiled_on_each_guest(lab,tmp_path):
     app,c,h,_,_=lab
     originals={t['id']:t for t in c.get('/api/manage/tasks',headers=h).json if t.get('example')}

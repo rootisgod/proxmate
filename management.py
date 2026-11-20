@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 from flask import jsonify, request
 import operations
-from guest_tasks import BUILTINS, compile_task, run_guest, script_parameters
+from guest_tasks import BUILTINS, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters
 from script_library import check_script, ScriptDiagnostic
 
 KINDS = {'credentials', 'connections', 'tasks', 'groups', 'recipes', 'schedules'}
@@ -248,8 +248,11 @@ class Manager:
                 if script_kind == 'shell':
                     body = body.replace('\r\n', '\n')
                 schema,defaults=script_parameters(d.get('parameters',{}),d.get('defaults',{}))
+                retained_types={k:v for k,v in old.get('input_types',{}).items() if k in schema}
+                types=input_type_schema(schema,defaults,d.get('input_types',retained_types),platform)
+                defaults={**{k:'false' for k,s in types.items() if s['type']=='boolean'},**defaults}
                 if schema and script_kind!='ansible': raise ValueError('Named inputs require an Ansible task list')
-                value.update(platform=platform, kind=script_kind, body=body, parameters=schema, defaults=defaults, dangerous=True,
+                value.update(platform=platform, kind=script_kind, body=body, parameters=schema, defaults=defaults, input_types=types, dangerous=True,
                              description='Saved administrator script. Review the code before use.')
             if kind == 'groups':
                 value['targets'] = targets(d.get('targets'))
@@ -313,6 +316,7 @@ class Manager:
                     group_credentials[target_id(t)] = group['credential_id']
         chosen = targets(chosen)
         if selections is None: selections = self.task_selection(d.get('tasks')) if op=='tasks' else []
+        drive_letters=selected_drive_letters(selections)
         discovered = discovered or {}
         p = operations.Proxmox()
         resources = p.resources()
@@ -339,6 +343,9 @@ class Manager:
                 credential = discovered.get(('credentials', binding['credential_id'])) or self.get('credentials', binding['credential_id'])
                 if credential['platform'] != binding['platform']: raise ValueError('Group credential does not match guest platform')
                 if any(s['item']['platform'] != binding['platform'] for s in selections): raise ValueError('All selected tasks must match each guest platform')
+                if drive_letters:
+                    from winrm_setup import check_letters, used_drive_letters
+                    check_letters(drive_letters,used_drive_letters(p,t,cfg))
                 t['connection'] = binding
                 t['credential_name'] = credential['name']
                 t['credential_revision'] = credential['updated']
@@ -444,6 +451,10 @@ class Manager:
                             log(label+' retained pre-task snapshot: '+snap)
                         for selection in plan['tasks']:
                             log(label+' running: '+selection['item']['name'])
+                            letters=selected_drive_letters([selection])
+                            if letters:
+                                from winrm_setup import check_letters, used_drive_letters
+                                check_letters(letters,used_drive_letters(p,t,cfg))
                             run_guest(b,cred,compile_task(selection['item'],selection['params']),log)
                 elif op in ('start','shutdown','stop'):
                     task('/status/'+op, **({'timeout':120,'forceStop':0} if op=='shutdown' else {}))

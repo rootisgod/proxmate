@@ -1,5 +1,41 @@
 let machinePage=null;
 
+function remoteButton(kind,target,server,name,context='') {
+  const button=document.createElement('button');
+  button.type='button';
+  button.textContent=(kind==='rdp'?'Open desktop':'Copy SSH command')+(context?' · '+context:'');
+  button.onclick=async()=>{
+    if(server!==serverInfo?.id)return;
+    button.disabled=true;
+    try{
+      const remote=await api('simple/machine/remote-access',target);
+      if(!button.isConnected || server!==serverInfo?.id)return;
+      if(remote.kind!==kind)throw Error('Remote access changed. Open the machine to check its connection.');
+      if(kind==='rdp'){
+        const host=remote.host.includes(':')?'['+remote.host+']':remote.host;
+        const file=new Blob(['full address:s:'+host+':'+remote.port+'\r\nauthentication level:i:2\r\nprompt for credentials:i:1\r\n'],{type:'application/rdp'});
+        const link=document.createElement('a');link.href=URL.createObjectURL(file);
+        link.download=(name||'VM-'+target.vmid).replace(/[^\w.-]/g,'_')+'.rdp';link.click();
+        setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+        showToast('Open the downloaded .rdp file in your Remote Desktop client.');
+      }else{
+        try{await navigator.clipboard.writeText(remote.command);showToast('SSH command copied.')}
+        catch{
+          let field=button.nextElementSibling;
+          if(!field?.matches('[data-ssh-command]')){
+            field=document.createElement('input');field.readOnly=true;field.dataset.sshCommand='';
+            field.setAttribute('aria-label','SSH command to copy');button.after(field);
+          }
+          field.value=remote.command;field.focus();field.select();
+          showToast('SSH command selected. Use your browser’s Copy command.');
+        }
+      }
+    }catch(err){showToast(err.message,{kind:'failure'})}
+    finally{button.disabled=false}
+  };
+  return button;
+}
+
 function currentMachine(page){
   return view==='machine'&&machinePage===page&&serverInfo?.id===page.server;
 }
@@ -32,6 +68,15 @@ async function openMachine(target, push=false, {refreshConnection=false,reviewed
     const data=await api('simple/machine',reviewedIdentity?{...target,reviewed_identity:reviewedIdentity}:target);
     if(!currentMachine(page))return;
     page.data=data;renderMachine();
+    if(data.status==='running' && data.identity && data.addresses.length){
+      const target={...page.target,identity:data.identity};
+      api('simple/machine/remote-access',target).then(remote=>{
+        if(currentMachine(page) && remote.kind){
+          page.remoteKind=remote.kind;
+          const spot=$('#machine-remote');if(spot)spot.replaceChildren(remoteButton(remote.kind,target,page.server,data.name));
+        }
+      }).catch(()=>{}); // The console is still available when the guest cannot report remote access.
+    }
     if(refreshConnection&&$('#machine-connect'))connectMachine(page);
     try{
       const result=await api('simple/machine/backup',{...target,identity:data.identity});
@@ -83,7 +128,7 @@ function renderMachine(){
   const rows=d.jobs.map(j=>`<li><button data-log="${esc(j.id)}"><span>${esc(j.operation)}</span><span class="pill ${esc(j.status)}">${esc(j.status)}</span></button></li>`).join('');
   const hosts=d.addresses.map(i=>`<li><span>${esc(i.host)} <small>${esc(i.interface)}</small></span><button data-copy-ip="${esc(i.host)}" aria-label="Copy ${esc(i.host)}">Copy IP</button></li>`).join('');
   $('#content').innerHTML=back+title(esc(guestName),esc(d.node)+' · VM '+esc(d.vmid),
-    `<div class="row-actions machine-controls">${powerButton(d)} <a class="console-link" target="_blank" rel="noopener noreferrer" href="${esc(url.href)}">Open console ↗</a></div>`)+
+    `<div class="row-actions machine-controls">${powerButton(d)} <span id="machine-remote"></span><a class="console-link" target="_blank" rel="noopener noreferrer" href="${esc(url.href)}">Open console ↗</a></div>`)+
     `<section class="panel machine-facts" aria-label="Machine details"><div>Status<strong><span class="pill ${esc(d.status)}">${esc(d.status)}</span></strong></div><div>Operating system<strong>${esc(os)}</strong></div><div>Processors<strong>${esc(d.cores??'—')} vCPU</strong></div><div>Memory<strong>${d.memory?(d.memory/1073741824).toLocaleString()+' GiB':'—'}</strong></div></section>
     <div class="machine-panels"><section class="panel machine-card"><h2>Guest connection</h2><p>${esc(guidance)}</p>${connection.host?`<p>${esc(connection.platform==='windows'?'HTTPS WinRM':'SSH')} · ${esc(connection.host)} · port ${esc(connection.port)}</p>`:''}
     <div class="row-actions">${connectable?`<button id="machine-connect" class="${d.verified_at&&!addressChanged?'':'primary'}">${addressChanged?'Verify new address':d.verified_at?'Retest login':connection.host?'Verify login':'Connect this machine'}</button>`:''}
@@ -93,6 +138,7 @@ function renderMachine(){
     <section class="panel machine-card"><h2>Network</h2>${hosts?`<ul class="address-list">${hosts}</ul>`:'<p>No guest addresses reported.</p>'}<button type="button" id="refresh-machine-network">Refresh connection</button></section></div>
     <section class="panel machine-card"><h2>Latest backup for VM ${esc(d.vmid)}</h2><p id="machine-backup">${esc(page.backup||'Checking backup storage…')}</p></section>
     <section class="recent-jobs"><h2>Recent jobs for VM ${esc(d.vmid)}</h2>${rows?`<ul>${rows}</ul>`:'<p>No matching jobs in the last 100 operations.</p>'}</section>`;
+  if(page.remoteKind)$('#machine-remote').append(remoteButton(page.remoteKind,{...page.target,identity:d.identity},page.server,d.name));
   if($('#machine-winrm'))$('#machine-winrm').onclick=()=>openWinRMSetup(page);
   if($('#machine-connect'))$('#machine-connect').onclick=()=>connectMachine(page);
   $('#refresh-machine-network').onclick=()=>openMachine(page.target,false,{refreshConnection:true});
