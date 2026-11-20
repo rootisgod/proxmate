@@ -1,5 +1,4 @@
 """Reviewed recovery, guest bootstrap completion and versioned template lifecycle."""
-import base64
 import copy
 import hashlib
 import ipaddress
@@ -21,6 +20,15 @@ def digest(value): return hashlib.sha256(json.dumps(value,sort_keys=True).encode
 def vm_path(t): return f'nodes/{t["node"]}/qemu/{t["vmid"]}'
 def config_identity(config): return digest({k:v for k,v in config.items() if k not in ('digest','lock')})
 def machine_identity(config): return digest({k:config.get(k) for k in ('smbios1','vmgenid')})
+
+
+class WaitForGuest(Exception):
+    def __init__(self, checkpoint):
+        self.checkpoint = checkpoint
+
+
+class BootstrapPending(Exception):
+    """Only a read-only guest check can be repeated."""
 
 
 class BootstrapFailed(RuntimeError):
@@ -292,23 +300,45 @@ class Lifecycle:
         elif op=='version-build':
             result=operations.execute(plan['config'],log)
             self.after_provision(plan['config'],result,job_id,log,{'family_id':plan['family_id'],'label':plan['label'],'recipe_id':plan['recipe_id'],'recipe_name':plan['recipe_name'],'planned_tasks':plan['recipe_tasks']})
-            if plan.get('frozen_tasks'):
-                if plan['config'].get('bootstrap',{}).get('verify'):
-                    reviewed=self.m.create_plan(dict(operation='readiness',targets=[management.target(plan['config'])]))
-                    taskplan=self.m.load_plan(reviewed['id']);taskplan['tasks']=plan['frozen_tasks'];taskplan['operation']='tasks'
-                    if any(s['item']['platform']!=taskplan['targets'][0]['connection']['platform'] for s in taskplan['tasks']): raise ValueError('Recipe tasks do not match guest platform')
-                    self.m.execute(taskplan,log)
-                    self.record_tasks(taskplan,job_id)
-                else: log('Recipe tasks are recorded as planned, not applied. Finish installation/connection setup, then apply the recipe tasks before generalizing.')
-            log('Candidate built. Generalize, shut down, remove setup media, then register this version.')
+            self.finish_version_build(plan,log,job_id)
+
+    def finish_version_build(self,plan,log,job_id):
+        if plan.get('frozen_tasks'):
+            if plan['config'].get('bootstrap',{}).get('verify'):
+                taskplan=self.verified_task_plan(plan['config'],plan['frozen_tasks'],job_id)
+                self.m.execute(taskplan,log)
+                self.record_tasks(taskplan,job_id)
+            else: log('Recipe tasks are recorded as planned, not applied. Finish installation/connection setup, then apply the recipe tasks before generalizing.')
+        log('Candidate built. Generalize, shut down, remove setup media, then register this version.')
 
     def after_provision(self,d,result,job_id,log,extra=None):
         p=operations.Proxmox();cfg=p.call('GET',vm_path(d)+'/config')
         record=dict(id=job_id,node=d['node'],vmid=d['vmid'],machine_identity=machine_identity(cfg),created=time.time(),config=provenance(d),source=result or {},tasks=[],**(extra or {}))
         self.m.put('builds',record)
         if d.get('bootstrap',{}).get('verify'):
-            self.verify_bootstrap(d,log,record['machine_identity'])
-            record['bootstrap_verified']=True;self.m.put('builds',record)
+            if not (cfg.get('smbios1') or cfg.get('vmgenid')):
+                raise BootstrapFailed('VM identity unavailable. Inspect the created machine before continuing.')
+            credential = self.m.get('credentials', d['bootstrap']['credential_id'])
+            previous = self.m.find('connections', management.target_id(d)) or {}
+            raise WaitForGuest(dict(server_id=operations.connection_provider.current()['id'],
+                node=d['node'], vmid=d['vmid'], identity=record['machine_identity'],
+                credential_revision=credential['updated'], connection_revision=previous.get('updated'),
+                deadline=time.time()+d['bootstrap']['timeout']))
+
+    def verified_task_plan(self, cfg, tasks, job_id):
+        reviewed=self.m.create_plan(dict(operation='readiness',targets=[management.target(cfg)]))
+        plan=self.m.load_plan(reviewed['id'])
+        target=plan['targets'][0]
+        build=self.m.get('builds',job_id)
+        binding=target['connection']
+        if (not build.get('bootstrap_verified') or binding.get('machine_identity')!=build['machine_identity'] or
+            binding['updated']!=build['connection_revision'] or
+            binding.get('credential_revision')!=target['credential_revision']):
+            raise ValueError('Verified guest connection changed before software installation.')
+        if any(t['item']['platform']!=binding['platform'] for t in tasks):
+            raise ValueError('Software does not match the verified guest platform')
+        plan.update(operation='tasks',tasks=tasks)
+        return plan
 
     def record_tasks(self,plan,job_id):
         for t in plan['targets']:
@@ -317,73 +347,65 @@ class Lifecycle:
             if builds:
                 b=builds[-1];b['tasks'].append({'job_id':job_id,'created':time.time(),'tasks':[{'id':s['item']['id'],'name':s['item']['name'],'params':s['params'],'script_sha256':digest(s['item'].get('body',''))} for s in plan['tasks']]});self.m.put('builds',b)
 
-    def verify_bootstrap(self,d,log,expected_identity=None):
-        opts=d['bootstrap'];credential=self.m.get('credentials',opts['credential_id'])
+    def probe_bootstrap(self, d, expected_identity, credential, previous, log):
+        opts=d['bootstrap']
         platform='windows' if d['kind']=='windows' else 'linux'
-        if credential['platform']!=platform: raise ValueError('Bootstrap credential platform mismatch')
-        p=operations.Proxmox();path=vm_path(d);deadline=time.monotonic()+opts['timeout'];last='Guest agent not ready'
-        if expected_identity is None: expected_identity=machine_identity(p.call('GET',path+'/config'))
-        next_report=0
-        log('Waiting for bootstrap marker, guest address and authenticated '+('WinRM' if platform=='windows' else 'SSH')+'.')
-        while time.monotonic()<deadline:
-            waiting='Proxmox connection not ready'
-            try:
-                resources=p.resources()
-                node=next((r for r in resources if r.get('type')=='node' and r.get('node')==d['node']),None)
-                if not node or node.get('status')!='online': raise ValueError('Proxmox node is offline or unavailable')
-                target=next((r for r in resources if r.get('vmid')==d['vmid']),None)
-                if not target: raise BootstrapTargetChanged('Created VM no longer exists; setup wait stopped. No VM was deleted by Proxmate.')
-                if target.get('node')!=d['node'] or target.get('type')!='qemu': raise BootstrapTargetChanged('Created VM moved or was replaced; setup wait stopped.')
-                if machine_identity(p.call('GET',path+'/config'))!=expected_identity:
-                    raise BootstrapTargetChanged('Created VM identity changed; setup wait stopped before guest access.')
-                waiting='Waiting for QEMU guest agent discovery; remote access has not yet been verified'
-                p.call('GET',path+'/agent/get-osinfo')
-                if platform=='windows':
-                    try:
-                        progress=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-status.json')
-                        stage=json.loads(progress.get('content','')).get('stage')
-                    except Exception: stage=None  # Older generated helpers have no status file.
-                    if stage=='failed-retry-limit': raise BootstrapFailed('Windows automatic setup exhausted its retries. VM retained; software was not run.')
-                    stages={'configuring-winrm':'Configuring HTTPS WinRM', 'waiting-windows-setup':'Waiting for Windows Setup to finish; no login is required',
-                            'installing-guest-tools':'Installing verified guest tools', 'retry-guest-tools':'WinRM configured; retrying guest-tool installation',
-                            'retry-winrm':'Guest tools running; retrying HTTPS WinRM setup', 'retry-winrm-and-guest-tools':'Retrying HTTPS WinRM and guest-tool setup'}
-                    if stage in stages: raise ValueError(stages[stage])
-                waiting='Guest agent is running; waiting for completed remote-access setup'
-                marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
-                if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
-                interfaces=p.call('GET',path+'/agent/network-get-interfaces')
-                addresses={str(ipaddress.ip_address(a['ip-address'])) for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]) if a.get('ip-address-type')=='ipv4' and not ipaddress.ip_address(a['ip-address']).is_loopback and not ipaddress.ip_address(a['ip-address']).is_link_local}
-                host=opts.get('host')
-                if not host:
-                    if len(addresses)!=1: raise ValueError('Multiple/no guest IPs; specify the verification host')
-                    host=next(iter(addresses))
-                binding=dict(node=d['node'],vmid=d['vmid'],platform=platform,host=management.address(host),port=5986 if platform=='windows' else 22,credential_id=credential['id'],verify_tls=True,become=True)
-                resolved=management.endpoint_addresses(binding)
-                if not set(map(str,resolved)) & addresses: raise ValueError('Configured address does not match guest-agent addresses')
-                if platform=='windows':
-                    waiting='Waiting for the guest HTTPS certificate'
-                    cert=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\winrm.pem').get('content','')
-                    if len(cert)>20000 or '-----BEGIN CERTIFICATE-----' not in cert: raise ValueError('Bootstrap public certificate unavailable')
-                    binding['ca_pem']=cert
-                else:
-                    public=p.call('GET',path+'/agent/file-read',file='/etc/ssh/ssh_host_ed25519_key.pub').get('content','').split()
-                    if len(public)<2 or public[0]!='ssh-ed25519': raise ValueError('Guest SSH public host key unavailable')
-                    binding['fingerprint']='SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public[1],validate=True)).digest()).decode().rstrip('=')
-                waiting='Authenticated HTTPS WinRM check has not passed' if platform=='windows' else 'Authenticated SSH check has not passed'
-                run_guest(binding,credential,[],log,readiness=True)
-                self.m.save('connections',binding)
-                log('Bootstrap authenticated and guest connection saved. Trust material was read through the authenticated Proxmox guest-agent channel.')
-                return
-            except BootstrapFailed:
-                raise
-            except Exception as exc:
-                last=str(exc) if isinstance(exc,ValueError) else waiting
-                now=time.monotonic()
-                if now>=next_report:
-                    log(f'Waiting for setup: {last}. About {max(0, int((deadline-now+59)//60))} minutes remain. Later jobs stay queued until this build finishes.')
-                    next_report=now+60
-                time.sleep(5)
-        raise RuntimeError('Bootstrap verification timed out: '+last+'. The created VM is retained.')
+        if credential['platform']!=platform: raise BootstrapFailed('Bootstrap credential platform mismatch')
+        path=vm_path(d)
+        waiting='Proxmox connection not ready'
+        try:
+            p=operations.Proxmox()
+            resources=p.resources()
+            node=next((r for r in resources if r.get('type')=='node' and r.get('node')==d['node']),None)
+            if not node or node.get('status')!='online': raise ValueError('Proxmox node is offline or unavailable')
+            target=next((r for r in resources if r.get('vmid')==d['vmid']),None)
+            if not target: raise BootstrapTargetChanged('Created VM no longer exists; setup wait stopped. No VM was deleted by Proxmate.')
+            if target.get('node')!=d['node'] or target.get('type')!='qemu' or target.get('template'): raise BootstrapTargetChanged('Created VM moved or was replaced; setup wait stopped.')
+            if machine_identity(p.call('GET',path+'/config'))!=expected_identity:
+                raise BootstrapTargetChanged('Created VM identity changed; setup wait stopped before guest access.')
+            waiting='Waiting for QEMU guest agent discovery; remote access has not yet been verified'
+            p.call('GET',path+'/agent/get-osinfo')
+            if platform=='windows':
+                try:
+                    progress=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-status.json')
+                    stage=json.loads(progress.get('content','')).get('stage')
+                except Exception: stage=None  # Older generated helpers have no status file.
+                if stage=='failed-retry-limit': raise BootstrapFailed('Windows automatic setup exhausted its retries. VM retained; software was not run.')
+                stages={'configuring-winrm':'Configuring HTTPS WinRM', 'waiting-windows-setup':'Waiting for Windows Setup to finish; no login is required',
+                        'installing-guest-tools':'Installing verified guest tools', 'retry-guest-tools':'WinRM configured; retrying guest-tool installation',
+                        'retry-winrm':'Guest tools running; retrying HTTPS WinRM setup', 'retry-winrm-and-guest-tools':'Retrying HTTPS WinRM and guest-tool setup'}
+                if stage in stages: raise ValueError(stages[stage])
+            waiting='Guest agent is running; waiting for completed remote-access setup'
+            marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
+            if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
+            interfaces=p.call('GET',path+'/agent/network-get-interfaces')
+            addresses={str(ipaddress.ip_address(a['ip-address'])) for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]) if a.get('ip-address-type')=='ipv4' and not ipaddress.ip_address(a['ip-address']).is_loopback and not ipaddress.ip_address(a['ip-address']).is_link_local}
+            host=opts.get('host')
+            if not host:
+                if len(addresses)!=1: raise ValueError('Multiple/no guest IPs; specify the verification host')
+                host=next(iter(addresses))
+            binding=dict(node=d['node'],vmid=d['vmid'],platform=platform,host=management.address(host),port=5986 if platform=='windows' else 22,credential_id=credential['id'],verify_tls=True,become=True)
+            resolved=management.endpoint_addresses(binding)
+            if not set(map(str,resolved)).issubset(addresses): raise ValueError('Configured address does not match guest-agent addresses')
+            waiting='Waiting for guest transport identity'
+            trust = management.agent_trust(p, path, platform)
+            management.check_saved_trust(previous, trust, expected_identity)
+            binding.update(trust)
+            waiting='Authenticated HTTPS WinRM check has not passed' if platform=='windows' else 'Authenticated SSH check has not passed'
+            before_auth=p.call('GET',path+'/config')
+            if before_auth.get('template') or machine_identity(before_auth)!=expected_identity:
+                raise BootstrapTargetChanged('Created VM identity changed before authentication.')
+            run_guest(binding,credential,[],log,readiness=True)
+            after_auth=p.call('GET',path+'/config')
+            if after_auth.get('template') or machine_identity(after_auth)!=expected_identity:
+                raise BootstrapTargetChanged('Created VM identity changed during authentication.')
+            return binding
+        except BootstrapFailed:
+            raise
+        except management.TrustChanged as exc:
+            raise BootstrapFailed(str(exc)) from None
+        except Exception as exc:
+            raise BootstrapPending(str(exc) if isinstance(exc,ValueError) else waiting) from None
 
     def save_policy(self,d):
         if not isinstance(d,dict): raise ValueError('Policy must be a JSON object')
@@ -427,7 +449,7 @@ class Lifecycle:
                 current=self.m.decode(row['value'])
                 if current['next_run']>now or not current['enabled']: continue
                 policy=current;due=policy['next_run'];policy['next_run']=management.next_occurrence(now,policy)
-                active=con.execute("SELECT status FROM jobs WHERE id=? AND status IN ('queued','running')",(policy.get('last_job'),)).fetchone()
+                active=con.execute("SELECT status FROM jobs WHERE id=? AND status IN ('queued','running','waiting')",(policy.get('last_job'),)).fetchone()
                 policy['last_report']='Occurrence claimed.'
                 con.execute("UPDATE records SET value=? WHERE kind='backup-policies' AND id=?",(self.m.encode(policy),policy['id']))
             try:

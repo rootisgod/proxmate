@@ -12,6 +12,8 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
+import job_queue
+from lifecycle import BootstrapPending, WaitForGuest
 from flask import Flask, jsonify, request, session, send_from_directory, g
 from werkzeug.exceptions import HTTPException
 from cryptography.fernet import Fernet
@@ -27,7 +29,17 @@ def persistent_secret(name):
     if not path.exists():
         path.write_text(secrets.token_urlsafe(48))
         path.chmod(0o600)
-    return path.read_text().strip()
+    value = path.read_text().strip()
+    if not value:
+        raise RuntimeError(f'Empty secret file: {name}')
+    return value
+
+
+def admin_password():
+    password = secret(os.getenv('APP_PASSWORD_FILE', '.env.admin'))
+    if not password:
+        raise RuntimeError('Administrator password file is empty')
+    return password
 
 
 app = Flask(__name__, static_url_path='/static')
@@ -57,7 +69,7 @@ def db():
 
 with db() as con:
     con.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT, status TEXT, created REAL, updated REAL, payload TEXT, log TEXT)')
-    con.execute("UPDATE jobs SET status='interrupted', log=log || '\nService restarted. Inspect Proxmox before retrying.', updated=? WHERE status IN ('queued','running')", (time.time(),))
+    job_queue.initialize(con)
 
 login_attempts = {}
 login_lock = threading.Lock()
@@ -126,7 +138,7 @@ def login():
         if len(recent) >= 10: return jsonify(error='Too many attempts. Retry in five minutes.'), 429
         recent.append(time.time())
     password = request.get_json().get('password', '')
-    expected = secret(os.getenv('APP_PASSWORD_FILE', '.env.admin'))
+    expected = admin_password()
     if not isinstance(password, str) or not hmac.compare_digest(password.encode(), expected.encode()):
         return jsonify(error='Incorrect password'), 401
     session.clear(); session['admin'] = True; session['csrf'] = secrets.token_urlsafe(32); session.permanent = True
@@ -150,7 +162,10 @@ def state(): return jsonify(inventory())
 @app.get('/api/jobs')
 def jobs():
     with db() as con:
-        rows = con.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 100').fetchall()
+        if request.args.get('summary') == '1':
+            rows = con.execute('SELECT id, action, status, created, updated, payload FROM jobs ORDER BY created DESC LIMIT 100').fetchall()
+        else:
+            rows = con.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 100').fetchall()
     return jsonify([job_view(r) for r in rows])
 
 
@@ -193,36 +208,92 @@ def submit():
     return jsonify(id=job_id, url=f'/api/jobs/{job_id}'), 202
 
 
+def resume_guest(row, wait, payload, log):
+    cfg=job_queue.job_config(payload)
+    record=manager.get('builds',row['id'])
+    if (server.current()['id']!=wait['server_id'] or
+        any(cfg[k]!=wait[k] or record[k]!=wait[k] for k in ('node','vmid')) or
+        record['machine_identity']!=wait['identity']):
+        raise ValueError('Guest checkpoint no longer matches the created machine or server.')
+    if time.time()>=wait['deadline']:
+        raise RuntimeError('Bootstrap verification timed out: '+wait['reason']+'. The VM is retained.')
+    credential=manager.get('credentials',cfg['bootstrap']['credential_id'])
+    previous=manager.find('connections',str(cfg['node'])+':'+str(cfg['vmid'])) or {}
+    if credential['updated']!=wait['credential_revision'] or previous.get('updated')!=wait['connection_revision']:
+        raise ValueError('Guest login or connection changed while waiting. Inspect the guest before continuing.')
+    try:
+        binding=lifecycle.probe_bootstrap(cfg,wait['identity'],credential,previous,log)
+    except BootstrapPending as pending:
+        with db() as con: job_queue.postpone(con,wait,redact(str(pending)))
+        return False
+    if time.time()>=wait['deadline']: raise RuntimeError('Guest verification deadline expired. The VM is retained.')
+    verified=manager.prepare('connections',binding,credential)
+    with db() as con:
+        con.execute('BEGIN IMMEDIATE')
+        manager.save_verified(con,verified,credential,wait['identity'],previous)
+        record.update(bootstrap_verified=True, verified_at=verified['verified_at'],connection_revision=verified['updated'])
+        con.execute("UPDATE records SET value=? WHERE kind='builds' AND id=?",(encode_payload(record),row['id']))
+        con.execute('DELETE FROM job_waits WHERE job_id=?',(row['id'],))
+        con.execute("UPDATE jobs SET status='running',updated=? WHERE id=?",(time.time(),row['id']))
+    log('Guest login verified and connection saved.')
+    if payload['action']=='simple': simple.finish_build(payload['plan'],log,row['id'])
+    elif payload['action']=='lifecycle': lifecycle.finish_version_build(payload['plan'],log,row['id'])
+    return True
+
+
+# Alternate between eligible jobs and due probes when both have a backlog.
+prefer_probe = True
+
+
+def run_next_job():
+    global prefer_probe
+    with server.lock, db() as con:
+        row,wait=job_queue.claim(con,decode_payload,time.time(),prefer_probe)
+    if row is None: return False
+    prefer_probe=wait is None
+    password=''
+    def log(message):
+        message=str(message)
+        if password: message=message.replace(password,'[redacted]')
+        with db() as con:
+            con.execute('UPDATE jobs SET log=substr(log || ?, -150000),updated=? WHERE id=?',
+                        ('\n'+redact(message),time.time(),row['id']))
+    try:
+        payload=decode_payload(row['payload'])
+        config=job_queue.job_config(payload)
+        password=config.get('windows',{}).get('admin_password','')
+        revision=None
+        if not wait and config.get('bootstrap',{}).get('verify'):
+            revision=manager.get('credentials',config['bootstrap']['credential_id'])['updated']
+        if wait:
+            if not resume_guest(row,wait,payload,log): return True
+        elif payload['action']=='manage':
+            manager.execute(payload['plan'],log)
+            if payload['plan']['operation']=='tasks': lifecycle.record_tasks(payload['plan'],row['id'])
+        elif payload['action'] in ('lifecycle','simple'):
+            (simple if payload['action']=='simple' else lifecycle).execute(payload['plan'],log,row['id'])
+        else:
+            result=execute(payload,log)
+            if payload['action']=='provision': lifecycle.after_provision(payload,result,row['id'],log)
+        status='succeeded'
+    except WaitForGuest as paused:
+        if paused.checkpoint['credential_revision']==revision:
+            with db() as con: job_queue.park(con,row['id'],paused.checkpoint)
+            return True
+        log('Guest login changed during creation. Inspect the retained VM before continuing.')
+        status='failed'
+    except Exception as exc:
+        log(f'ERROR: {exc}')
+        status='failed'
+    with db() as con:
+        con.execute('DELETE FROM job_waits WHERE job_id=?',(row['id'],))
+        con.execute('UPDATE jobs SET status=?,updated=? WHERE id=?',(status,time.time(),row['id']))
+    return True
+
+
 def worker():
     while True:
-        with server.lock, db() as con:
-            row = con.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
-            if row: con.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (time.time(), row['id']))
-        if not row:
-            time.sleep(1); continue
-        password = ''
-        def log(message):
-            message = str(message)
-            if password: message = message.replace(password, '[redacted]')
-            with db() as con:
-                con.execute('UPDATE jobs SET log=substr(log || ?, -150000),updated=? WHERE id=?', ('\n' + redact(message), time.time(), row['id']))
-        try:
-            payload = decode_payload(row['payload'])
-            password = payload.get('windows', {}).get('admin_password', '')
-            if payload['action'] == 'manage':
-                manager.execute(payload['plan'], log)
-                if payload['plan']['operation']=='tasks': lifecycle.record_tasks(payload['plan'],row['id'])
-            elif payload['action'] in ('lifecycle','simple'):
-                password=payload['plan'].get('config',{}).get('windows',{}).get('admin_password','')
-                (simple if payload['action']=='simple' else lifecycle).execute(payload['plan'],log,row['id'])
-            else:
-                result=execute(payload, log)
-                if payload['action']=='provision': lifecycle.after_provision(payload,result,row['id'],log)
-            status = 'succeeded'
-        except Exception as exc:
-            log(f'ERROR: {exc}'); status = 'failed'
-        with db() as con:
-            con.execute('UPDATE jobs SET status=?,updated=? WHERE id=?', (status, time.time(), row['id']))
+        if not run_next_job(): time.sleep(1)
 
 
 @app.get('/api/catalog')
@@ -285,11 +356,17 @@ from server_connection import ServerConnection
 import operations
 server = ServerConnection(db,encode_payload,decode_payload)
 operations.connection_provider = server
+from machine import register as register_machine
+register_machine(app,manager,lifecycle)
 
 
 @app.before_request
 def connection_boundary():
     if not request.path.startswith('/api/') or request.path in ('/api/health','/api/login','/api/docs','/api/openapi.json'):
+        return
+    # These authenticated local reads are valid across server replacements.
+    # Host-bound plans, inventory and writes still serialize with connection changes.
+    if request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
         return
     server.lock.acquire()
     g.connection_locked = True
@@ -302,9 +379,20 @@ def connection_boundary():
         if request.headers.get('X-Proxmate-Server') != config['id']:
             return jsonify(error='Server selection changed. Reload and review the operation for the current server'),409
 
+    # A guided login may take a transport timeout. Keep the selected server pinned
+    # while allowing unrelated inventory, job and record requests to proceed.
+    if request.endpoint in ('machine_details','machine_connect','machine_backup'):
+        server.machine_requests += 1
+        g.machine_request = True
+        g.connection_locked = False
+        server.lock.release()
+
 
 @app.teardown_request
 def release_connection_boundary(exc):
+    if getattr(g,'machine_request',False):
+        with server.lock: server.machine_requests -= 1
+        g.machine_request = False
     if getattr(g,'connection_locked',False):
         g.connection_locked = False
         server.lock.release()
@@ -344,7 +432,7 @@ def scheduler():
 
 if __name__ == '__main__':
     from waitress import serve
-    secret(os.getenv('APP_PASSWORD_FILE', '.env.admin'))  # Fail startup if unset.
+    admin_password()
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()
     serve(app, host='0.0.0.0', port=int(os.getenv('PORT', '8080')), threads=8)

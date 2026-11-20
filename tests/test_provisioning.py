@@ -134,7 +134,7 @@ def test_checksums_exact_filename():
 class FakeProxmox:
     def __init__(self):
         self.calls=[]; self.url='https://example.invalid';self.session=Mock()
-        self.session.post.return_value.ok=True;self.session.post.return_value.json.return_value={'data':'UPID:upload'}
+        self.session.post.return_value.status_code=200;self.session.post.return_value.json.return_value={'data':'UPID:upload'}
     def resources(self):return [{'type':'node','node':'pve','status':'online'}]
     def wait(self,*args):pass
     def call(self,method,path,**kw):
@@ -163,6 +163,21 @@ def test_flow_collision_prevents_even_media_upload(monkeypatch):
     monkeypatch.setattr(operations,'Proxmox',lambda:p)
     with pytest.raises(ValueError,match='already exists'):operations.execute(flow(),lambda s:None)
     p.session.post.assert_not_called();assert p.calls==[]
+
+
+@pytest.mark.parametrize('generated', [True, False])
+def test_redirect_stops_media_upload(monkeypatch, tmp_path, generated):
+    p = FakeProxmox()
+    monkeypatch.setattr(operations, 'Proxmox', lambda: p)
+    monkeypatch.setenv('ISO_DIR', str(tmp_path))
+    (tmp_path / 'library.iso').write_bytes(b'library')
+    p.session.post.return_value.status_code = 307
+    job = flow() if generated else dict(action='upload-iso', node='pve', storage='local', filename='library.iso')
+    with pytest.raises(RuntimeError, match='[Uu]pload failed'):
+        operations.execute(job, lambda message: None)
+    assert p.session.post.call_args.kwargs['allow_redirects'] is False
+    p.session.post.return_value.json.assert_not_called()
+    assert all(method == 'GET' for method, _, _ in p.calls)
 
 
 def test_changed_guest_agent_msi_stops_before_upload_or_vm_creation(monkeypatch):

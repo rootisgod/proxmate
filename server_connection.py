@@ -13,6 +13,7 @@ class ServerConnection:
     def __init__(self, db, encode, decode):
         self.db, self.encode, self.decode = db, encode, decode
         self.lock = threading.RLock()
+        self.machine_requests = 0
         with db() as con:
             con.execute('CREATE TABLE IF NOT EXISTS server_connection (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT)')
             con.execute('CREATE TABLE IF NOT EXISTS server_archives (id TEXT PRIMARY KEY, created REAL, value TEXT)')
@@ -95,8 +96,9 @@ class ServerConnection:
             raise ValueError('Connection test failed. Check the address, username/realm, password, certificate trust and node permissions.') from None
 
     def idle(self, con):
-        if con.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
-            raise ValueError('Wait for queued and running jobs to finish before changing the server connection')
+        if self.machine_requests: raise ValueError("Wait for the current machine request before changing the server.")
+        if con.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running','waiting') LIMIT 1").fetchone():
+            raise ValueError('Wait for queued, waiting and running jobs to finish before changing the server connection')
         for row in con.execute("SELECT value FROM records WHERE kind IN ('schedules','backup-policies')"):
             if self.decode(row['value']).get('enabled'):
                 raise ValueError('Disable enabled schedules and backup policies before changing the server connection')

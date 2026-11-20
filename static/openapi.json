@@ -399,49 +399,22 @@
         "description": "Advanced administrator execution. target=proxmox requires host_confirmed=true; this runs on the hypervisor itself. Guest library runs use /api/manage/plan instead."
       },
       "Job": {
-        "type": "object",
-        "required": [
-          "id",
-          "action",
-          "status",
-          "created",
-          "updated",
-          "log",
-          "target"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JobSummary"
           },
-          "action": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "queued",
-              "running",
-              "succeeded",
-              "failed",
-              "interrupted"
-            ]
-          },
-          "created": {
-            "type": "number",
-            "description": "Unix timestamp in seconds"
-          },
-          "updated": {
-            "type": "number",
-            "description": "Unix timestamp in seconds"
-          },
-          "log": {
-            "type": "string"
-          },
-          "target": {
+          {
             "type": "object",
-            "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
+            "required": [
+              "log"
+            ],
+            "properties": {
+              "log": {
+                "type": "string"
+              }
+            }
           }
-        }
+        ]
       },
       "Target": {
         "type": "object",
@@ -1331,6 +1304,49 @@
             "type": "string"
           }
         }
+      },
+      "JobSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "status",
+          "created",
+          "updated",
+          "target"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "waiting",
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted",
+              "cancelled"
+            ]
+          },
+          "created": {
+            "type": "number",
+            "description": "Unix timestamp in seconds"
+          },
+          "updated": {
+            "type": "number",
+            "description": "Unix timestamp in seconds"
+          },
+          "target": {
+            "type": "object",
+            "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
+          }
+        }
       }
     }
   },
@@ -1350,16 +1366,16 @@
     },
     "/api/jobs": {
       "get": {
-        "summary": "Latest 100 jobs with logs",
+        "summary": "Latest 100 jobs",
         "responses": {
           "200": {
-            "description": "Latest 100 jobs with logs",
+            "description": "Job summaries when summary=1, otherwise jobs including logs.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Job"
+                    "$ref": "#/components/schemas/JobSummary"
                   }
                 }
               }
@@ -1368,11 +1384,26 @@
           "401": {
             "description": "Authentication required"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0,
+                1
+              ],
+              "default": 0
+            },
+            "description": "Use 1 to omit log text. Fetch a single job to read its log."
+          }
+        ]
       },
       "post": {
         "summary": "Queue an operation",
-        "description": "States: queued, running, succeeded, failed, interrupted. No automatic retry. Inspect partial resources before retrying failed/interrupted jobs. Ansible is arbitrary administrator code execution. Generalization must precede template conversion.",
+        "description": "States include queued, waiting, running, succeeded, failed and interrupted. Only a checkpointed guest-readiness probe resumes after a restart. Inspect partial resources before retrying failed/interrupted jobs. Ansible is arbitrary administrator code execution. Generalization must precede template conversion.",
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -2511,8 +2542,72 @@
     },
     "/api/simple/software": {
       "get": {
-        "summary": "List common software choices without connecting to Proxmox",
-        "description": "List common software choices without connecting to Proxmox",
+        "summary": "List common software choices",
+        "description": "Lists common software choices without contacting Proxmox.",
+        "responses": {
+          "200": {
+            "description": "Successful; passwords/private keys omitted"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        }
+      },
+      "post": {
+        "summary": "Detect guest platforms for selected machines",
+        "description": "Reads the Proxmox OS setting for each selected target. Platforms are keyed by node:vmid. Unknown or unreadable configurations return null.",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "targets"
+                ],
+                "properties": {
+                  "targets": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "node",
+                        "vmid"
+                      ],
+                      "properties": {
+                        "node": {
+                          "type": "string"
+                        },
+                        "vmid": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2725,6 +2820,217 @@
                   "credential": {
                     "type": "object",
                     "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/resources": {
+      "get": {
+        "summary": "Refresh cluster resources for the machine inventory",
+        "responses": {
+          "200": {
+            "description": "Current Proxmox cluster resources"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/simple/machine": {
+      "post": {
+        "summary": "Read machine details, guest addresses, login choices and recent scoped jobs",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Machine details"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "node",
+                  "vmid"
+                ],
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "vmid": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/machine/backup": {
+      "post": {
+        "summary": "Read the latest visible QEMU backup for this VM ID",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest backup or null"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "node",
+                  "vmid",
+                  "identity"
+                ],
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "vmid": {
+                    "type": "integer"
+                  },
+                  "identity": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/simple/machine/connect": {
+      "post": {
+        "summary": "Authenticate to a guest and save its verified connection",
+        "parameters": [
+          {
+            "name": "X-Proxmate-Server",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current ID from GET /api/server"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful verification timestamp"
+          },
+          "400": {
+            "description": "Invalid settings, missing resource, expired plan or connection discovery failure"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Disconnected or stale server selection"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "node",
+                  "vmid",
+                  "identity",
+                  "platform",
+                  "host"
+                ],
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "vmid": {
+                    "type": "integer"
+                  },
+                  "identity": {
+                    "type": "string"
+                  },
+                  "platform": {
+                    "enum": [
+                      "windows",
+                      "linux"
+                    ]
+                  },
+                  "host": {
+                    "type": "string"
+                  },
+                  "connection_revision": {
+                    "type": "number",
+                    "nullable": true
+                  },
+                  "credential_id": {
+                    "type": "string"
+                  },
+                  "credential": {
+                    "type": "object",
+                    "writeOnly": true,
+                    "properties": {
+                      "username": {
+                        "type": "string"
+                      },
+                      "password": {
+                        "type": "string"
+                      },
+                      "private_key": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               }

@@ -114,7 +114,7 @@ def upload_generated(p,node,storage,path,log):
     return storage+':iso/'+path.name
 
 
-def inventory():
+def inventory(*, include_backups=True):
     p = Proxmox()
     nodes = p.call('GET', 'nodes')
     details = {}
@@ -127,7 +127,7 @@ def inventory():
         for s in stores:
             if 'iso' in s.get('content', '').split(',') and s.get('active'):
                 isos += p.call('GET', f'nodes/{node}/storage/{s["storage"]}/content', content='iso')
-            if 'backup' in s.get('content', '').split(',') and s.get('active'):
+            if include_backups and 'backup' in s.get('content', '').split(',') and s.get('active'):
                 backups += p.call('GET', f'nodes/{node}/storage/{s["storage"]}/content', content='backup')
         details[node] = {'storage': stores, 'network': p.call('GET', f'nodes/{node}/network'), 'isos': isos, 'backups': backups}
     root = Path(os.getenv('ISO_DIR', 'D:/ISOs'))
@@ -334,8 +334,8 @@ def execute(d, log):
                     log(f'Uploading {f.name}: {min(step * 5, 100)}%')
             monitor = MultipartEncoderMonitor(encoder, report)
             r = p.session.post(p.url + f'/api2/json/nodes/{node}/storage/{d["storage"]}/upload', data=monitor,
-                               headers={'Content-Type': encoder.content_type}, timeout=7200)
-            if not r.ok: raise RuntimeError(f'Upload failed: HTTP {r.status_code}')
+                               headers={'Content-Type': encoder.content_type}, timeout=7200, allow_redirects=False)
+            if not 200 <= r.status_code < 300: raise RuntimeError(f'Upload failed: HTTP {r.status_code}')
             p.wait(node, r.json()['data'], log)
     elif a == 'linux-template':
         profile = PROFILES[d.get('profile', 'ubuntu-24.04')]
@@ -461,12 +461,7 @@ def execute_flow(d, log):
             answer_iso(d['windows'], path, bootstrap=d.get('bootstrap'))
             path.chmod(0o600)
             log('Uploading generated answer media. It contains setup credentials if supplied; restrict storage access.')
-            with path.open('rb') as stream:
-                enc = MultipartEncoder(fields={'content':'iso', 'filename':(name,stream,'application/octet-stream')})
-                r = p.session.post(p.url + f'/api2/json/nodes/{d["node"]}/storage/{d["iso_storage"]}/upload', data=enc, headers={'Content-Type':enc.content_type}, timeout=120)
-                if not r.ok: raise RuntimeError('Answer media upload failed; inspect ISO storage for a partial upload')
-                p.wait(d['node'], r.json()['data'], log)
-            guest['_answer_volume'] = d['iso_storage'] + ':iso/' + name
+            guest['_answer_volume'] = upload_generated(p, d['node'], d['iso_storage'], path, log)
             log('Answer media: ' + guest['_answer_volume'])
     execute(guest, log)
     log('Installer prepared, not installation verified. Open the console; Windows may require the DVD boot key or activation/account prompts. After installation shut down and use Finish setup to remove answer media.' if d['kind'] == 'windows' else 'Install Linux through the Proxmox console. ISO installs are interactive.')

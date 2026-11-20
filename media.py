@@ -99,13 +99,20 @@ def ssh_error(exc):
     return 'The server SSH connection failed. Check the SSH username, password and verified fingerprint on the Server page.'
 
 
-def verify_ssh_node(node):
+def ssh_node():
     try:
         with operations.Proxmox().ssh() as ssh:
             _,stdout,_=ssh.exec_command('hostname -s',timeout=15)
-            if stdout.read(1024).decode().strip()!=node or stdout.channel.recv_exit_status()!=0:
-                raise ValueError('The SSH connection reaches a different Proxmox node. Choose the connected node under Advanced.')
+            hostname=stdout.read(1024).decode().strip()
+            if not hostname or stdout.channel.recv_exit_status()!=0:
+                raise ValueError('Could not identify the connected SSH node.')
+            return hostname
     except paramiko.SSHException as exc: raise ValueError(ssh_error(exc)) from exc
+
+
+def verify_ssh_node(node):
+    if ssh_node()!=node:
+        raise ValueError('The SSH connection reaches a different Proxmox node. Choose the connected node under Advanced.')
 
 
 def supports_guest_agent(source,node,build):

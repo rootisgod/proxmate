@@ -27,7 +27,10 @@ def simple_lab(service,monkeypatch):
         'details':{'lab':{'storage':[{'storage':'disks','active':1,'content':'images','avail':10**12},{'storage':'local','active':1,'content':'iso','avail':10**11}],
             'network':[{'type':'bridge','iface':'vmbr0','cidr':'192.0.2.10/24'}],
             'isos':[{'volid':'local:iso/server.iso'},{'volid':'local:iso/virtio-win-0.1.266.iso'}]}}}
-    monkeypatch.setattr(operations,'inventory',lambda:copy.deepcopy(inv))
+    def build_inventory(*, include_backups):
+        assert not include_backups
+        return copy.deepcopy(inv)
+    monkeypatch.setattr(operations,'inventory',build_inventory)
     monkeypatch.setattr(media,'inspect_source',lambda *a:dict(identity='media-v1',editions=[dict(index=7,name='Windows Server Standard',label='Standard (Desktop Experience)',desktop=True,language='en-US',build='26100',edition_id='ServerStandard')]))
     monkeypatch.setattr(media,'supports_guest_agent',lambda *a:True)
     monkeypatch.setattr(media,'guest_agent_sha256',lambda *a:'a'*64)
@@ -77,6 +80,30 @@ def test_batch_submission_is_confirmed_idempotent_and_encrypted(simple_lab):
     assert 'Secret-Setup' not in c.get('/api/jobs',headers=h).text
     next_plan=c.post('/api/simple/plan',json={**settings(),'name':'second'},headers=h).json
     assert [m['vmid'] for m in next_plan['machines']]==[205,206,207]
+
+
+def test_build_defaults_follow_verified_node(simple_lab, monkeypatch):
+    app, client, headers, inv = simple_lab
+    inv['nodes'].insert(0, {'node':'other', 'status':'online'})
+    inv['details']['other'] = copy.deepcopy(inv['details']['lab'])
+    monkeypatch.setattr(media, 'ssh_node', lambda: 'lab')
+    assert client.get('/api/simple/options', headers=headers).json['destinations'][0]['node'] == 'lab'
+    plan = client.post('/api/simple/plan', json=settings(), headers=headers)
+    assert all(machine['node'] == 'lab' for machine in plan.json['machines'])
+
+
+@pytest.mark.parametrize(('ostype','expected'), [('win11','windows'), ('l26','linux'), ('other',None)])
+def test_guest_platform_hint_is_read_only(simple_lab, monkeypatch, ostype, expected):
+    app, client, headers, inv = simple_lab
+    calls = []
+    def read(method, path):
+        calls.append((method, path))
+        return {'ostype':ostype, 'description':'private config data'}
+    monkeypatch.setattr(operations, 'Proxmox', lambda: SimpleNamespace(call=read,session=SimpleNamespace(close=lambda: None)))
+    response = client.post('/api/simple/software', json={'targets':[{'node':'lab','vmid':201},{'node':'lab','vmid':202}]}, headers=headers)
+    assert response.json['platforms'] == {'lab:201':expected,'lab:202':expected}
+    assert 'private config data' not in response.text
+    assert calls == [('GET', 'nodes/lab/qemu/201/config'),('GET','nodes/lab/qemu/202/config')]
 
 
 def test_saved_scripts_are_frozen_and_require_trust_confirmation(simple_lab):
@@ -179,6 +206,7 @@ def test_guest_tasks_follow_authenticated_bootstrap_and_never_run_after_failure(
     monkeypatch.setattr(app.manager,'execute',lambda *a:events.append('software'))
     monkeypatch.setattr(app.lifecycle,'record_tasks',lambda *a:None)
     monkeypatch.setattr(app.simple,'assert_owned',lambda *a:None)
+    monkeypatch.setattr(app.lifecycle,'verified_task_plan',lambda *a:{})
     app.simple.execute(plan,lambda *a:None,'job')
     assert events==['create','authenticate','software']
     events.clear()
@@ -258,8 +286,8 @@ def test_template_conversion_only_follows_successful_generalization(monkeypatch,
         def execute(self,*a):pass
     manager=SimpleNamespace(all=lambda *a:[dict(node='lab',vmid=202,created=time.time(),machine_identity=template_finish.machine_identity(config))],db=DB)
     if exitcode:
-        with pytest.raises(RuntimeError):template_finish.finish(cfg,manager,lambda *a:None)
+        with pytest.raises(RuntimeError):template_finish.finish(cfg,manager,lambda *a:None,template_finish.machine_identity(config))
         assert 'convert-template' not in events
     else:
-        template_finish.finish(cfg,manager,lambda *a:None)
+        template_finish.finish(cfg,manager,lambda *a:None,template_finish.machine_identity(config))
         assert events.index('finish-setup')<events.index('convert-template')

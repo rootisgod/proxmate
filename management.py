@@ -1,4 +1,5 @@
 """Encrypted management records, immutable review plans, guest jobs and schedules."""
+import base64
 import copy
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -90,6 +91,30 @@ def endpoint_addresses(binding):
     return addresses
 
 
+class TrustChanged(ValueError):
+    pass
+
+
+def agent_trust(p, path, platform):
+    if platform == 'windows':
+        cert = p.call('GET', path+'/agent/file-read', file=r'C:\ProgramData\Proxmate\winrm.pem').get('content', '')
+        if len(cert) > 20000 or '-----BEGIN CERTIFICATE-----' not in cert:
+            raise ValueError('Guest HTTPS certificate unavailable')
+        return {'ca_pem': cert}
+    key = p.call('GET', path+'/agent/file-read', file='/etc/ssh/ssh_host_ed25519_key.pub').get('content','').split()
+    if len(key)<2 or key[0]!='ssh-ed25519': raise ValueError('Guest public SSH key unavailable')
+    fingerprint = hashlib.sha256(base64.b64decode(key[1], validate=True)).digest()
+    return {'fingerprint': 'SHA256:'+base64.b64encode(fingerprint).decode().rstrip('=')}
+
+
+def check_saved_trust(previous, trust, identity):
+    if previous.get('machine_identity') and previous['machine_identity'] != identity:
+        raise TrustChanged('The machine identity changed. Review the saved connection before reconnecting.')
+    for field in ('fingerprint','ca_pem'):
+        if previous.get(field) and trust.get(field) and previous[field].strip()!=trust[field].strip():
+            raise TrustChanged('Guest transport identity changed. Verify its identity in the console and update the saved trust.')
+
+
 class Manager:
     def __init__(self, db, encode, decode):
         self.db, self.encode, self.decode = db, encode, decode
@@ -108,14 +133,30 @@ class Manager:
         with self.db() as con: rows = con.execute('SELECT value FROM records WHERE kind=? ORDER BY id', (kind,)).fetchall()
         return [self.decode(row['value']) for row in rows]
 
-    def get(self, kind, ident):
+    def find(self, kind, ident):
         with self.db() as con: row = con.execute('SELECT value FROM records WHERE kind=? AND id=?', (kind, ident)).fetchone()
-        if not row: raise ValueError(f'{kind} record not found')
-        return self.decode(row['value'])
+        return self.decode(row['value']) if row else None
+
+    def get(self, kind, ident):
+        record = self.find(kind, ident)
+        if record is None: raise ValueError(f'{kind} record not found')
+        return record
 
     def put(self, kind, value):
         with self.db() as con: con.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)', (kind, value['id'], self.encode(value)))
         return self.public(kind, value)
+
+    def save_verified(self, con, binding, credential, identity, previous, *, new_login=False):
+        # Compare revisions and publish the login and binding in the same transaction.
+        for kind, record, revision in [('credentials', credential, None if new_login else credential['updated']),
+                                       ('connections', binding, previous.get('updated'))]:
+            row = con.execute('SELECT value FROM records WHERE kind=? AND id=?',(kind,record['id'])).fetchone()
+            if (self.decode(row['value'])['updated'] if row else None) != revision:
+                raise ValueError('Guest login or connection changed during verification. Review it and retry.')
+        binding.update(machine_identity=identity,verified_at=time.time(),credential_revision=credential['updated'])
+        if new_login:
+            con.execute('INSERT INTO records VALUES (?,?,?)',('credentials',credential['id'],self.encode(credential)))
+        con.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)',('connections',binding['id'],self.encode(binding)))
 
     def public(self, kind, value):
         value = copy.deepcopy(value)
@@ -140,15 +181,18 @@ class Manager:
         return result
 
     def save(self, kind, d):
+        return self.put(kind, self.prepare(kind, d))
+
+    def prepare(self, kind, d, credential=None):
         if kind not in KINDS or not isinstance(d, dict): raise ValueError('Unknown record type')
         ident = d.get('id') or uuid.uuid4().hex
         if kind == 'connections': ident = target_id(target(d))
         elif not re.fullmatch(r'[a-f0-9]{32}', ident): raise ValueError('Invalid record ID')
-        old = next((r for r in self.all(kind) if r['id'] == ident), {})
+        old = self.find(kind, ident) or {}
         if kind == 'connections':
             platform = d.get('platform')
             if platform not in ('windows', 'linux'): raise ValueError('Select Windows or Linux')
-            credential = self.get('credentials', d.get('credential_id'))
+            credential = credential or self.get('credentials', d.get('credential_id'))
             if credential['platform'] != platform: raise ValueError('Credential platform does not match guest')
             value = dict(id=ident, **target(d), platform=platform, credential_id=credential['id'], host=address(d.get('host')),
                          port=number(d.get('port', 5986 if platform=='windows' else 22), 1, 65535),
@@ -218,7 +262,7 @@ class Manager:
                 value['last_job'] = old.get('last_job'); value['last_report'] = old.get('last_report', 'No runs yet.')
                 value['summary'] = self.summary(plan)
         value['updated'] = time.time()
-        return self.put(kind, value)
+        return value
 
     def delete(self, kind, ident):
         self.get(kind, ident)
@@ -265,6 +309,10 @@ class Manager:
             if op=='restore' and guest.get('status')!='stopped': raise ValueError('Shut down VMs before restoring a snapshot')
             if op in ('tasks', 'readiness'):
                 binding = self.get('connections', target_id(t))
+                if binding.get('machine_identity'):
+                    from lifecycle import machine_identity
+                    if binding['machine_identity'] != machine_identity(cfg):
+                        raise ValueError('The saved connection belongs to another machine. Review its identity and reconnect.')
                 if group_credentials.get(target_id(t)): binding['credential_id'] = group_credentials[target_id(t)]
                 credential = self.get('credentials', binding['credential_id'])
                 if credential['platform'] != binding['platform']: raise ValueError('Group credential does not match guest platform')
@@ -317,7 +365,7 @@ class Manager:
                 s = self.decode(row['value'])
                 if not s['enabled'] or s['next_run'] > now: continue
                 due = s['next_run']; s['next_run'] = next_occurrence(now, s)
-                active = con.execute("SELECT id FROM jobs WHERE id=? AND status IN ('queued','running')",(s.get('last_job'),)).fetchone()
+                active = con.execute("SELECT id FROM jobs WHERE id=? AND status IN ('queued','running','waiting')",(s.get('last_job'),)).fetchone()
                 hour = datetime.fromtimestamp(now,timezone.utc).hour
                 if active: s['last_report'] = 'Occurrence skipped: previous run still active.'
                 elif now-due > 120: s['last_report'] = 'Missed occurrence skipped; no catch-up run.'

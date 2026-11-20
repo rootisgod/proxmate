@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from urllib.parse import quote
+from requests import RequestException
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
@@ -57,7 +58,13 @@ def discovery(inv):
 class SimpleFlow:
     def __init__(self,manager,lifecycle): self.m,self.life=manager,lifecycle
 
-    def options(self): return discovery(operations.inventory())
+    def options(self, inv=None):
+        options=discovery(operations.inventory(include_backups=False) if inv is None else inv)
+        destinations=options['destinations']
+        if len(destinations)>1 and operations.connection_provider.current().get('ssh_fingerprint'):
+            connected=media.ssh_node()
+            destinations.sort(key=lambda dest:dest['node']!=connected)
+        return options
 
     def existing_plan(self,d):
         targets=management.targets(d.get('targets'))
@@ -80,14 +87,11 @@ class SimpleFlow:
                     hosts={a['ip-address'] for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]) if a.get('ip-address-type')=='ipv4' and not ipaddress.ip_address(a['ip-address']).is_loopback and not ipaddress.ip_address(a['ip-address']).is_link_local}
                     if len(hosts)!=1: raise ValueError('More than one address')
                     binding=dict(t,host=management.address(next(iter(hosts))),credential_id=credential['id'],platform=credential['platform'],verify_tls=True,become=True)
-                    if credential['platform']=='linux':
-                        import base64
-                        public=p.call('GET',path+'file-read',file='/etc/ssh/ssh_host_ed25519_key.pub')['content'].split()
-                        if len(public)<2 or public[0]!='ssh-ed25519': raise ValueError('Public SSH key missing')
-                        binding['fingerprint']='SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(public[1],validate=True)).digest()).decode().rstrip('=')
-                    else:
-                        try: binding['ca_pem']=p.call('GET',path+'file-read',file=r'C:\ProgramData\Proxmate\winrm.pem')['content']
-                        except Exception: pass # Existing enterprise-trusted WinRM certificates use system/credential trust.
+                    if credential['platform']=='linux' or not credential.get('ca_pem'):
+                        try: binding.update(management.agent_trust(p,path.removesuffix('/agent/'),credential['platform']))
+                        except RuntimeError:
+                            if credential['platform']=='linux': raise
+                            # Existing Windows listeners may chain to a system-trusted CA.
                     new.append(binding)
                 except Exception as exc:
                     raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Machines > Connection once to enter its address and trust settings.') from exc
@@ -104,7 +108,7 @@ class SimpleFlow:
         prefix=d.get('name','')
         if not isinstance(prefix,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9-]{0,11}',prefix) or prefix.endswith('-'):
             raise ValueError('Use a name beginning with a letter, up to 12 letters, numbers or hyphens')
-        inv=operations.inventory();options=discovery(inv)
+        inv=operations.inventory(include_backups=False);options=discovery(inv) if d.get('node') else self.options(inv)
         dest=next((n for n in options['destinations'] if n['node']==d.get('node',options['destinations'][0]['node'])),None)
         if not dest: raise ValueError('The chosen server is no longer available')
         dest=copy.deepcopy(dest)
@@ -146,7 +150,7 @@ class SimpleFlow:
         used={r['vmid'] for r in inv['resources'] if r.get('vmid')}
         names={r.get('name','').lower() for r in inv['resources']}
         with self.m.db() as con:
-            for row in con.execute("SELECT payload FROM jobs WHERE status IN ('queued','running')"):
+            for row in con.execute("SELECT payload FROM jobs WHERE status IN ('queued','running','waiting')"):
                 payload=self.m.decode(row['payload']);cfg=payload.get('plan',{}).get('config',payload)
                 if cfg.get('vmid'): used.add(int(cfg['vmid']))
                 if cfg.get('name'): names.add(cfg['name'].lower())
@@ -223,12 +227,17 @@ class SimpleFlow:
         log('Creating '+cfg['name']+'; preparing '+('WinRM' if cfg['kind']=='windows' else 'SSH')+' automatically.')
         result=operations.execute(cfg,log)
         self.life.after_provision(cfg,result,job_id,log)
+        self.finish_build(plan,log,job_id)
+
+    def finish_build(self,plan,log,job_id):
+        cfg=plan['config']
         if plan['tasks']:
-            review=self.m.create_plan(dict(operation='readiness',targets=[management.target(cfg)]))
-            taskplan=self.m.load_plan(review['id']);taskplan.update(operation='tasks',tasks=plan['tasks'])
+            taskplan=self.life.verified_task_plan(cfg,plan['tasks'],job_id)
             self.assert_owned(cfg,job_id)
             self.m.execute(taskplan,log);self.life.record_tasks(taskplan,job_id)
-        if plan['purpose']=='template': self.finalize_template(cfg,log)
+        if plan['purpose']=='template':
+            from template_finish import finish
+            finish(cfg,self.m,log,self.m.get('builds',job_id)['machine_identity'])
         log('Ready: '+cfg['name']+(' template.' if plan['purpose']=='template' else '. Run more saved scripts from Machines whenever you need them.'))
 
     def assert_owned(self,cfg,job_id):
@@ -237,17 +246,34 @@ class SimpleFlow:
         current=operations.Proxmox().call('GET',f'nodes/{cfg["node"]}/qemu/{cfg["vmid"]}/config')
         if built['machine_identity']!=machine_identity(current): raise ValueError('The newly created VM was replaced; software was not applied')
 
-    def finalize_template(self,cfg,log):
-        from template_finish import finish
-        finish(cfg,self.m,log)
-
 
 def register(app,manager,lifecycle):
     flow=SimpleFlow(manager,lifecycle)
-    @app.get('/api/simple/software')
-    def software(): return jsonify(features=[{'id':key,'name':name} for key,name in FEATURES])
+    @app.route('/api/simple/software', methods=['GET','POST'])
+    def software():
+        result = dict(features=[{'id':key,'name':name} for key,name in FEATURES])
+        if request.method=='POST':
+            data=request.get_json()
+            targets=management.targets(data.get('targets') if isinstance(data,dict) else None)
+            platforms={}
+            client=operations.Proxmox()
+            try:
+                for guest in targets:
+                    path=f'nodes/{guest["node"]}/qemu/{guest["vmid"]}/config'
+                    try:
+                        ostype=client.call('GET',path).get('ostype') or ''
+                    except (RuntimeError, RequestException):
+                        ostype=''
+                    platforms[management.target_id(guest)]=('windows' if ostype.startswith(('win','w2k','wvista','wxp'))
+                        else 'linux' if ostype in ('l24','l26') else None)
+            finally:
+                client.session.close()
+            result['platforms']=platforms
+        return jsonify(result)
     @app.get('/api/simple/options')
     def options(): return jsonify(flow.options())
+    @app.get('/api/simple/resources')
+    def resources(): return jsonify(operations.Proxmox().resources())
     @app.post('/api/simple/editions')
     def editions():
         d=request.get_json();node=management.word(d.get('node'))

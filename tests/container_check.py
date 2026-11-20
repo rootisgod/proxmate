@@ -37,6 +37,8 @@ with tempfile.TemporaryDirectory() as tmp:
     subprocess.run(['sh','-n',str(shell)],check=True)
     assert client.get('/api/server').json['connected'] is False
     assert client.get('/static/server.js').status_code==200
+    assert client.get('/static/machine.js').status_code==200
+    assert client.post('/api/simple/machine',json={'node':'test','vmid':201},headers=headers).status_code==409
     assert client.get('/static/simple.js').status_code==200
     assert client.get('/api/simple/software').json['features']
     family=client.post('/api/lifecycle/families',json={'name':'Isolated family'},headers=headers)

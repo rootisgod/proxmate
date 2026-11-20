@@ -39,6 +39,18 @@ def test_auth_and_csrf(service):
     assert client.get('/api/jobs').status_code == 401
 
 
+def test_empty_secrets_fail_closed(service):
+    app, client = service
+    Path(os.environ['APP_PASSWORD_FILE']).write_text('  \n')
+    with pytest.raises(RuntimeError, match='password file is empty'):
+        app.admin_password()
+    assert client.post('/api/login', json={'password': ''}).status_code >= 400
+    assert client.get('/api/jobs').status_code == 401
+    (app.DATA / 'session-key').write_text('')
+    with pytest.raises(RuntimeError, match='Empty secret file'):
+        app.persistent_secret('session-key')
+
+
 def test_token_idempotency_and_cross_origin(service):
     app, client = service
     headers = {'Authorization': 'Bearer ' + app.API_TOKEN, 'Idempotency-Key': 'test-start'}
@@ -49,6 +61,25 @@ def test_token_idempotency_and_cross_origin(service):
     assert len(client.get('/api/jobs', headers=headers).json) == 1
     assert client.post('/api/jobs', json=dict(payload, vmid=9001), headers=headers).status_code == 409
     assert client.post('/api/jobs', json=payload, headers=dict(headers, Origin='https://evil.example')).status_code == 403
+
+
+def test_job_summaries_and_logs_are_readable_while_host_lock_is_held(service):
+    import concurrent.futures
+    app, client = service
+    auth = {'Authorization':'Bearer '+app.API_TOKEN}
+    queued = client.post('/api/jobs', json={'action':'start','node':'lab','vmid':105}, headers=auth)
+    job_id = queued.json['id']
+    detail = client.get('/api/jobs/'+job_id, headers=auth).json
+    assert detail['log'] and client.get('/api/jobs', headers=auth).json == [detail]
+    def read_progress():
+        other = app.app.test_client()
+        assert other.get('/api/server', headers=auth).status_code == 200
+        assert other.get('/api/jobs/'+job_id, headers=auth).json == detail
+        return other.get('/api/jobs?summary=1', headers=auth).json
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        with app.server.lock:
+            summaries = pool.submit(read_progress).result(timeout=3)
+    assert summaries == [{key:value for key,value in detail.items() if key!='log'}]
 
 
 @pytest.mark.parametrize('payload', [

@@ -46,7 +46,7 @@ function targetFields(selected=[]){
   return '<fieldset class="wide target-picker"><legend>Exact virtual machines</legend>'+mgGuests().map(r=>`<label class="check"><input type="checkbox" name="target" value="${esc(r.node+':'+r.vmid)}" ${ids.includes(r.node+':'+r.vmid)?'checked':''}>${esc(r.name)} <span class="subtle">${esc(r.node)}:${r.vmid} / ${esc(r.status)}</span></label>`).join('')+'</fieldset>';
 }
 function selectedTargets(){return [...$('#manage-fields').querySelectorAll('[name=target]:checked')].map(i=>{const [node,vmid]=i.value.split(':');return {node,vmid:Number(vmid)}})}
-async function saveRecord(kind,d){await api('manage/'+kind,d);$('#manage-dialog').close();await loadManagement();render();notice('Saved.');}
+async function saveRecord(kind,d){await api('manage/'+kind,d);$('#manage-dialog').close();await loadManagement();if(view==='machine'&&kind==='connections'&&machinePage)await openMachine(machinePage.target);else render();notice('Saved.');}
 
 function editCredential(record={}){
   mgDialog(record.id?'Edit credential (blank secrets keep existing values)':'Add guest credential','<div class="form-grid">'+wf('name','Friendly name',record.name||'','text','required')+mgSelect('platform','Guest OS',[['windows','Windows / WinRM HTTPS'],['linux','Linux / SSH']],record.platform||'windows')+wf('username','Guest username (DOMAIN\\user is supported)',record.username||'','text','required autocomplete="off"')+wf('password','Password','','password','autocomplete="new-password"')+wf('become_password','Linux sudo password (optional)','','password','autocomplete="new-password"')+mgArea('private_key','Linux private key (optional; unencrypted key)')+mgArea('ca_pem','WinRM issuing CA certificate PEM (optional)')+'<p class="wide">Use guest credentials only. Back up the data volume and its encryption key together. Rotation invalidates reviewed plans and schedules; review affected schedules again.</p></div>',d=>saveRecord('credentials',{...d,id:record.id}));
@@ -130,7 +130,7 @@ document.addEventListener('click',async e=>{
     else if(a==='new-recipes')openWizard();
     else if(a==='new-schedules'||a==='apply')applyOperation();
     else if(a==='readiness')applyOperation({operation:'readiness'});
-    else if(a==='manage-vm'){const g=mgGuests().find(g=>g.vmid===Number(id));applyOperation({operation:'shutdown',selected:[g]})}
+    else if(a==='manage-vm'){const g=mgGuests().find(g=>g.vmid===Number(id));applyOperation({operation:g.status==='stopped'?'start':'shutdown',selected:[g]})}
     else if(a==='connection')editConnection(id);
     else if(a==='snapshots'){
       const g=mgGuests().find(g=>g.vmid===Number(id));const snaps=await api(`manage/snapshots/${encodeURIComponent(g.node)}/${g.vmid}`);

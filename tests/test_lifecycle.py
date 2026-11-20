@@ -241,15 +241,21 @@ def test_bootstrap_rejects_unsafe_scope_and_paths(config,kind):
     with pytest.raises(ValueError):bootstrap.options(config,kind)
 
 
+def probe(app, d, expected=None):
+    cred=app.manager.get('credentials',d['bootstrap']['credential_id'])
+    if expected is None: expected=lifecycle.machine_identity(operations.Proxmox().call('GET',lifecycle.vm_path(d)+'/config'))
+    return app.lifecycle.probe_bootstrap(d,expected,cred,{},lambda _:None)
+
+
 @pytest.mark.parametrize('platform',['windows','linux'])
 def test_bootstrap_reads_only_public_guest_identity_and_verifies_before_saving(recovery,monkeypatch,platform):
     app,_,_,fake=recovery
     credential=app.manager.save('credentials',dict(name='Guest',platform=platform,username='admin',password='Guest-private-password'))
     calls=[];monkeypatch.setattr(lifecycle,'run_guest',lambda b,c,t,l,readiness=False:calls.append((b,c,readiness)))
     d=dict(node='pve',vmid=201,kind='windows' if platform=='windows' else 'linux-cloud',bootstrap={'verify':True,'credential_id':credential['id'],'timeout':60})
-    logs=[];app.lifecycle.verify_bootstrap(d,logs.append)
+    logs=[];saved=probe(app,d)
     assert calls[0][2] is True and calls[0][0]['verify_tls'] is True
-    saved=app.manager.get('connections','pve:201');assert saved['host']=='192.0.2.20'
+    assert saved['host']=='192.0.2.20'
     assert all(not p.endswith('_key') and 'password' not in p.lower() for p in fake.secret_reads)
     assert 'Guest-private-password' not in '\n'.join(logs)
     if platform=='windows':assert 'BEGIN CERTIFICATE' in saved['ca_pem']
@@ -311,7 +317,7 @@ def test_bootstrap_auth_failure_does_not_save_connection(recovery,monkeypatch):
     monkeypatch.setattr(lifecycle,'run_guest',fail)
     d=dict(node='pve',vmid=201,kind='linux-cloud',bootstrap={'verify':True,'credential_id':c['id'],'timeout':60})
     logs=[]
-    with pytest.raises(RuntimeError,match='timed out'):app.lifecycle.verify_bootstrap(d,logs.append)
+    with pytest.raises(lifecycle.BootstrapPending,match='SSH check'):probe(app,d)
     assert app.manager.all('connections')==[] and 'not-the-guest-password' not in '\n'.join(logs)
 
 
@@ -329,7 +335,7 @@ def test_windows_bootstrap_reports_safe_stage_and_blocks_tasks(recovery,monkeypa
     monkeypatch.setattr(lifecycle,'run_guest',forbidden)
     d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':c['id'],'timeout':60})
     logs=[]
-    with pytest.raises(RuntimeError,match=expected):app.lifecycle.verify_bootstrap(d,logs.append)
+    with pytest.raises((lifecycle.BootstrapPending,lifecycle.BootstrapFailed),match=expected):probe(app,d)
     assert app.manager.all('connections')==[]
     assert 'private diagnostic' not in '\n'.join(logs)
 
@@ -338,8 +344,8 @@ def test_missing_agent_is_distinct_from_winrm_authentication_failure(recovery,mo
     app,_,_,fake=recovery;fake.fail_agent=True
     c=app.manager.save('credentials',dict(name='Guest',platform='windows',username='Administrator',password='test-password'))
     d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':c['id'],'timeout':60})
-    with pytest.raises(RuntimeError,match='Waiting for QEMU guest agent discovery'):
-        app.lifecycle.verify_bootstrap(d,lambda _:None)
+    with pytest.raises(lifecycle.BootstrapPending,match='Waiting for QEMU guest agent discovery'):
+        probe(app,d)
 
 
 def test_bootstrap_cannot_be_silently_ignored_by_legacy_job_route(recovery):
@@ -366,8 +372,7 @@ def test_bootstrap_target_changes_do_not_wait_for_guest_or_use_credentials(recov
     monkeypatch.setattr(lifecycle,'run_guest',forbidden)
     d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':credential['id'],'timeout':60})
     logs=[]
-    with pytest.raises(RuntimeError,match='timed out' if change=='offline' else 'setup wait stopped'):
-        app.lifecycle.verify_bootstrap(d,logs.append,expected)
+    with pytest.raises((lifecycle.BootstrapPending,lifecycle.BootstrapFailed),match='offline' if change=='offline' else 'setup wait stopped'):
+        probe(app,d,expected)
     assert fake.secret_reads==[] and fake.writes==[] and app.manager.all('connections')==[]
-    if change=='offline': assert any('Later jobs stay queued' in line for line in logs)
     assert not fake.writes

@@ -32,12 +32,14 @@ if ($process.ExitCode -ne 0) { throw 'Sysprep failed; VM retained for inspection
 '''
 
 
-def finish(cfg,manager,log):
+def finish(cfg,manager,log,expected_identity):
     p=operations.Proxmox();node=cfg['node'];vmid=cfg['vmid'];base=f'nodes/{node}/qemu/{vmid}'
-    current=p.call('GET',base+'/config')
-    builds=[b for b in manager.all('builds') if b['node']==node and b['vmid']==vmid]
-    if not builds or machine_identity(current)!=max(builds,key=lambda b:b['created'])['machine_identity']:
-        raise ValueError('Built VM identity changed; refusing template preparation')
+    def owned_config():
+        current=p.call('GET',base+'/config')
+        if current.get('template') or machine_identity(current)!=expected_identity:
+            raise ValueError('Built VM identity changed. Inspect it before template preparation.')
+        return current
+    current=owned_config()
     if cfg['kind']=='windows':
         script=WINDOWS_GENERALIZE
         command=['powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',base64.b64encode(script.encode('utf-16le')).decode()]
@@ -56,8 +58,10 @@ def finish(cfg,manager,log):
             break
         time.sleep(5)
     else: raise RuntimeError('Generalization timed out. Inspect the retained VM; it was not converted.')
+    owned_config()
     p.wait(node,p.call('POST',base+'/status/shutdown',timeout=120,forceStop=0),log)
     if p.call('GET',base+'/status/current').get('status')!='stopped': raise ValueError('VM did not shut down; no template conversion performed')
+    owned_config()
     if cfg['kind']=='windows':
         operations.execute(dict(action='finish-setup',node=node,vmid=vmid,prepared=True),log)
         p.call('PUT',base+'/config',delete='ide2,sata2',boot='order=sata0',onboot=0)
@@ -66,6 +70,7 @@ def finish(cfg,manager,log):
         if not re.fullmatch(r'[A-Za-z0-9_.-]+:iso/proxmate-seed-'+str(vmid)+r'-[a-f0-9]{32}\.iso',seed): raise ValueError('Unexpected seed media; no template conversion performed')
         p.call('PUT',base+'/config',ide2=cfg['storage']+':cloudinit',onboot=0)
         p.wait(node,p.call('DELETE',f'nodes/{node}/storage/{seed.split(":")[0]}/content/{quote(seed,safe="")}'),log)
+    owned_config()
     operations.execute(dict(action='convert-template',node=node,vmid=vmid,prepared=True),log)
     with manager.db() as con: con.execute("DELETE FROM records WHERE kind='connections' AND id=?",(node+':'+str(vmid),))
     log('Template ready. Each clone needs its own login configuration and guest identity.')
