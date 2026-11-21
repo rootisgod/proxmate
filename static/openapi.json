@@ -473,7 +473,7 @@
       "GuidedBuildDescription": {
         "type": "object",
         "properties": {
-          "os": {"type": "string", "enum": ["windows","ubuntu"]},
+          "os": {"type": "string", "enum": ["windows","ubuntu","debian"]},
           "purpose": {"type": "string", "enum": ["vm","template"]},
           "source_kind": {"type": "string", "enum": ["cloud","iso","template"]},
           "edition": {"type": "string"}, "password_login": {"type": "boolean"},
@@ -1433,6 +1433,7 @@
             "type": "object",
             "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
           },
+          "has_preseed": {"type":"boolean","description":"Debian ISO job with a reusable redacted preseed file."},
           "has_autoinstall": {
             "type": "boolean",
             "description": "True for reviewed Ubuntu ISO jobs with reusable NoCloud YAML available."
@@ -2702,7 +2703,7 @@
     "/api/simple/options": {
       "get": {
         "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
-        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 24.04 amd64 installer IDs. The ubuntu object lists suggested packages and firewall/update policies. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. Also includes Windows media, programs and settings.",
+        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 24.04 amd64 installer IDs. The ubuntu object lists suggested packages and firewall/update policies. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. Also includes Windows media, programs and settings.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2897,8 +2898,8 @@
     },
     "/api/simple/plan": {
       "post": {
-        "summary": "Review a batch of new Windows Server or Ubuntu machines and software",
-        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu ISO installs support Ubuntu Server 24.04 amd64 and require a discovered source from simple/options. The cloud image remains available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
+        "summary": "Review a batch of new Windows Server, Ubuntu or Debian machines and software",
+        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu ISO installs support Ubuntu Server 24.04 amd64 and require a discovered source from simple/options. Debian 13 installs accept ISO or template sources and default to the newest discovered compatible installer. Ubuntu cloud images remain available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2956,7 +2957,8 @@
                     "type": "string",
                     "enum": [
                       "windows",
-                      "ubuntu"
+                      "ubuntu",
+                      "debian"
                     ],
                     "default": "windows"
                   },
@@ -3013,7 +3015,7 @@
                   },
                   "source": {
                     "type": "string",
-                    "description": "Windows or Ubuntu ISO ID from discovery."
+                    "description": "ISO ID from discovery. Debian defaults to the first compatible ISO on the selected node."
                   },
                   "edition": {
                     "type": "integer",
@@ -3041,11 +3043,11 @@
                   },
                   "profile": {
                     "type": "string",
-                    "description": "Ubuntu release id from discovery."
+                    "description": "Ubuntu cloud release from discovery or debian-13 for Debian."
                   },
                   "username": {
                     "type": "string",
-                    "description": "Ubuntu login name."
+                    "description": "Linux login name, defaulting to the selected distribution name."
                   },
                   "password": {
                     "type": "string",
@@ -3134,13 +3136,14 @@
                   "ssh_public_key": {
                     "type": "string",
                     "maxLength": 8192,
-                    "description": "Optional workstation OpenSSH public key for a guided Ubuntu guest. Installed alongside the generated automation key."
+                    "description": "Optional workstation OpenSSH public key for a guided Linux guest. Installed alongside the generated automation key."
                   },
                   "github_username": {
                     "type": "string",
                     "maxLength": 39,
                     "description": "Optional GitHub account with public SSH keys. Keys are frozen at review, which returns github_username and ssh_key_fingerprints."
                   },
+                  "linux_password": {"type":"string","format":"password","writeOnly":true,"minLength":12,"maxLength":128,"description":"Optional console and SSH password for a working Debian or Ubuntu VM or clone. Excluded from reusable installer files."},
                   "ubuntu_password": {
                     "type": "string",
                     "format": "password",
@@ -3232,6 +3235,16 @@
                       "source_kind": {"enum": ["template"]},
                       "purpose": {"enum": ["vm"]}
                     }
+                  },
+                  {
+                    "title": "Debian 13 installer",
+                    "required": ["os"],
+                    "properties": {"os":{"enum":["debian"]},"source_kind":{"enum":["iso"]},"profile":{"enum":["debian-13"]}}
+                  },
+                  {
+                    "title": "Debian template clone",
+                    "required": ["os","source_kind","template_id"],
+                    "properties": {"os":{"enum":["debian"]},"source_kind":{"enum":["template"]},"purpose":{"enum":["vm"]}}
                   },
                   {
                     "title": "Ubuntu cloud image",
@@ -3795,6 +3808,18 @@
               }
             }
           }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/preseed": {
+      "get": {
+        "summary": "Download reusable Debian preseed file",
+        "description": "Use the job ID returned by simple/run. Public keys and the disk serial are replaced with placeholders.",
+        "parameters": [{"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Reusable Debian preseed configuration", "content": {"text/plain": {"schema": {"type": "string"}}}},
+          "401": {"description": "Authentication required"},
+          "404": {"description": "No Debian ISO configuration for this job"}
         }
       }
     },

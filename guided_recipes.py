@@ -5,6 +5,8 @@ from flask import jsonify, request
 
 import management
 import operations
+import linux_access
+import linux_install
 import ubuntu_build
 
 
@@ -12,13 +14,15 @@ def specification(plan, cfg, choices=None):
     """Project a reviewed build onto the public inputs accepted by the guided planner."""
     windows = cfg['kind'] == 'windows'
     settings = {k: cfg[k] for k in ('node', 'storage', 'bridge', 'cores', 'memory', 'disk')}
-    settings.update(os='windows' if windows else 'ubuntu', purpose=plan['purpose'], tasks=[])
+    # Historical Ubuntu cloud builds were stored as linux-cloud.
+    os_name = 'ubuntu' if cfg['kind']=='linux-cloud' else cfg['kind'].split('-',1)[0]
+    settings.update(os=os_name, purpose=plan['purpose'], tasks=[])
     boot = cfg['bootstrap']
     settings['iso_storage'] = cfg.get('iso_storage') or boot.get('seed_storage')
     template = cfg.get('template')
     if template:
         settings.update(source_kind='template', template_id=template['source'], clone_mode=template['mode'])
-    elif windows or cfg['kind'] == 'ubuntu-iso':
+    elif windows or cfg['kind'] in linux_install.ISO_KINDS:
         settings.update(source_kind='iso', source=plan['source'])
     else:
         settings['source_kind'] = 'cloud'
@@ -43,13 +47,13 @@ def specification(plan, cfg, choices=None):
         else:
             key_sources = {k: choices[k].strip() for k in ('github_username','ssh_public_key') if choices.get(k)}
             if key_sources.get('ssh_public_key'):
-                key_sources['ssh_public_key']=ubuntu_build.public_key(key_sources['ssh_public_key'])
+                key_sources['ssh_public_key']=linux_access.public_key(key_sources['ssh_public_key'])
         settings.update(key_sources)
     if choices is not None:
         settings['tasks'] = choices['tasks']
         fields = ('windows_settings','manual_updates') if windows else ('ubuntu_firewall','ubuntu_updates')
         settings.update({k:choices[k] for k in fields if k in choices})
-        needs_password = windows or bool(choices.get('ubuntu_password'))
+        needs_password = windows or bool(linux_access.requested_password(choices,os_name))
     else:
         needs_password |= restore_historical_tasks(settings, plan['tasks'])
     return dict(settings=settings, password_login=needs_password, needs_key_source=needs_keys, edition=plan.get('edition', ''),
@@ -62,7 +66,7 @@ def restore_historical_tasks(settings, selections):
     for selection in selections:
         item = selection['item']
         ident = item['id']
-        if ident == 'ubuntu-password':
+        if ident in ('debian-password','ubuntu-password'):
             needs_password = True
         elif item.get('kind') == 'ubuntu-setup':
             policies = {'ubuntu-firewall': ('ubuntu_firewall', ubuntu_build.FIREWALL),
@@ -116,7 +120,7 @@ class GuidedRecipes:
 
     def expand(self, draft):
         recipe = self.lookup(draft['reuse'])
-        allowed = {'name', 'count', 'password', 'ubuntu_password', 'generalized'}
+        allowed = {'name', 'count', 'password', 'ubuntu_password', 'linux_password', 'generalized'}
         if recipe['needs_key_source']:
             allowed.update(('github_username','ssh_public_key'))
             if not any(isinstance(draft.get(k),str) and draft[k].strip() for k in ('github_username','ssh_public_key')):
@@ -124,7 +128,8 @@ class GuidedRecipes:
         if set(draft) - allowed - {'reuse'}:
             raise ValueError('Supply a new name, quantity and login for this saved build.')
         settings = dict(recipe['settings'], **{k: v for k, v in draft.items() if k in allowed})
-        if recipe['password_login'] and not settings.get('password' if settings['os']=='windows' else 'ubuntu_password'):
+        password = settings.get('password') if settings['os']=='windows' else linux_access.requested_password(settings,settings['os'])
+        if recipe['password_login'] and not password:
             raise ValueError('Enter a fresh guest password for this build.')
         return settings, recipe
 

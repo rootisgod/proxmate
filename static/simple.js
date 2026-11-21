@@ -114,7 +114,7 @@ function simpleRender(){
       ['template','Reusable template','Install the OS and your scripts, then prepare the guest for cloning.']];
     $('#content').innerHTML=title('Create','Choose what to build.')+'<div class="build-choices">'+choices.map(([purpose,name,description])=>
       '<section class="panel"><h2>'+name+'</h2><p>'+description+'</p><div class="row-actions">'+
-      '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button></div></section>').join('')+'</div>'+
+      '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button><button data-simple="debian" data-purpose="'+purpose+'">Debian</button></div></section>').join('')+'</div>'+
       '<section id="saved-builds" aria-label="Saved builds"></section><h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
     loadGuidedRecipes($('#saved-builds'));
   }else{
@@ -143,13 +143,13 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
     const defaultClone=sourceTemplate||(os==="windows"&&!serverInfo.ssh_fingerprint&&purpose==="vm"?windowsTemplates().find(t=>simpleOptions.destinations.some(n=>n.node===t.node)):null);
     const dest=simpleOptions.destinations.find(n=>n.node===defaultClone?.node)||simpleOptions.destinations[0];
     const used=new Set([...state.resources.map(g=>g.name),...jobs.filter(j=>['queued','running','waiting'].includes(j.status)).map(j=>j.target?.name)].filter(Boolean).map(name=>name.toLowerCase()));
-    const prefix=os==='windows'?'win-server':'ubuntu';
+    const prefix=os==='windows'?'win-server':os;
     let name=prefix;
     for(let index=2;used.has(name);index++)name=prefix.slice(0,11-String(index).length)+'-'+index;
-    const ubuntuIso=os==='ubuntu'&&dest.ubuntu_isos?.length;
-    simpleDraft={os,purpose,source_kind:defaultClone?'template':os==='ubuntu'&&!ubuntuIso?'cloud':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:'ubuntu-24.04',username:'ubuntu',password:'',
+    const linuxIso=os!=='windows'&&dest[os+'_isos']?.length;
+    simpleDraft={os,purpose,source_kind:defaultClone?'template':os==='ubuntu'&&!linuxIso?'cloud':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:os==='debian'?'debian-13':'ubuntu-24.04',username:os==='debian'?'debian':'ubuntu',password:'',
       node:dest.node,storage:dest.storage,iso_storage:dest.iso_storage,bridge:dest.bridge,management_cidr:dest.management_cidr,agent_iso:dest.agent_iso,
-      cores:2,memory_gb:os==='windows'||ubuntuIso?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scripts:[],script_params:{}};
+      cores:2,memory_gb:os==='windows'||linuxIso?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scripts:[],script_params:{}};
     simpleStep=0;simplePlan=null;simpleBusy=false;$('#simple-fields').inert=false;$('#simple-back').disabled=false;
     if(filename){simpleDraft.source='library:'+filename;simpleDraft.all_media=!mediaCategory({label:filename})}
     $('#simple-next').disabled=false;
@@ -163,15 +163,18 @@ function simpleSources(){
   return [...dest.isos,...simpleOptions.local_isos].sort((a,b)=>priority(b)-priority(a)||a.label.localeCompare(b.label));
 }
 
-function ubuntuSourceFields(d,dest){
-  const isos=dest.ubuntu_isos||[];
-  const templates=simpleOptions.ubuntu_templates||[];
-  const sources=[['iso','Ubuntu Server 24.04 ISO'],['cloud','Ubuntu cloud image']];
-  if(d.purpose==='vm'&&templates.length)sources.push(['template','Ubuntu template']);
+function linuxSourceFields(d,dest){
+  const debian=d.os==='debian';
+  const label=debian?'Debian':'Ubuntu';
+  const isos=dest[d.os+'_isos']||[];
+  const templates=simpleOptions[d.os+'_templates']||[];
+  const sources=[['iso',debian?'Debian 13 installer ISO':'Ubuntu Server 24.04 ISO']];
+  if(!debian)sources.push(['cloud','Ubuntu cloud image']);
+  if(d.purpose==='vm'&&templates.length)sources.push(['template',label+' template']);
   const fields=ws('source_kind','Install from',sources,d.source_kind);
   if(d.source_kind==='template'){
     const selected=templates.find(t=>t.vmid===Number(d.template_id))||templates[0];
-    if(!selected)return fields+'<p>No Ubuntu templates are available.</p>';
+    if(!selected)return fields+'<p>No '+label+' templates are available.</p>';
     d.template_id=selected.vmid;
     return fields+ws('template_id','Source template',templates.map(t=>[t.vmid,t.name+' · '+t.node+' / '+t.vmid]),d.template_id)+
       ws('clone_mode','Copy type',[['full','Full copy'],['linked','Linked copy']],d.clone_mode||'full');
@@ -179,6 +182,7 @@ function ubuntuSourceFields(d,dest){
   if(d.source_kind==='cloud')
     return fields+ws('profile','Ubuntu version',Object.entries(simpleOptions.profiles),d.profile);
   if(!isos.some(iso=>iso.id===d.source))d.source=isos[0]?.id||'';
+  if(!isos.length&&debian)return fields+'<p>Add a Debian 13 amd64 DVD-1 or netinst ISO to the ISO library.</p>';
   if(!isos.length)return fields+'<p>Add an Ubuntu Server 24.04 amd64 live installer ISO or choose the cloud image.</p>';
   return fields+ws('source','Installer ISO',isos.map(iso=>[iso.id,iso.label]),d.source);
 }
@@ -248,11 +252,11 @@ function bulkChoices(label, options) {
 function softwareFields(d){
   const windows=d.os==='windows', platform=windows?'windows':'linux';
   const saved=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform);
-  const ubuntu=simpleOptions.ubuntu;
-  const fresh=windows?freshWindowsSettings(d):ubuntu?{
-    settings:'<h3>Ubuntu settings</h3>'+ws('ubuntu_firewall','Firewall',Object.entries(ubuntu.firewall),d.ubuntu_firewall||'default')+
-      ws('ubuntu_updates','Updates after installation',Object.entries(ubuntu.updates),d.ubuntu_updates||'default'),
-    apps:'<h3>Common packages</h3><div class="choice-grid">'+ubuntu.packages.map(p=>
+  const linux=simpleOptions[d.os];
+  const fresh=windows?freshWindowsSettings(d):linux?{
+    settings:d.os==='ubuntu'?'<h3>Ubuntu settings</h3>'+ws('ubuntu_firewall','Firewall',Object.entries(linux.firewall),d.ubuntu_firewall||'default')+
+      ws('ubuntu_updates','Updates after installation',Object.entries(linux.updates),d.ubuntu_updates||'default'):'',
+    apps:'<h3>Common packages</h3><div class="choice-grid">'+linux.packages.map(p=>
       '<label class="check"><input type="checkbox" name="common_program" value="'+esc(p.id)+'" '+((d.common_programs||[]).includes(p.id)?'checked':'')+'>'+esc(p.name)+'</label>').join('')+'</div>'
   }:{};
   const sections=[];
@@ -424,7 +428,7 @@ function machineConfigFields(d,dest){
 
 function drawSimple(){
   const d=simpleDraft;if(!d)return;
-  $('#simple-title').textContent=simpleStep===2?'Ready to create':(d.os==='windows'?'Windows Server':'Ubuntu')+(d.purpose==='template'?' template':' VM setup');
+  $('#simple-title').textContent=simpleStep===2?'Ready to create':(d.os==='windows'?'Windows Server':d.os==='debian'?'Debian':'Ubuntu')+(d.purpose==='template'?' template':' VM setup');
   $('#simple-steps').innerHTML=['Machine','Software','Review'].map((s,i)=>`<li tabindex="-1" ${i===simpleStep?'aria-current="step"':''}>${i+1}. ${s}</li>`).join('');
   $('#simple-back').hidden=simpleStep===0;$('#simple-next').textContent=simpleStep===2?'Create '+simplePlan.machines.length+(d.purpose==='template'?' template':' machine'+(simplePlan.machines.length===1?'':'s')):simpleStep===1?'Review build':'Continue';
   let html='';
@@ -439,11 +443,11 @@ function drawSimple(){
         wf('github_username','GitHub username for SSH keys (optional)',d.github_username||'','text','maxlength="39" autocomplete="off"')+
         wf('ssh_public_key','Paste an SSH public key (optional)',d.ssh_public_key||'','text','maxlength="8192" placeholder="ssh-ed25519 …"')+
         (d.purpose==='vm'?wc('ubuntu_password_enabled','Allow password sign-in',d.ubuntu_password_enabled)+
-          (d.ubuntu_password_enabled?wf('ubuntu_password','Ubuntu login password',d.ubuntu_password||'','password',
+          (d.ubuntu_password_enabled?wf('ubuntu_password',(d.os==='debian'?'Debian':'Ubuntu')+' login password',d.ubuntu_password||'','password',
             'required minlength="12" maxlength="128" autocomplete="new-password"'):''):''))+
       '</section><section aria-labelledby="machine-source"><h3 id="machine-source">Installation source</h3>'+
       (d.os==='windows'?windowsSourceFields(d):
-        ubuntuSourceFields(d,dest))+'</section>';
+        linuxSourceFields(d,dest))+'</section>';
     html+='</div><div class="machine-options">'+machineConfigFields(d,dest)+(d.os==='windows'?dataDiskFields(d):'')+'</div>';
   }else if(simpleStep===1)html=softwareFields(d);
   else html=buildReview(simplePlan,d.os==='windows');
@@ -485,15 +489,15 @@ function drawSimple(){
     };
     if(d.source_kind==='template')$('#simple-form').elements.node.disabled=true;
     const driver=$('#simple-form [name=agent_iso]');if(driver)driver.onchange=()=>{collectSimple();d.agent_manual=true};
-    const changes=['purpose','node','source','clone_mode',...(d.os==='ubuntu'?['source_kind','template_id']:[])];
+    const changes=['purpose','node','source','clone_mode',...(d.os!=='windows'?['source_kind','template_id']:[])];
     for(const name of changes){const field=$(`#simple-form [name=${name}]`);if(field)field.onchange=async()=>{
       collectSimple();if(name==='purpose'&&d.purpose==='template'){
         d.count=1;if(d.source_kind==='template')d.source_kind='iso';
         delete d.ubuntu_password;delete d.ubuntu_password_enabled;
       }
-      if(name==='source_kind'&&d.source_kind==='iso'){d.profile='ubuntu-24.04';d.memory_gb=Math.max(4,d.memory_gb);d.disk=Math.max(16,d.disk)}
-      if(d.os==='ubuntu'&&d.source_kind==='template'){
-        const templates=simpleOptions.ubuntu_templates||[];
+      if(name==='source_kind'&&d.source_kind==='iso'){d.profile=d.os==='debian'?'debian-13':'ubuntu-24.04';d.memory_gb=Math.max(4,d.memory_gb);d.disk=Math.max(16,d.disk)}
+      if(d.os!=='windows'&&d.source_kind==='template'){
+        const templates=simpleOptions[d.os+'_templates']||[];
         const selected=templates.find(t=>t.vmid===Number(d.template_id))||templates[0];
         if(selected&&selected.node!==d.node){
           const dest=simpleOptions.destinations.find(n=>n.node===selected.node);
@@ -516,6 +520,7 @@ document.addEventListener('click',async e=>{
       const hint=await api('simple/software',{targets:[{node:src.node,vmid:src.vmid}]});
       if(view!==fromView)return;
       if(hint.platforms[machineKey(src)]==='windows')await openSimple('windows','vm','',src);
+      else if(hint.debian_templates?.includes(machineKey(src)))await openSimple('debian','vm','',src);
       else if(hint.ubuntu_templates?.includes(machineKey(src)))await openSimple('ubuntu','vm','',src);
       else{
         const inventory=state.details?state:await api('state');
@@ -547,6 +552,7 @@ async function reviewBuild(draft){
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
   delete settings.ubuntu_password_enabled;
   if(!draft.ubuntu_password_enabled)delete settings.ubuntu_password;
+  if(draft.os==='debian'&&settings.ubuntu_password){settings.linux_password=settings.ubuntu_password;delete settings.ubuntu_password}
   return requestBuildReview(settings,()=>simpleDraft===draft,reviewProgress);
 }
 async function requestBuildReview(settings,active,progress){
@@ -554,7 +560,7 @@ async function requestBuildReview(settings,active,progress){
   const ticket=await api('simple/plan',settings,{Prefer:'respond-async'});
   if(!ticket.review_id)return ticket;
   const stages={inventory:'Checking available storage and machine IDs…',editions:'Checking the selected Windows edition…',drivers:'Checking guest drivers and installer integrity…',
-    ubuntu_media:'Checking the Ubuntu Server ISO…',github_keys:'Reading public SSH keys from GitHub…'};
+    debian_media:'Checking the Debian installer ISO...',ubuntu_media:'Checking the Ubuntu Server ISO…',github_keys:'Reading public SSH keys from GitHub…'};
   let failures=0;
   while(active()){
     let result;
@@ -575,7 +581,7 @@ $('#simple-form').onsubmit=async e=>{
   $('#simple-next').disabled=true;$('#simple-error').textContent='';
   try{
     collectSimple();
-    if(simpleStep===0){if(draft.os==='windows'&&draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');if(draft.os==='ubuntu'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose an Ubuntu Server 24.04 ISO or the cloud image.');simpleStep=1;drawSimple();focusSimpleStep()}
+    if(simpleStep===0){if(draft.os==='windows'&&draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');if(draft.os==='debian'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose a Debian 13 installer ISO.');if(draft.os==='ubuntu'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose an Ubuntu Server 24.04 ISO or the cloud image.');simpleStep=1;drawSimple();focusSimpleStep()}
     else if(simpleStep===1){$('#simple-back').disabled=true;$('#simple-next').textContent='Preparing review…';$('#simple-fields').inert=true;const plan=await reviewBuild(draft);if(simpleDraft!==draft)return;simplePlan=plan;simpleStep=2;drawSimple();focusSimpleStep()}
     else{if(!draft.confirmed)throw Error('Confirm the machines and software before creating.');const result=await api('simple/run',{plan_id:simplePlan.id,confirmed:true,risk_confirmed:!!draft.risk_confirmed});submittedBuilds(result.jobs);if(simpleDraft===draft)$('#simple-dialog').close();await refresh();}
   }catch(err){if(simpleDraft===draft)$('#simple-error').textContent=err.message}

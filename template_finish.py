@@ -54,15 +54,21 @@ def finish(cfg,manager,log,expected_identity):
         command=['powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',base64.b64encode(script.encode('utf-16le')).decode()]
     else:
         user=cfg['username']
-        if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',user): raise ValueError('Invalid Ubuntu username')
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',user): raise ValueError('Invalid Linux username')
         clean='cloud-init clean --logs --machine-id'
-        if cfg['kind']=='ubuntu-iso':
+        if cfg['kind'] in ('ubuntu-iso','debian-iso'):
             clean+=' --seed'
         script='set -eu\n'+clean+'\nrm -f /etc/ssh/ssh_host_* /var/lib/proxmate/bootstrap-ready '+shlex.quote('/home/'+user+'/.ssh/authorized_keys')+'\n'
-        if cfg['kind']=='ubuntu-iso':
+        if cfg['kind'] in ('ubuntu-iso','debian-iso'):
             script+=('rm -f /etc/cloud/cloud.cfg.d/99-installer.cfg '
                      '/etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg '
                      '/etc/netplan/00-installer-config.yaml /etc/netplan/50-cloud-init.yaml\n')
+        if cfg['kind']=='debian-iso':
+            # The installer leaves a separate D-Bus ID. systemd can reuse it on a clone's first boot.
+            script+=('test "$(cat /etc/machine-id)" = uninitialized\n'
+                     'ln -sfT /etc/machine-id /var/lib/dbus/machine-id\n'
+                     'rm -f /etc/cloud/cloud-init.disabled /etc/sudoers.d/90-proxmate\n'
+                     'printf "auto lo\\niface lo inet loopback\\nsource /etc/network/interfaces.d/*\\n" > /etc/network/interfaces\n')
         command=['/bin/sh','-c',script]
     log('Preparing reusable template: cleaning guest identity and setup secrets.')
     pid=p.call('POST',base+'/agent/exec',command=command)['pid']
@@ -81,9 +87,9 @@ def finish(cfg,manager,log,expected_identity):
     if cfg['kind']=='windows':
         operations.execute(dict(action='finish-setup',node=node,vmid=vmid,prepared=True),log)
         p.call('PUT',base+'/config',delete='ide2,sata2',boot='order=sata0',onboot=0)
-    elif cfg['kind']=='ubuntu-iso':
+    elif cfg['kind'] in ('ubuntu-iso','debian-iso'):
         if current.get('ide2') or current.get('sata1'):
-            raise ValueError('Ubuntu installation media is still attached. Inspect the guest before converting.')
+            raise ValueError('Linux installation media is still attached. Inspect the guest before converting.')
         p.call('PUT',base+'/config',ide2=cfg['storage']+':cloudinit',ipconfig0='ip=dhcp',
                ciuser=cfg['username'],onboot=0,digest=current['digest'])
     else:

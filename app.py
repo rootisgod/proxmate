@@ -18,6 +18,8 @@ import job_queue
 import windows_artifacts
 import winrm_setup
 from provisioning import answer_recorder
+import debian_build
+import linux_install
 import ubuntu_build
 from lifecycle import BootstrapPending, WaitForGuest
 from flask import Flask, Response, jsonify, request, session, send_from_directory, render_template, g
@@ -187,7 +189,12 @@ def logout():
 
 
 @app.get('/api/state')
-def state(): return jsonify(inventory())
+def state():
+    result=inventory()
+    for image in result.get('local_isos',[]):
+        if debian_build.ISO_NAME.fullmatch(image['name']): image['guided_os']='debian'
+        elif ubuntu_build.ISO_NAME.fullmatch(image['name']): image['guided_os']='ubuntu'
+    return jsonify(result)
 
 
 @app.get('/api/jobs')
@@ -223,8 +230,10 @@ def job_view(row, detail_db=None):
         result['target']={k:target[k] for k in ('node','vmid','name','label','archive') if k in target}
         if payload['action']=='simple' and target.get('kind')=='ubuntu-iso':
             result['has_autoinstall']=True
+        if payload['action']=='simple' and target.get('kind')=='debian-iso':
+            result['has_preseed']=True
         if payload['action']=='simple' and result['status']=='succeeded' and plan.get('purpose')=='vm':
-            if target.get('kind') in ubuntu_build.KINDS: result['remote_kind']='ssh'
+            if target.get('kind') in ('linux-cloud', *linux_install.ISO_KINDS, *linux_install.CLONE_KINDS): result['remote_kind']='ssh'
             elif target.get('windows',{}).get('rdp') or any(t.get('item',{}).get('id')=='enable-rdp' for t in plan.get('tasks',[])):
                 result['remote_kind']='rdp'
         if detail_db is not None and payload['action']=='manage' and result['status']=='failed':
@@ -286,6 +295,19 @@ def job_autoinstall(job_id):
     yaml_text=cfg.get('reusable_autoinstall') or ubuntu_build.user_data(cfg,reusable=True)
     return Response(yaml_text,mimetype='application/yaml',headers={
         'Content-Disposition':'attachment; filename="ubuntu-'+job_id+'-user-data.yaml"'})
+
+
+@app.get('/api/jobs/<job_id>/preseed')
+def job_preseed(job_id):
+    with db() as con:
+        row=con.execute('SELECT payload FROM jobs WHERE id=?',(job_id,)).fetchone()
+    payload=decode_payload(row['payload']) if row else {}
+    cfg=payload.get('plan',{}).get('config',{})
+    if payload.get('action')!='simple' or cfg.get('kind')!='debian-iso':
+        return jsonify(error='No Debian preseed file for this job.'),404
+    return Response(cfg['reusable_preseed'],mimetype='text/plain',headers={
+        'Content-Disposition':'attachment; filename="debian-'+job_id+'-preseed.cfg"'})
+
 
 
 @app.post('/api/jobs')

@@ -63,10 +63,10 @@ def test_competing_guided_reviews_cannot_queue_the_same_new_vm(simple_lab):
 
 
 def test_ubuntu_repeat_preserves_key_source_and_policies_without_reusing_login(simple_lab,monkeypatch):
-    import ubuntu_build
+    import linux_access
     app,client,h,_=simple_lab
     handles=[]
-    monkeypatch.setattr(ubuntu_build,'github_keys',lambda handle:handles.append(handle) or [])
+    monkeypatch.setattr(linux_access,'github_keys',lambda handle:handles.append(handle) or [])
     draft=dict(os='ubuntu',name='base',github_username='operator',ubuntu_firewall='ssh',
                ubuntu_updates='manual',ubuntu_password='Secret-Ubuntu#1')
     plan=lambda d:client.post('/api/simple/plan',json=d,headers=h)
@@ -163,7 +163,7 @@ def test_interrupted_task_stays_uncertain_across_a_second_restart(lab):
 def test_template_recovery_requires_approval_and_finishes_the_original_build(lab,monkeypatch):
     from lifecycle import machine_identity
     import template_finish
-    from ubuntu_build import template_builds
+    from linux_install import template_builds
     app,client,h,host,runs=lab
     setup_guest(app,'linux')
     cfg=dict(node='pve',vmid=201,kind='ubuntu-iso')

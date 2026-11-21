@@ -6,7 +6,7 @@ const guidedFieldHelp = {
   username: 'The Linux account you sign in to over SSH. Proxmate also uses this account with its own automation key.',
   github_username: 'Imports public SSH keys from this GitHub account. Check the fingerprints in the build review to confirm who can sign in.',
   ssh_public_key: 'Paste an OpenSSH public key, such as the contents of id_ed25519.pub, to sign in from your own computer.',
-  ubuntu_password_enabled: 'Lets this Ubuntu account sign in with a password from the Proxmox console or over SSH. Proxmate keeps its own SSH key for automation.',
+  ubuntu_password_enabled: 'Lets this Linux account sign in with a password from the Proxmox console or over SSH. Proxmate keeps its own SSH key for automation.',
   ubuntu_password: 'Use 12–128 characters. You can enter this password at the Proxmox console or when SSH prompts you to sign in.',
   source_kind: 'An ISO runs the OS installer. A cloud image starts from a prepared Ubuntu system. A template copies a machine you have already prepared.',
   template_id: 'Choose the prepared VM that supplies the operating system, disk and network for this copy.',
@@ -34,7 +34,7 @@ const guidedFieldHelp = {
   rdp: 'Allows Remote Desktop sign-in with Network Level Authentication. Connect using Open desktop on the finished VM.',
   manual_updates: 'Disables automatic Windows updates for this build so you can apply them on your own schedule.',
   chocolatey: 'Installs the Chocolatey package manager. Tick this to enter your own package IDs.',
-  packages: 'Enter package IDs from Chocolatey on Windows or the Ubuntu APT repositories on Linux.',
+  packages: 'Enter package IDs from Chocolatey on Windows or the APT repositories on Linux.',
   confirmed: 'Approves the listed VMs, resource choices and software. Proxmox creates and starts the new guests when you submit.',
   risk_confirmed: 'Approves the sensitive settings or trusted custom scripts listed in the review.',
 };
@@ -43,7 +43,7 @@ const setupMediaHelp = {
   windows: 'Stores the Windows answer ISO that Proxmate generates.',
   iso: 'Stores a temporary ISO that Proxmate generates with Ubuntu’s unattended setup and SSH key settings. Proxmate removes it after it verifies SSH.',
   cloud: 'Stores the generated cloud-init ISO that sets up the Ubuntu login, SSH keys and guest tools on the first boot.',
-  template: 'An Ubuntu clone gets its cloud-init drive on the VM disk storage. This choice applies to Ubuntu ISO and cloud image installs.',
+  template: 'A Linux clone gets its cloud-init drive on the VM disk storage. This choice applies to ISO and cloud image installs.',
 };
 
 function wizardHelpText(control, draft) {
@@ -53,6 +53,7 @@ function wizardHelpText(control, draft) {
     return setupMediaHelp[kind] + ((kind === 'windows' && draft.source_kind !== 'template') || kind === 'iso'
       ? ' An installer already on Proxmox stays where it is. An installer from the local ISO library is copied here.' : '');
   }
+  if (name === 'source_kind' && draft.os === 'debian') return 'Install Debian from the selected DVD or create a copy of a prepared Debian template.';
   if (name === 'source_kind' && draft.os === 'windows')
     return 'An ISO installs Windows from scratch. A template copies Windows and any software already on the prepared machine.';
   if (name === 'windows_setting') {

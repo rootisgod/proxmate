@@ -186,6 +186,22 @@ def upload_iso_name(filename):
     return filename[:-4].replace(' ','_')+'.iso'
 
 
+def validate_vm_fields(d):
+    for flag in ('start', 'prepared'):
+        if flag in d and not isinstance(d[flag], bool):
+            raise ValueError(f'{flag} must be a boolean')
+    for field in ('node', 'storage', 'bridge', 'name', 'backup_storage', 'username'):
+        if field in d and (not isinstance(d[field], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,62}', d[field])):
+            raise ValueError(f'Invalid {field}')
+    for field, low, high in [('vmid', 100, 999999999), ('source', 100, 999999999), ('cores', 1, 128), ('memory', 512, 1048576), ('disk', 8, 4096)]:
+        if field in d:
+            if isinstance(d[field], bool) or not str(d[field]).isdigit() or not low <= int(d[field]) <= high:
+                raise ValueError(f'Invalid {field}: expected {low}–{high}')
+            d[field] = int(d[field])
+    if 'ssh_key' in d and (not isinstance(d['ssh_key'], str) or len(d['ssh_key']) > 16000 or not d['ssh_key'].startswith(('ssh-', 'ecdsa-'))):
+        raise ValueError('Enter a valid SSH public key')
+
+
 def validate(data):
     if not isinstance(data, dict) or data.get('action') not in ACTIONS:
         raise ValueError('Unknown action')
@@ -220,17 +236,7 @@ def validate(data):
             if checked.get('disk', 64) < 64 or checked.get('memory', 4096) < 4096:
                 raise ValueError('Windows wizard requires at least 64 GB disk and 4096 MB memory')
         return checked
-    for flag in ('start', 'prepared'):
-        if flag in d and not isinstance(d[flag], bool):
-            raise ValueError(f'{flag} must be a boolean')
-    for field in ('node', 'storage', 'bridge', 'name', 'backup_storage', 'username'):
-        if field in d and (not isinstance(d[field], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,62}', d[field])):
-            raise ValueError(f'Invalid {field}')
-    for field, low, high in [('vmid', 100, 999999999), ('source', 100, 999999999), ('cores', 1, 128), ('memory', 512, 1048576), ('disk', 8, 4096)]:
-        if field in d:
-            if isinstance(d[field], bool) or not str(d[field]).isdigit() or not low <= int(d[field]) <= high:
-                raise ValueError(f'Invalid {field}: expected {low}–{high}')
-            d[field] = int(d[field])
+    validate_vm_fields(d)
     required = {'linux-template': ['node', 'vmid', 'name', 'storage', 'bridge'],
                 'installer': ['node', 'vmid', 'name', 'storage', 'bridge', 'iso'],
                 'clone': ['node', 'source', 'vmid', 'name', 'storage'],
@@ -264,8 +270,6 @@ def validate(data):
             raise ValueError('Inventory must be text, up to 20 KB')
     if d['action'] in ('convert-template', 'finish-setup') and d.get('prepared') is not True:
         raise ValueError('Confirm that the guest has been generalized and shut down')
-    if 'ssh_key' in d and (not isinstance(d['ssh_key'], str) or len(d['ssh_key']) > 16000 or not d['ssh_key'].startswith(('ssh-', 'ecdsa-'))):
-        raise ValueError('Enter a valid SSH public key')
     return d
 
 
@@ -335,8 +339,8 @@ def execute(d, log):
         if current.get('template'): raise ValueError('Guest must be stopped and not already a template')
         if 'proxmate-unattend-' in str(current.get('sata1', '')):
             raise ValueError('Use Finish setup to remove answer media before converting')
-        if 'proxmate-ubuntu-' in str(current.get('ide2', '')):
-            raise ValueError('Detach Ubuntu setup media before converting')
+        if any(prefix in str(current.get('ide2', '')) for prefix in ('proxmate-ubuntu-', 'proxmate-debian-')):
+            raise ValueError('Detach Linux setup media before converting')
         task(f'{base}/{vmid}/template')
     elif a == 'finish-setup':
         if p.call('GET', f'{base}/{vmid}/status/current').get('status') != 'stopped':

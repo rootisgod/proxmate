@@ -479,6 +479,34 @@ test('failed ISO inspection can be retried after a redraw without losing the for
   }finally{f.close()}
 });
 
+test('Debian Create discovers its own ISO, offers SSH and reviews Linux packages',async()=>{
+  const f=await fixture({},true),{w}=f,fetch=w.fetch;
+  w.fetch=async(url,opts)=>{
+    const response=await fetch(url,opts);
+    if(url==='/api/simple/options'){
+      const data=await response.json();
+      data.destinations[0].debian_isos=[{id:'ssd:iso/debian-13.7.0-amd64-DVD-1.iso',label:'Debian 13.7 DVD'}];
+      data.debian={packages:[{id:'jq',name:'jq'}]};
+    }
+    return response;
+  };
+  try{
+    await f.build('debian');
+    const form=w.document.querySelector('#simple-form');
+    assert.equal(form.elements.username.value,'debian');
+    assert.match(form.elements.source.value,/13.7.0/);
+    assert.deepEqual(Array.from(form.elements.source_kind.options,o=>o.value),['iso']);
+    const next=async()=>{form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle()};
+    await next();
+    form.querySelector('[name=common_program][value=jq]').click();
+    await next();
+    const plan=f.calls.find(c=>c[0]==='/api/simple/plan')[1];
+    assert.equal(plan.os,'debian');
+    assert.deepEqual(plan.tasks,[{id:'linux-package',params:{package:'jq'}}]);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('Ubuntu simple setup has no ISO index, public-key or snippets-storage step',async()=>{
   const f=await fixture({},true),{w}=f;
   try{

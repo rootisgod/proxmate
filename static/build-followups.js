@@ -19,7 +19,7 @@ async function loadGuidedRecipes(area){
       const row=document.createElement('div');row.className='saved-build';
       const label=document.createElement('span');label.textContent=recipe.name;
       const detail=document.createElement('small');
-      detail.textContent=(recipe.os==='windows'?'Windows':'Ubuntu')+' · '+recipe.edition;
+      detail.textContent=(recipe.os==='windows'?'Windows':recipe.os==='debian'?'Debian':'Ubuntu')+' · '+recipe.edition;
       label.append(detail);
       row.append(label,buildButton('Use build',()=>repeatGuidedBuild(recipe,{recipe_id:recipe.id})),
         buildButton('Remove',async()=>{
@@ -45,7 +45,7 @@ function saveGuidedRecipe(source,name){
 function repeatGuidedBuild(recipe,reuse){
   const windows=recipe.os==='windows';
   const fields=wf('name','New machine name','','text','required maxlength="12" pattern="[A-Za-z][A-Za-z0-9\\-]{0,11}" autofocus')+
-    (recipe.password_login?wf(windows?'password':'ubuntu_password',windows?'New Administrator password':'New Ubuntu password','','password',
+    (recipe.password_login?wf(windows?'password':recipe.os==='debian'?'linux_password':'ubuntu_password',windows?'New Administrator password':'New guest password','','password',
       'required minlength="12" maxlength="128" autocomplete="new-password"'):'')+
     (recipe.needs_key_source?'<p>Supply the workstation key source again for this older build.</p>'+
       wf('github_username','GitHub username','','text','maxlength="39"')+wf('ssh_public_key','Or paste an SSH public key','','text','maxlength="8192"'):'')+

@@ -1,4 +1,4 @@
-"""A reviewed, single-wizard build plus software flow for new Windows/Ubuntu guests."""
+"""A reviewed, single-wizard build plus software flow for new Windows and Linux guests."""
 import copy
 import hashlib
 import ipaddress
@@ -18,6 +18,9 @@ import diagnostics
 from guided_recipes import GuidedRecipes, specification
 from reviews import Reviews
 import operations
+import debian_build
+import linux_access
+import linux_install
 import ubuntu_build
 import windows_build
 import windows_setup
@@ -78,8 +81,10 @@ def discovery(inv):
     if not candidates: raise ValueError('No online server has disk storage, ISO storage and a network bridge available')
     local=[{'id':'library:'+i['name'],'label':i['name']+' (ISO library)','revision':str(i['mtime'])+'-'+str(i['bytes']) if i.get('mtime') else None} for i in inv['local_isos']]
     for dest in candidates:
+        dest['debian_isos'] = debian_build.candidates(dest['isos'] + local)
         dest['ubuntu_isos'] = ubuntu_build.candidates(dest['isos'] + local)
     return dict(destinations=candidates,local_isos=local,windows_settings=windows_setup.OPTIONS,
+                debian=dict(release=debian_build.LABEL,packages=[dict(id=k,name=n) for k,n in ubuntu_build.PACKAGES]),
                 ubuntu=dict(release=ubuntu_build.LABEL,firewall=ubuntu_build.FIREWALL,updates=ubuntu_build.UPDATES,
                             packages=[dict(id=key,name=name) for key,name in ubuntu_build.PACKAGES]),
                 iso_setup_letters=windows_build.ISO_SETUP_LETTERS,
@@ -117,7 +122,9 @@ class SimpleFlow:
     def options(self, inv=None):
         if inv is None: inv=operations.inventory(include_backups=False)
         options=discovery(inv)
-        options['ubuntu_templates']=ubuntu_build.templates(self.m,inv['resources'])
+        builds=linux_install.template_builds(self.m)
+        for distro in ('ubuntu','debian'):
+            options[distro+'_templates']=linux_install.templates(builds,inv['resources'],distro)
         destinations=options['destinations']
         if len(destinations)>1 and operations.connection_provider.current().get('ssh_fingerprint'):
             try: connected=media.ssh_node()
@@ -175,7 +182,7 @@ class SimpleFlow:
         if 'reuse' in d:
             d,reused=self.recipes.expand(d)
         os=d.get('os','windows')
-        if os not in ('windows','ubuntu'): raise ValueError('Choose Windows Server or Ubuntu')
+        if os not in ('windows','ubuntu','debian'): raise ValueError('Choose Windows Server, Ubuntu or Debian')
         count=management.number(d.get('count',1),1,20);purpose=d.get('purpose','vm')
         if purpose not in ('vm','template'): raise ValueError('Choose machines or a template')
         if purpose=='template' and count!=1: raise ValueError('Create one reusable template at a time')
@@ -196,12 +203,15 @@ class SimpleFlow:
                 if d[key] not in dest[choices]: raise ValueError('Selected '+key+' is no longer available')
                 dest[key]=d[key]
         cloning=os=='windows' and d.get('source_kind')=='template'
-        ubuntu_iso=os=='ubuntu' and d.get('source_kind')=='iso'
-        ubuntu_clone=os=='ubuntu' and d.get('source_kind')=='template'
+        source_kind=d.get('source_kind','iso' if os=='debian' else None)
+        linux_iso=os!='windows' and source_kind=='iso'
+        linux_clone=os!='windows' and source_kind=='template'
+        if os=='debian' and source_kind not in ('iso','template'):
+            raise ValueError('Choose a Debian installer ISO or prepared Debian template.')
         if os=='ubuntu' and d.get('source_kind') not in (None,'cloud','iso','template'):
             raise ValueError('Choose an Ubuntu ISO, cloud image or template.')
-        if (cloning or ubuntu_clone) and purpose!='vm': raise ValueError('Choose a working VM for a template clone')
-        if not (cloning or ubuntu_clone) and not operations.connection_provider.current().get('ssh_fingerprint'):
+        if (cloning or linux_clone) and purpose!='vm': raise ValueError('Choose a working VM for a template clone')
+        if not (cloning or linux_clone) and not operations.connection_provider.current().get('ssh_fingerprint'):
             raise ValueError('Finish SSH setup on the Server page so Proxmate can read media and prepare images')
         requests=d.get('tasks',[])
         if not isinstance(requests,list): raise ValueError('Choose software or saved scripts')
@@ -242,46 +252,50 @@ class SimpleFlow:
                 subnet=d.get('management_cidr') or dest['management_cidr']
                 dest.update(agent_iso=agent,management_cidr=subnet,agent_sha256=checksum)
         else:
-            profile=d.get('profile','ubuntu-24.04')
-            if profile not in options['profiles']: raise ValueError('Choose a supported Ubuntu release')
-            if not ubuntu_clone: media.verify_ssh_node(dest['node'])
-            if ubuntu_clone:
-                template=ubuntu_build.review_template(self.life,dest,d)
+            distro=os.capitalize()
+            installer=debian_build if os=='debian' else ubuntu_build
+            profile=d.get('profile','debian-13' if os=='debian' else 'ubuntu-24.04')
+            if profile not in (('debian-13',) if os=='debian' else options['profiles']):
+                raise ValueError('Choose a supported '+distro+' release.')
+            if not linux_clone: media.verify_ssh_node(dest['node'])
+            if linux_clone:
+                template=linux_install.review_template(self.life,dest,d,os)
                 dest['bridge']=template['bridge']
                 if template['mode']=='linked': dest['storage']=template['storage']
-            if ubuntu_iso:
-                if profile!='ubuntu-24.04': raise ValueError('ISO autoinstall requires Ubuntu Server 24.04 LTS.')
-                source=d.get('source')
-                if not any(source==item['id'] for item in dest['ubuntu_isos']):
-                    raise ValueError('Choose a discovered Ubuntu Server 24.04 installer ISO.')
-                progress('ubuntu_media')
-                with diagnostics.stage('ubuntu_media'):
-                    inspected=ubuntu_build.inspect(source,dest['node'])
-            if not isinstance(d.get('username','ubuntu'),str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',d.get('username','ubuntu')): raise ValueError('Choose an Ubuntu login name using lowercase letters, numbers, underscores or hyphens')
+            if linux_iso:
+                if os=='ubuntu' and profile!='ubuntu-24.04': raise ValueError('ISO autoinstall requires Ubuntu Server 24.04 LTS.')
+                isos=dest[os+'_isos']
+                source=d.get('source') or (isos[0]['id'] if os=='debian' and isos else None)
+                if not any(source==item['id'] for item in isos):
+                    raise ValueError('Choose a discovered '+installer.LABEL+' installer ISO.')
+                progress(os+'_media')
+                with diagnostics.stage(os+'_media'):
+                    inspected=installer.inspect(source,dest['node'])
+            if not isinstance(d.get('username',os),str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',d.get('username',os)): raise ValueError('Choose a Linux login name using lowercase letters, numbers, underscores or hyphens')
             if d.get('username') in ('root','daemon','bin','sys','sync','games','man','lp','mail','news','uucp','proxy','www-data','backup','list','irc','_apt','nobody','messagebus','systemd-network','systemd-timesync','sshd'):
-                raise ValueError('Choose an Ubuntu login name other than a system account.')
-            password=d.get('ubuntu_password','')
+                raise ValueError('Choose a Linux login name other than a system account.')
+            password=linux_access.requested_password(d,os)
             if password != '':
                 if purpose!='vm':
-                    raise ValueError('Choose a password for a working Ubuntu VM or when cloning its template.')
-                password_task=ubuntu_build.password_login(d.get('username','ubuntu'),password)
+                    raise ValueError('Choose a password for a working Linux VM or when cloning its template.')
+                password_task=linux_access.password_login(d.get('username',os),password,os)
             personal=d.get('ssh_public_key','')
             if not isinstance(personal,str) or len(personal)>8192:
                 raise ValueError('Enter one OpenSSH public key from your workstation.')
             if personal.strip():
-                personal_keys.append(ubuntu_build.public_key(personal.strip()))
+                personal_keys.append(linux_access.public_key(personal.strip()))
             github=d.get('github_username','')
             if not isinstance(github,str): raise ValueError('Enter a GitHub username.')
             if github.strip():
                 progress('github_keys')
-                personal_keys.extend(ubuntu_build.github_keys(github.strip()))
+                personal_keys.extend(linux_access.github_keys(github.strip()))
             personal_keys=list(dict.fromkeys(personal_keys))
             key=ed25519.Ed25519PrivateKey.generate()
             public_key=key.public_key().public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).decode()
             public_key='\n'.join([public_key,*personal_keys])
             if len(public_key)>16000: raise ValueError('Too many SSH public keys. Paste one key.')
-            credential.update(username=d.get('username','ubuntu'),private_key=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.OpenSSH,serialization.NoEncryption()).decode(),password='')
-            selections=ubuntu_build.setting_tasks(d)+selections
+            credential.update(username=d.get('username',os),private_key=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.OpenSSH,serialization.NoEncryption()).decode(),password='')
+            if os=='ubuntu': selections=ubuntu_build.setting_tasks(d)+selections
             if password_task: selections.append(password_task)
         selections=windows_setup.select(d.get('windows_settings',[]),selections,self.m,platform=os,purpose=purpose,
                                         subnet=dest['management_cidr'],desktop=edition.get('desktop') if edition else None)
@@ -307,7 +321,7 @@ class SimpleFlow:
             name=prefix if count==1 else f'{prefix}-{i+1:02}'
             if name.lower() in names: raise ValueError('A machine named '+name+' already exists. Choose a different name.')
             cfg=dict(action='provision',kind='windows' if os=='windows' else 'linux-cloud',purpose='vm',node=dest['node'],vmid=vmid,name=name,
-                storage=dest['storage'],bridge=dest['bridge'],cores=d.get('cores',2),memory=d.get('memory',4096 if os=='windows' or ubuntu_iso else 2048),
+                storage=dest['storage'],bridge=dest['bridge'],cores=d.get('cores',2),memory=d.get('memory',4096 if os=='windows' or linux_iso else 2048),
                 disk=d.get('disk',64 if os=='windows' else 32),start=True)
             b=dict(enabled=True,verify=True,credential_id=credential['id'],timeout=3600)
             if os=='windows':
@@ -338,25 +352,30 @@ class SimpleFlow:
                 cfg.update(profile=profile,username=credential['username'],ssh_key=public_key,network_mode='dhcp')
                 b.update(seed_storage=dest['iso_storage'])
             cfg['bootstrap']=b
-            # Reuse the cloud path's hardware and SSH validation before marking the reviewed ISO build.
-            if not cloning: cfg=operations.validate(cfg)
-            if ubuntu_iso:
+            # Debian's installer uses the common VM fields without requiring a cloud image profile.
+            if os=='debian': operations.validate_vm_fields(cfg)
+            elif not cloning: cfg=operations.validate(cfg)
+            if linux_iso:
                 if cfg['memory']<3072 or cfg['disk']<16:
-                    raise ValueError('Ubuntu ISO autoinstall requires at least 3 GiB RAM and 16 GiB disk.')
-                cfg.update(kind='ubuntu-iso',source_kind='iso',iso_storage=dest['iso_storage'],
+                    raise ValueError(distro+' ISO installation requires at least 3 GiB RAM and 16 GiB disk.')
+                cfg.update(kind=os+'-iso',source_kind='iso',iso_storage=dest['iso_storage'],
                            install_uuid=str(uuid.uuid4()),disk_serial='pm'+uuid.uuid4().hex[:16])
-                cfg['autoinstall']=ubuntu_build.user_data(cfg)
-                cfg['reusable_autoinstall']=ubuntu_build.user_data(cfg,reusable=True)
-            elif ubuntu_clone:
-                cfg.update(kind='ubuntu-clone',source_kind='template',iso_storage=dest['iso_storage'],
+                if os=='debian':
+                    cfg['preseed']=debian_build.preseed(cfg)
+                    cfg['reusable_preseed']=debian_build.preseed(cfg,reusable=True)
+                else:
+                    cfg['autoinstall']=ubuntu_build.user_data(cfg)
+                    cfg['reusable_autoinstall']=ubuntu_build.user_data(cfg,reusable=True)
+            elif linux_clone:
+                cfg.update(kind=os+'-clone',source_kind='template',iso_storage=dest['iso_storage'],
                            disk=template['disk_gib'],template=template)
             configs.append(cfg);used.add(vmid);vmid+=1
         available=next(s for s in inv['details'][dest['node']]['storage'] if s['storage']==dest['storage']).get('avail')
-        if available is not None and sum((0 if (cloning or ubuntu_clone) and template['mode']=='linked' else c['disk'])+sum(disk['size'] for disk in c.get('data_disks',[])) for c in configs)*1073741824>available:
+        if available is not None and sum((0 if (cloning or linux_clone) and template['mode']=='linked' else c['disk'])+sum(disk['size'] for disk in c.get('data_disks',[])) for c in configs)*1073741824>available:
             raise ValueError('Not enough free disk space for this batch. Reduce the quantity or choose a storage with more space under Placement and hardware.')
         plan=dict(operation='simple-build',configs=configs,credential=credential,tasks=selections,purpose=purpose,
-            source=d.get('source','') if os=='windows' or ubuntu_iso else profile,media_identity=inspected['identity'] if inspected else None,
-            edition=template['name'] if cloning or ubuntu_clone else edition['label'] if edition else inspected['release'] if ubuntu_iso else PROFILES[profile]['label'],dangerous=any(t['item'].get('dangerous') for t in selections))
+            source=source if linux_iso else d.get('source','') if os=='windows' else profile,media_identity=inspected['identity'] if inspected else None,
+            edition=template['name'] if cloning or linux_clone else edition['label'] if edition else inspected['release'] if linux_iso else PROFILES[profile]['label'],dangerous=any(t['item'].get('dangerous') for t in selections))
         recipe=specification(plan,configs[0],dict(d,tasks=requested_tasks))
         if reused and any(reused[k]!=recipe[k] for k in ('media_identity','template_identity')):
             raise ValueError('The saved installation source changed. Review the new source in the Create wizard.')
@@ -366,18 +385,18 @@ class SimpleFlow:
         diagnostics.event('plan.ready',plan_id=ident,platform=os,source_kind=configs[0].get('source_kind'),machine_count=count)
         return dict(id=ident,machines=[{k:c[k] for k in ('vmid','name','node','memory','cores','disk','storage','bridge')} for c in configs],
             edition=plan['edition'],purpose=purpose,tasks=[{'name':t['item']['name'],'params':t['params'],'dangerous':bool(t['item'].get('dangerous'))} for t in selections],dangerous=plan['dangerous'],
-            rdp=bool(configs[0].get('windows',{}).get('rdp')),clone_mode=template['mode'] if cloning or ubuntu_clone else None,data_disks=[{k:v for k,v in disk.items() if k in ('size','label','letter')} for disk in configs[0].get('data_disks',[])],
+            rdp=bool(configs[0].get('windows',{}).get('rdp')),clone_mode=template['mode'] if cloning or linux_clone else None,data_disks=[{k:v for k,v in disk.items() if k in ('size','label','letter')} for disk in configs[0].get('data_disks',[])],
             remote_access='HTTPS WinRM' if os=='windows' else ('SSH with workstation keys' if personal_keys else 'SSH'),
-            **({'ssh_key_fingerprints':[ubuntu_build.fingerprint(k) for k in personal_keys],
-                'github_username':github.strip() or None,'password_login':bool(password_task)} if os=='ubuntu' else {}),
+            **({'ssh_key_fingerprints':[linux_access.fingerprint(k) for k in personal_keys],
+                'github_username':github.strip() or None,'password_login':bool(password_task)} if os!='windows' else {}),
             management_cidr=dest['management_cidr'] if os=='windows' else None,
             guest_tools=dest['agent_iso'] if os=='windows' else 'Installed automatically',
             notes=['Windows specializes each new clone and verifies its new name and HTTPS login before software runs.'] if cloning else
-                ['Cloud-init configures a new hostname and SSH key before Proxmate verifies the clone and applies software.'] if ubuntu_clone else ['The new machines start automatically. Each gets its own progress report.',
+                ['Cloud-init configures a new hostname and SSH key before Proxmate verifies the clone and applies software.'] if linux_clone else ['The new machines start automatically. Each gets its own progress report.',
                 'Guest tools come from your selected VirtIO ISO. The MSI checksum is frozen and verified before installation; Windows enforces driver signatures.' if os=='windows' else 'Guest tools come from the operating system package repositories.',
-                ('Windows setup uses Microsoft\'s public KMS client key for the selected edition. This is not a licence or retail activation key; use your organisation\'s KMS or your own appropriate activation method afterwards.' if windows_setup_key(edition) else 'No generic setup key is supplied for this Windows image. Evaluation media uses its own evaluation terms; other media may ask for a product key in the console.') if os=='windows' else 'Ubuntu does not need a product key.',
+                ('Windows setup uses Microsoft\'s public KMS client key for the selected edition. This is not a licence or retail activation key; use your organisation\'s KMS or your own appropriate activation method afterwards.' if windows_setup_key(edition) else 'No generic setup key is supplied for this Windows image. Evaluation media uses its own evaluation terms; other media may ask for a product key in the console.') if os=='windows' else distro+' does not need a product key.',
                 'Proxmate attempts the Windows DVD boot key automatically. If setup does not start, open the Proxmox console; the job waits for installation.' if os=='windows' else
-                'The selected Ubuntu ISO installs unattended. OpenSSH is key-only. The installer uses the new system disk.' if ubuntu_iso else
+                'The selected '+distro+' ISO installs unattended on the new system disk. Proxmate verifies SSH before applying software and login settings.' if linux_iso else
                 'Ubuntu uses the official cloud image, with SSH and guest tools configured automatically.',
                 'Software may restart the new guest when required. Failed machines are retained for inspection.',
                 'Templates are generalized and shut down after software installation.' if purpose=='template' else 'Saved guest connections make later scripts a choose-and-run operation.'])
@@ -428,10 +447,11 @@ class SimpleFlow:
                     cfg.update(source_kind='proxmox',iso=volume)
         log('Creating '+cfg['name']+'; preparing '+('WinRM' if cfg['kind']=='windows' else 'SSH')+' automatically.')
         with diagnostics.stage('create_vm',vmid=cfg['vmid']):
-            if cfg['kind']=='ubuntu-iso':
-                result=ubuntu_build.install(cfg,plan['source'],plan['media_identity'],job_id,log)
-            elif cfg['kind']=='ubuntu-clone':
-                result=ubuntu_build.clone(cfg,log)
+            if cfg['kind'] in linux_install.ISO_KINDS:
+                installer=debian_build if cfg['kind']=='debian-iso' else ubuntu_build
+                result=linux_install.install(cfg,plan['source'],plan['media_identity'],job_id,log,installer_module=installer)
+            elif cfg['kind'] in linux_install.CLONE_KINDS:
+                result=linux_install.clone(cfg,log)
             else:
                 result=windows_build.specialize(cfg,log) if cfg.get('source_kind')=='template' else operations.execute(cfg,log)
         self.life.after_provision(cfg,result,job_id,log)
@@ -440,8 +460,8 @@ class SimpleFlow:
     def finish_build(self,plan,log,job_id):
         cfg=plan['config']
         tasks=list(plan['tasks'])
-        if cfg['kind']=='ubuntu-iso':
-            ubuntu_build.detach(cfg,self.m.get('builds',job_id),log)
+        if cfg['kind'] in linux_install.ISO_KINDS:
+            linux_install.detach(cfg,self.m.get('builds',job_id),log)
         if cfg['kind']=='windows' and (cfg.get('data_disks') or cfg.get('source_kind')=='template'):
             build=self.m.get('builds',job_id)
             self.assert_owned(cfg,job_id)
@@ -510,8 +530,10 @@ def register(app,manager,lifecycle):
             finally:
                 client.session.close()
             result['platforms']=platforms
-            recorded={management.target_id(row) for row in ubuntu_build.template_builds(manager)}
-            result['ubuntu_templates']=[key for key in platforms if platforms[key]=='linux' and key in recorded]
+            builds=linux_install.template_builds(manager)
+            for distro in ('ubuntu','debian'):
+                recorded={management.target_id(row) for row in builds if row['config']['kind']==distro+'-iso'}
+                result[distro+'_templates']=[key for key in platforms if platforms[key]=='linux' and key in recorded]
         return jsonify(result)
     @app.get('/api/simple/options')
     def options(): return jsonify(flow.options())

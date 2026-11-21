@@ -27,7 +27,7 @@ BUILTINS = [
     dict(id='windows-manual-updates',name='Use manual Windows updates',platform='windows',description='Disable automatic updates for this lab machine using its local update policy.',parameters={}),
     dict(id='windows-updates', name='Install Windows updates', platform='windows', description='Install security and critical updates. Does not reboot automatically.', parameters={}),
     dict(id='linux-package', name='Install a Linux package', platform='linux', description='Install using the guest package manager. Requires sudo.', parameters={'package': 'Package name, e.g. curl'}),
-    dict(id='linux-updates', name='Update Linux packages', platform='linux', description='Refresh metadata and upgrade packages on Ubuntu, Fedora or Rocky. Does not reboot.', parameters={}),
+    dict(id='linux-updates', name='Update Linux packages', platform='linux', description='Refresh metadata and upgrade packages on Debian, Ubuntu, Fedora or Rocky. Does not reboot.', parameters={}),
     dict(id='linux-service', name='Manage a Linux service', platform='linux', description='Start, stop or restart a service. Requires sudo.', parameters={'service': 'Service name', 'state': 'Service action'}, input_types=SERVICE_STATE_INPUT),
     dict(id='windows-service', name='Manage a Windows service', platform='windows', description='Start, stop or restart a service.', parameters={'service': 'Service name', 'state': 'Service action'}, input_types=SERVICE_STATE_INPUT),
 ] + EXAMPLES
@@ -89,7 +89,7 @@ def compile_task(item, params):
     if item['id'] in ('linux-service','windows-service') and 'state' in params and params['state'] not in ('started', 'stopped', 'restarted'):
         raise ValueError('Service state must be started, stopped or restarted')
     ident = item['id']
-    if item.get('kind') in ('windows-setup','ubuntu-setup'): return copy.deepcopy(item['steps'])
+    if item.get('kind') in ('windows-setup','ubuntu-setup','linux-setup'): return copy.deepcopy(item['steps'])
     if ident == 'install-chocolatey': return [{'chocolatey.chocolatey.win_chocolatey': {'name': 'chocolatey', 'state': 'present'}}]
     if ident == 'chocolatey-package': return [{'chocolatey.chocolatey.win_chocolatey': {'name': params['package'], 'state': 'present'}}]
     if ident == 'windows-feature':

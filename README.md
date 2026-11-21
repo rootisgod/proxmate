@@ -22,11 +22,26 @@ Upgrade from environment-based configuration: retain the existing `.env` and `.e
 
 ## Build machines
 
-Choose **Save this build** at the review step to give a Windows or Ubuntu configuration a name. Find it under **Create → Saved builds → Use build**. In **Activity**, a guided build's job log also offers **Create another like this** and **Save this build** when its settings are available. Enter a new machine name and any required guest password. Review the newly allocated VM ID, installation source, current library tasks and inputs before creating it. Removing a saved build only removes that shortcut.
+Choose **Save this build** at the review step to give a Windows, Ubuntu or Debian configuration a name. Find it under **Create → Saved builds → Use build**. In **Activity**, a guided build's job log also offers **Create another like this** and **Save this build** when its settings are available. Enter a new machine name and any required guest password. Review the newly allocated VM ID, installation source, current library tasks and inputs before creating it. Removing a saved build only removes that shortcut.
 
 If guest software fails during a build or an Operations run, open its job in **Activity** and choose **Review remaining tasks** beside the affected VM. The review shows the saved login, the original task versions and inputs, and any snapshot or template preparation the run will perform. Inspect a task marked as already started before approving it again, especially after a timeout. Each recovery gets its own job linked to the earlier run. Recovery requires a recorded task checkpoint and the original VM and disks. Installation and template-generalization failures still need inspection.
 
-For a guided Ubuntu VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Ubuntu in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
+For a guided Ubuntu or Debian VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Linux in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
+
+### Debian 13
+
+In **Create**, choose **Debian** under **Virtual machine** or **Reusable template**. Proxmate selects the newest discovered Debian 13 amd64 DVD-1 or netinst ISO. Enter a name, optionally add your GitHub username, public key or working-VM password, and select APT packages or library tasks. The installer verifies the new system disk's serial before partitioning. The guest needs DHCP and access to Debian package repositories.
+
+Open the finished job to download its reusable preseed. A prepared Debian template appears in Create. Each full clone gets its own hostname, OS machine ID and SSH host keys. Use **Operations** to run additional scripts with the saved login.
+
+To exercise the complete workflow on a lab node, run the opt-in test from PowerShell. It creates one working VM, one template and two full clones, tests password and key sign-in, and runs a parameterized Ansible task through Operations. It retains all four machines and reports their dashboard job IDs.
+
+~~~powershell
+$source = Read-Host 'Debian ISO ID from the dashboard'
+Get-Content -Raw tests/live_debian_build.py | docker compose exec -T proxmate python -u - --node nuc --source $source
+~~~
+
+Append `--templates-only` to repeat the template and two-clone checks when the ordinary VM build has already passed.
 
 ### Ubuntu Server 24.04 ISO
 

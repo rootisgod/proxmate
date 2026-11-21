@@ -373,13 +373,13 @@ class Lifecycle:
                 # The agent may hold the progress file open while the guest finishes.
                 # The completion markers below are written after setup and guest tools succeed.
                 waiting=stages.get(stage,waiting)
-            if d['kind']!='ubuntu-clone':
+            if d['kind'] not in ('ubuntu-clone','debian-clone'):
                 marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
                 if marker.get('content','').strip()!='ready': raise ValueError(waiting)
-            if d['kind'] in ('ubuntu-iso','ubuntu-clone'):
+            if d['kind'] in ('ubuntu-iso','ubuntu-clone','debian-iso','debian-clone'):
                 hostinfo=p.call('GET',path+'/agent/get-host-name').get('result',{})
                 if hostinfo.get('host-name','').split('.')[0].casefold()!=d['name'].casefold():
-                    raise ValueError('Waiting for Ubuntu to report its reviewed hostname')
+                    raise ValueError('Waiting for '+d['kind'].split('-')[0].capitalize()+' to report its reviewed hostname')
             if opts.get('clone_token'):
                 proof=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\clone-ready')
                 if proof.get('content','').strip().casefold()!=(opts['clone_token']+'|'+d['name']).casefold():

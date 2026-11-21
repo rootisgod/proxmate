@@ -42,7 +42,7 @@ def reviewed_target_identity(config: Mapping[str, object]) -> str:
 def safe_guest_config(config: Mapping[str, object]) -> None:
     """Reject a recovery or test guest that references setup media or host resources."""
     for key, value in config.items():
-        if any(prefix in str(value) for prefix in ('proxmate-unattend-', 'proxmate-ubuntu-')):
+        if any(prefix in str(value) for prefix in ('proxmate-unattend-', 'proxmate-ubuntu-', 'proxmate-debian-')):
             raise ValueError('Remove generated setup media before backup recovery or template tests')
         if key in ('args', 'hookscript', 'ivshmem') or re.fullmatch(r'(hostpci|usb|virtiofs)\d+', key):
             raise ValueError('Remove passthrough, hooks and custom QEMU arguments before using this recovery/test workflow')

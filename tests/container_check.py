@@ -79,8 +79,9 @@ with tempfile.TemporaryDirectory() as tmp:
             tasks.extend(compile_task(custom,{'share':'Lab'}))
         else:
             import pycdlib
+            import linux_access
             import ubuntu_build
-            selection=ubuntu_build.password_login('ubuntu','Fixture password 123!')
+            selection=linux_access.password_login('ubuntu','Fixture password 123!','ubuntu')
             tasks.extend(compile_task(selection['item'],selection['params']))
             for option in ('ssh','off'):
                 for selection in ubuntu_build.setting_tasks(dict(ubuntu_firewall=option,ubuntu_updates='manual')):

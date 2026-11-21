@@ -2,6 +2,21 @@
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
+## Debian 13 guided builds
+
+The live dashboard on `nuc` completed a working VM, a template and two full clones using `SSD:iso/debian-13.7.0-amd64-DVD-1.iso`. In **Create**, choose **Debian** for a virtual machine or reusable template. Each ISO job includes a downloadable preseed with placeholders for the public keys and disk serial. See the [acceptance-test instructions](README.md#debian-13).
+
+| VM | Dashboard job | Live result |
+| --- | --- | --- |
+| 145 · `dbv-5d2b4e` | `8448ef084913ca07fd291883a4563863` | Installed unattended. An independent SSH client verified both password and public-key sign-in, the hostname, `sudo` and `jq`. |
+| 149 · `dbt-e00474` | `6bd05502a32c07b24ce3c039b01b69e4` | Installed `jq`, removed installer media and login keys, and shut down as a reusable template. Its configuration remained the same after both clones. |
+| 153 · `dba-e00474` | `be516c93ddb0910c89e1188e371033ef` | Inherited `jq`. Operations job `7081c885e222432b90e8506ba0350f02` used the saved login and a caller-supplied Ansible input to create `/var/tmp/pm-e00474`. |
+| 154 · `dbb-e00474` | `fa792e17ecd62da2c9f57dbadbd78ecb` | Inherited `jq`, accepted its own login keys and had no directory from the task on 153. |
+
+Both clones had distinct hostnames, SSH host keys and OS machine IDs. The D-Bus ID matched the OS ID within each guest. Node storage metadata confirmed independent disk volumes. The test exposed two installer issues with generated boot media and public-key handling, plus a separate D-Bus machine ID that had survived template preparation. All three fixes passed unattended on the real DVD. Discovery covers netinst, which was not exercised on this node.
+
+Diagnostic guests 143 and 144 and their disks were removed after verification. Their dashboard histories and the original Debian ISO were retained. Clones 147 and 148 inherited the same OS machine ID from the earlier template 146. Use template **149** for new clones. The verification suite passed 289 Python tests, 52 UI tests and the network-isolated container checks.
+
 ## Unattended Windows templates and full clones
 
 The live dashboard completed a Windows Server 2025 Standard (Desktop Experience) ISO-to-template build and two full clones on `nuc`. The [repeatable acceptance test](docs/windows-workflows.md#run-the-template-and-clone-test) submitted all three builds through the dashboard and checked the resulting guests over certificate-verified WinRM. The clean run required no console input.
