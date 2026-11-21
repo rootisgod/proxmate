@@ -1,0 +1,91 @@
+.script-catalog,.script-targets { color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow:hidden }
+.script-filters,.script-lookup,.script-target-toolbar { display:flex; align-items:end; flex-wrap:wrap; gap:10px 16px }
+.script-filters,.script-target-toolbar { padding:16px 20px; background:var(--canvas); border-bottom:1px solid var(--line) }
+.script-filters label,.script-lookup label,.script-target-toolbar label { min-width:9rem; flex:1; margin:0 }
+.script-filters label:first-child,.script-target-toolbar label { flex:2 1 14rem }
+.script-filters input,.script-filters select,.script-lookup input,.script-lookup select,.script-target-toolbar input { display:block; width:100%; min-width:0; margin:4px 0 0; box-sizing:border-box }
+.script-count,[data-library-empty] { margin:0; padding:12px 20px; color:var(--muted) }
+.script-entry { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 20px; padding:16px 20px; border-top:1px solid var(--line); align-items:start }
+.script-entry[hidden],.script-target-row[hidden] { display:none }
+.script-entry-info { display:flex; gap:14px; min-width:0 }
+.script-entry-info>div { min-width:0; overflow-wrap:anywhere }
+.script-entry-info h2 { font-size:1rem; line-height:1.35; margin:0 0 4px; color:var(--ink); letter-spacing:normal }
+.script-entry-info p,.script-results p { color:var(--muted); margin:4px 0 0; font-size:.9rem; line-height:1.45 }
+.script-entry small,.script-results small,.script-step-head small { display:block; color:var(--muted); font-size:.8rem }
+.script-file { display:grid; place-items:center; flex:0 0 40px; height:40px; font:600 .68rem/1 monospace; border:1px solid var(--line); background:var(--canvas); color:var(--accent); border-radius:6px }
+.script-entry-actions,.script-step-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px }
+.script-entry-actions button,.script-entry-actions summary,.script-step-actions button { padding:5px 9px; font-size:.83rem }
+.script-options { position:relative }
+.script-options[open] button { position:absolute; right:0; z-index:3; white-space:nowrap; background:var(--surface) }
+.script-source { min-width:0; margin:0; font-size:.9rem }
+.script-entry>.script-source { grid-column:1/-1; padding-inline-start:54px }
+.script-source summary,.script-options summary { cursor:pointer; color:var(--accent); width:fit-content }
+.script-source pre { max-height:22rem; max-width:100%; overflow:auto; margin:8px 0; padding:12px; border:1px solid var(--line); color:var(--ink); background:var(--canvas); border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere }
+.script-schema { display:grid; grid-template-columns:minmax(5rem,auto) minmax(0,1fr); gap:4px 12px; width:fit-content }
+.script-schema dt,.script-schema dd { margin:0; overflow-wrap:anywhere }
+.script-lookup { align-items:end; padding:4px 0 8px }
+.script-lookup>button { flex:none; margin:0 }
+.script-lookup label { min-width:min(10rem,100%) }
+[data-lookup-status],.script-drive-status { display:block; color:var(--muted) }
+[data-lookup-status]:empty,.script-drive-status:empty,.script-preview:empty,.script-steps:empty { display:none }
+.script-preview p { font-size:.9rem; color:var(--muted) }
+.script-catalog-drawer { margin:10px 0 0 }
+.script-catalog-drawer>summary { cursor:pointer; width:fit-content; font-weight:600; color:var(--accent); padding:6px 0 }
+.script-catalog-drawer[open]>.script-lookup { margin-top:4px }
+.script-results { max-height:19rem; overflow:auto; list-style:none; padding:0; margin:0 0 10px; border:1px solid var(--line); border-radius:6px; background:var(--surface) }
+.script-results:empty { display:none }
+.script-results li { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:10px 12px }
+.script-results li+li,.script-steps li+li,.script-target-row+.script-target-row { border-top:1px solid var(--line) }
+.script-results li>div { min-width:0; overflow-wrap:anywhere }
+.script-results .script-source { margin-top:5px }
+.script-steps { margin:12px 0 0; padding:0; list-style:none; counter-reset:script-step; border:1px solid var(--line); border-radius:6px; background:var(--surface) }
+.script-steps li { position:relative; counter-increment:script-step; padding:12px 12px 12px 43px; overflow-wrap:anywhere }
+.script-steps li::before { position:absolute; left:12px; top:14px; content:counter(script-step); font:600 .8rem/1.4 monospace; color:var(--accent) }
+.script-step-head,.script-target-footer { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:start; gap:8px 12px }
+.script-step-inputs { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr)); align-items:start; gap:8px 16px; margin-top:8px }
+.script-step-inputs label { min-width:0; margin:0 }
+.script-step-inputs label input:not([type=checkbox]),.script-step-inputs label select { display:block; width:100%; box-sizing:border-box }
+.script-prompt { color:var(--muted); font-size:.88rem; margin:4px 0 }
+.script-steps .script-source { margin-top:7px }
+.script-target-row { display:flex; align-items:center; gap:12px; padding:13px 20px; margin:0; cursor:pointer }
+.script-target-row small { display:block; color:var(--muted) }
+.script-target-row input { flex:none; margin:0; width:auto }
+.script-target-row .pill { margin-inline-start:auto }
+.script-target-footer { align-items:center; padding:14px 20px; border-top:1px solid var(--line) }
+.reviewed-scripts { padding-left:22px }
+.reviewed-scripts li { padding:7px 0 }
+@media (max-width:760px) {
+  .script-entry { grid-template-columns:1fr; padding:14px }
+  .script-entry>.script-source { padding-inline-start:0 }
+  .script-filters,.script-target-toolbar { padding:12px; gap:9px }
+  .script-filters label { flex:1 1 8rem; min-width:0 }
+  .script-filters label:first-child { flex-basis:100% }
+  .script-entry-actions,.script-step-actions { gap:7px }
+  .script-step-actions button,.script-entry-actions button { min-height:34px }
+}
+.script-workbench .cm-editor { background:var(--surface); color:var(--ink); }
+.script-workbench .cm-editor.cm-focused { outline:2px solid var(--focus); outline-offset:-2px; }
+.script-workbench .cm-content { caret-color:var(--ink); }
+.script-workbench .cm-cursor,.script-workbench .cm-dropCursor { border-left-color:var(--ink); }
+.script-workbench :is(.cm-gutters,.cm-foldPlaceholder,.cm-panels,.cm-tooltip,.cm-button,.cm-textfield) {
+  background:var(--surface-soft); color:var(--muted); border-color:var(--line);
+}
+.script-workbench :is(.cm-activeLine,.cm-activeLineGutter) { background:var(--surface-hover); }
+.script-workbench .cm-editor .cm-selectionBackground,.script-workbench .cm-editor.cm-focused .cm-selectionBackground { background:var(--selection); }
+.script-workbench .cm-editor .cm-searchMatch { color:var(--ink); background:var(--warning-soft); outline:1px solid var(--warning); }
+.script-workbench .cm-editor .cm-searchMatch-selected { background:var(--selection); outline-color:var(--accent); }
+.script-workbench .cm-editor .cm-matchingBracket { color:var(--success); background:var(--success-soft); }
+.script-workbench .cm-editor .cm-nonmatchingBracket { color:var(--danger); background:var(--danger-soft); }
+.script-workbench .cm-tooltip-autocomplete ul { color:var(--ink); }
+.script-workbench .cm-tooltip-autocomplete li[aria-selected] { background:var(--accent-soft); color:var(--accent); }
+.script-workbench .tok-comment { color:var(--muted); font-style:italic; }
+.script-workbench :is(.tok-keyword,.tok-atom,.tok-bool,.tok-typeName) { color:var(--violet); }
+.script-workbench :is(.tok-string,.tok-string2,.tok-inserted) { color:var(--success); }
+.script-workbench :is(.tok-propertyName,.tok-variableName2,.tok-definition,.tok-labelName,.tok-url,.tok-link) { color:var(--blue); }
+.script-workbench :is(.tok-literal,.tok-number,.tok-meta) { color:var(--orange); }
+.script-workbench :is(.tok-invalid,.tok-deleted) { color:var(--danger); }
+.script-workbench :is(.tok-heading,.tok-strong) { font-weight:700; }
+.script-workbench .tok-emphasis { font-style:italic; }
+.script-file[data-kind="ansible"] { color:var(--violet); background:var(--violet-soft); }
+.script-file[data-kind="powershell"] { color:var(--blue); background:var(--blue-soft); }
+.script-file[data-kind="shell"] { color:var(--success); background:var(--success-soft); }

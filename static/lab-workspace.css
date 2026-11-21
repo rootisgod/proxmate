@@ -1,0 +1,120 @@
+#labs-workspace,#lab-dialog {
+  color:var(--ink)
+}
+#labs-workspace { padding-block:28px 10px }
+.lab-page-head,.lab-page-actions,.lab-row-actions,.design-outline-head,.design-role-head,.design-add-actions { display:flex;align-items:center;gap:10px }
+.lab-page-head { align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:23px }
+.lab-page-head h1 { margin:0;font-size:clamp(1.75rem,3vw,2.2rem);line-height:1.2 }
+.lab-page-head p { margin:5px 0 0;color:var(--muted) }
+.lab-page-actions,.lab-row-actions { flex-wrap:wrap }
+#labs-workspace :is(button,a):focus-visible,#lab-dialog :is(button,a,input,select,textarea,summary):focus-visible { outline-offset:3px }
+#labs-workspace .primary,#lab-dialog .primary { background:var(--action);border:1px solid var(--action);color:var(--on-action) }
+#labs-workspace .primary:hover,#lab-dialog .primary:hover { background:var(--action-hover) }
+.lab-page-tabs,.design-role-tabs { display:flex;gap:18px;border-bottom:1px solid var(--line) }
+.lab-page-tabs button,.design-role-tabs button {
+  color:var(--muted);font-size:.95rem;font-weight:600;line-height:1.4;border:0;border-radius:0;border-bottom:2px solid transparent;
+  padding:8px 1px 10px;background:transparent;text-align:left
+}
+.lab-page-tabs [aria-current=page],.design-role-tabs [aria-pressed=true] { color:var(--accent);border-bottom-color:var(--accent) }
+.lab-page-tabs button:hover,.design-role-tabs button:hover { color:var(--accent);background:transparent }
+.lab-library { background:var(--surface);border:1px solid var(--line);border-radius:10px;margin-top:20px;overflow:hidden }
+.lab-list-toolbar { display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:14px 18px;background:var(--surface-soft);border-bottom:1px solid var(--line) }
+.lab-list-toolbar label { margin:0;color:var(--muted) }
+.lab-list-toolbar input,.lab-list-toolbar select { width:auto;max-width:100%;min-height:35px;margin:4px 0 0;padding:6px 9px;background:var(--surface) }
+.lab-list-toolbar .lab-search { min-width:0;flex:1 1 12rem }
+.lab-search input { width:min(100%,22rem) }
+.lab-list-message,.lab-list-empty { padding:32px 20px;margin:0;text-align:center }
+.lab-list-message p,.lab-list-empty p { color:var(--muted);margin:6px 0 12px }
+.lab-list-empty h2 { font-size:1.14rem;margin:0 }
+.lab-library a,#lab-dialog a { color:var(--accent);text-underline-offset:.15em }
+.lab-records { width:100%;border-collapse:collapse }
+.lab-records th,.lab-records td { padding:12px 16px;text-align:left;vertical-align:middle }
+.lab-records thead th { background:var(--canvas);color:var(--muted);font-size:.78rem;letter-spacing:.035em }
+.lab-records tbody :is(th,td) { border-top:1px solid var(--line);font-size:.91rem }
+.lab-records tbody th { color:var(--ink);background:var(--surface);text-transform:none;letter-spacing:0;overflow-wrap:anywhere }
+.lab-row-actions { justify-content:end;gap:8px 11px }
+.lab-row-actions button,.lab-row-actions a { font:inherit;font-size:.86rem }
+.lab-row-actions button { padding:6px 10px }
+#lab-dialog { border:1px solid var(--line);box-shadow:0 18px 68px var(--shadow) }
+#lab-dialog:has(.lab-designer) { width:min(1080px,calc(100vw - 44px));height:min(760px,calc(100dvh - 48px));max-height:none }
+#lab-dialog:has(.lab-designer) #lab-form { height:100%;max-height:none }
+#lab-dialog:has(.lab-designer) #lab-fields { padding:0;flex:1;min-height:0 }
+#lab-dialog:has(.lab-designer) #lab-fields>div,.lab-designer { min-height:100%;display:flex;flex-direction:column }
+#lab-dialog .modal-head,#lab-dialog .modal-footer { background:var(--surface) }
+#lab-dialog .modal-head h2 { font-size:1.35rem }
+#lab-dialog .modal-footer { border-color:var(--line) }
+.design-name { padding:11px 20px;background:var(--surface);border-bottom:1px solid var(--line) }
+#lab-fields .design-name label { display:grid;grid-template-columns:6rem minmax(8rem,23rem);align-items:center;margin:0;color:var(--muted) }
+#lab-fields .design-name input { margin:0;background:var(--surface) }
+.design-layout { display:grid;grid-template-columns:minmax(180px,24%) minmax(0,1fr);flex:1;align-items:stretch }
+.design-outline { background:var(--canvas);padding:14px 10px;border-right:1px solid var(--line);min-width:0 }
+.design-outline-head { justify-content:space-between;margin:0 4px 10px }
+.design-outline-head h3,#lab-dialog .design-role-head h3,#design-add-panel h3 { margin:0 }
+.design-outline-head button,#lab-dialog [data-remove-machine] { padding:5px 9px;font-size:.84rem }
+#design-roles { display:grid;gap:4px }
+#design-roles>p { padding:8px 4px;font-size:.91rem }
+#design-roles>button { text-align:left;padding:8px 10px;border-radius:6px;background:transparent;border:1px solid transparent;min-width:0;overflow-wrap:anywhere }
+#design-roles>button[aria-current=true] { background:var(--accent-soft);border-color:var(--accent-line);box-shadow:inset 3px 0 var(--accent);color:var(--accent) }
+#design-roles>button:hover { border-color:var(--accent-line) }
+#design-roles strong,#design-roles small,.design-intents strong,.design-intents small { display:block }
+#design-roles small,.design-intents small { font-weight:400;font-size:.82rem;color:var(--muted);margin-top:3px;line-height:1.45 }
+.design-detail { min-width:0;padding:18px 22px 24px;background:var(--surface) }
+#lab-fields .design-intents { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0;padding:0;border:0 }
+#lab-fields .design-intents legend { padding:0;margin:0 0 7px;font-size:.93rem;font-weight:600;color:var(--muted) }
+#lab-fields .design-intents label { display:flex;align-items:flex-start;gap:8px;padding:12px;margin:0;background:var(--surface);border:1px solid var(--line);border-radius:7px;cursor:pointer }
+#lab-fields .design-intents label:has(:checked) { border-color:var(--accent);background:var(--accent-soft) }
+#lab-fields .design-intents input { width:1rem;height:1rem;margin:2px 0 0;flex:none;accent-color:var(--accent) }
+.design-add-input { max-width:28rem }.design-add-actions { margin-top:15px }
+.design-role-head { justify-content:space-between;align-items:flex-start;margin-bottom:10px }
+.design-role-head h3 { font-size:1.22rem;overflow-wrap:anywhere }
+.design-role-head .design-role-summary { color:var(--muted);font-size:.88rem }
+#lab-fields .design-role-tabs { margin:4px 0 13px }
+#lab-fields .design-process h4,#lab-fields .design-settings h4 { margin:0 0 8px;font-size:1rem }
+#lab-fields .design-settings label,#lab-fields .design-add-input label { font-size:.9rem }
+#lab-fields .design-resources { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px }
+#lab-fields .design-dependencies { border-top:1px solid var(--line);padding-top:12px;margin-top:15px }
+#design-machines [hidden],#design-add-panel[hidden] { display:none!important }
+@media(min-width:800px) {
+  #lab-dialog:has(.lab-designer) #lab-fields,#lab-dialog:has(.lab-designer) #lab-fields>div,.lab-designer { height:100%;overflow:hidden;min-height:0 }
+  .design-layout { min-height:0 }
+  .design-detail,.design-outline { overflow:auto;overscroll-behavior:contain }
+}
+@media(max-width:700px) {
+  #labs-workspace { padding-block-start:18px }
+  .lab-list-toolbar { align-items:center;padding:10px 12px }
+  .lab-records,.lab-records tbody,.lab-records tr { display:block }
+  .lab-records thead { position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%) }
+  .lab-records tbody tr { padding:12px 14px;border-top:1px solid var(--line) }
+  .lab-records tbody th,.lab-records tbody td { border:0;padding:2px 0;display:block }
+  .lab-records tbody td:nth-child(2),.lab-records tbody td:nth-child(3) { display:inline-block;margin-inline-end:12px;color:var(--muted) }
+  .lab-row-actions { justify-content:start;margin-top:6px }
+  #lab-dialog:has(.lab-designer) { width:calc(100vw - 12px);height:calc(100dvh - 16px) }
+  .design-layout { display:block }
+  .design-detail,.design-outline { padding:12px }
+  .design-outline { border-right:0;border-bottom:1px solid var(--line) }
+  #design-roles { display:flex;gap:8px;overflow:auto }
+  #design-roles>button { flex:0 0 auto;max-width:90% }
+  .design-name { padding:8px 12px }.design-outline-head { margin:0 0 6px }
+  #lab-fields .design-name label { grid-template-columns:5rem minmax(0,1fr) }
+  #lab-fields .design-resources { grid-template-columns:1fr }
+}
+@media(max-width:430px) {
+  #lab-fields .design-intents { grid-template-columns:1fr }
+  .lab-page-actions { width:100% }
+}
+.lab-empty-mark { width:40px;height:40px;display:inline-grid;place-items:center;margin-bottom:13px;border:1px solid var(--line);border-radius:9px;background:var(--surface-soft);color:var(--muted);font-size:1.2rem }
+#design-roles>button { display:flex;align-items:flex-start;gap:8px }
+#design-roles>button>.bi { flex:none;color:var(--muted);font-size:.93em;margin-top:2px }
+#design-roles>button>span:last-child { min-width:0 }
+.lab-page-actions .bi,.lab-page-tabs .bi { margin-inline-end:3px }
+#lab-dialog:has(.lab-mapping-roles),#lab-dialog:has(.lab-review-role) { width:min(800px,95vw) }
+.lab-mapping-roles { display:flex;gap:7px;overflow:auto;margin:0 0 9px;padding:3px 1px 8px;border-bottom:1px solid var(--line) }
+.lab-mapping-roles button { min-width:7.5rem;max-width:18rem;flex:none;overflow-wrap:anywhere;text-align:left;background:var(--surface);color:var(--ink);border:1px solid var(--line);padding:6px 10px }
+.lab-mapping-roles button[aria-pressed=true] { background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent) }
+.lab-mapping-roles small,.lab-review-role>summary span { display:block;font-size:.84rem;font-weight:normal;color:var(--muted) }
+#lab-fields .lab-mapping fieldset[hidden] { display:none }
+#lab-fields .lab-review-role { margin-bottom:8px;border:1px solid var(--line);border-radius:7px }
+#lab-fields .lab-review-role>summary { padding:9px 12px;color:var(--ink);overflow-wrap:anywhere }
+#lab-fields .lab-review-role>summary span { margin-inline-start:13px }
+#lab-fields .lab-review-role>fieldset { margin:0;border-width:1px 0 0;border-radius:0;padding:10px 14px }
+#lab-fields .lab-review-role>fieldset>legend { position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden }

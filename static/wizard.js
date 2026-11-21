@@ -10,12 +10,14 @@ function wizardRequestKey() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), b=>b.toString(16).padStart(2,'0')).join('');
 }
 
-async function openWizard(kind='linux-cloud', filename='', purpose='vm') {
+async function openWizard(kind='linux-cloud', filename='', purpose='vm', selectedNode=null) {
   if (!state) return notice('Connect to Proxmox before opening the wizard.');
   try {
+    const server=serverInfo?.id;
     const catalog = await api('catalog');
     if(typeof loadManagement==='function')await loadManagement();
-    const node = state.nodes.find(n=>n.status==='online')?.node;
+    if(!state||server!==serverInfo?.id)return;
+    const node = state.nodes.find(n=>n.status==='online'&&(!selectedNode||n.node===selectedNode))?.node;
     if (!node) throw Error('No online Proxmox node is available.');
     wizard = {step:0, catalog, draft:{kind,purpose,source_kind:filename?'local':'proxmox',filename,node,
       vmid:state.next_id,name:kind==='windows'?'windows-server':'my-linux-vm',profile:'ubuntu-24.04',

@@ -27,7 +27,7 @@ async function api(path,body,extraHeaders={},responseType='json'){
 function notice(message){$('#notice').textContent=message;$('#notice').hidden=false}
 let refreshVersion=0;
 function needsInventoryDetails(){
-  return ['overview','templates','backups','media','ansible','tasks','recipes','recovery','versions'].includes(view) ||
+  return ['overview','templates','backups','ansible','tasks','recipes','recovery','versions'].includes(view) ||
     Boolean(state?.details && ($('#wizard[open], #manage-dialog[open]') || ($('#editor').open&&!$('#job-log'))));
 }
 async function readInventory(){
@@ -63,27 +63,106 @@ async function refresh(){
     const results=await Promise.all([selected.connected?readInventory():Promise.resolve(null),api('jobs?summary=1')]);
     if(revision!==refreshVersion)return;
     [state,jobs]=results;observeJobs(jobs,selected.connected?selected.id:null);$('#connection').className=state?'online':'';
-    $('#connection-label').textContent=state?selected.url:'Disconnected';
+    const connectionLabel=$('#connection-label');
+    connectionLabel.textContent=state?(selected.url||'Connected').replace(/^https?:\/\//,''):'Disconnected';
+    connectionLabel.title=state?'Connected to '+selected.url:'Disconnected';
     if(view==='machines'&&state&&typeof restoreMachineLocation==='function'&&restoreMachineLocation())return;
     render();
-  }catch(e){if(revision!==refreshVersion)return;state=null;$('#connection').className='';$('#connection-label').textContent='Connection unavailable';notice(e.message);render()}
+  }catch(e){if(revision!==refreshVersion)return;state=null;$('#connection').className='';$('#connection-label').textContent='Connection unavailable';$('#connection-label').removeAttribute('title');notice(e.message);render()}
 }
 
-function title(name,sub,button=''){return `<div class="title"><div><h1>${name}</h1><p>${sub}</p></div>${button}</div>`}
+function workspaceHeading(name,sub){
+  const icon=$('#workspace-nav button[aria-current=page] .bi')?.className||'bi bi-grid';
+  return `<div class="page-heading"><span class="page-symbol ${esc(icon)}" aria-hidden="true"></span><div><h1>${name}</h1><p>${sub}</p></div></div>`;
+}
+function title(name,sub,button=''){return `<div class="title">${workspaceHeading(name,sub)}${button}</div>`}
 function btn(label,a,id){return `<button data-action="${a}" ${id?`data-id="${id}"`:''}>${label}</button>`}
 function table(head,rows){return `<div class="panel table-wrap"><table><thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')||`<tr><td colspan="${head.length}" class="empty">Nothing here yet. Your next operation will appear here.</td></tr>`}</tbody></table></div>`}
 function guestRows(items,template=false){return items.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${r.type.toUpperCase()} · ${r.vmid}</small></td><td><span class="pill ${esc(r.status)}">${template?'template':esc(r.status)}</span></td><td>${esc(r.node)}</td><td>${r.maxcpu} cores · ${(r.maxmem/1073741824).toFixed(0)} GB</td><td><div class="row-actions">${r.type==='qemu'?(template?'<button data-clone-template="'+esc(r.vmid)+'">Clone →</button>':`<button data-simple="apply" data-id="${r.vmid}">Run script</button>`+mgButton('Power / settings','manage-vm',r.vmid)+mgButton('Connection','connection',r.vmid)+mgButton('Snapshots','snapshots',r.vmid)+btn('Backup','backup',r.vmid)+btn('Start','start',r.vmid)+btn('Finish setup','finish-setup',r.vmid)+btn('Template','convert-template',r.vmid)):''}</div></td></tr>`)}
 function activity(rows=jobs){return table(['Operation','Status','Submitted','Details'],rows.map(j=>`<tr><td>${esc(j.operation||j.action)}<small>${esc(j.target?.name||j.target?.label||j.target?.filename||j.target?.vmid||j.target?.node||'')}</small></td><td><span class="pill ${j.status}">${j.status}</span></td><td>${new Date(j.created*1000).toLocaleString()}</td><td><button data-log="${j.id}">View log</button></td></tr>`))}
+function workspaceRoute(){
+  const name=location.hash.slice(1);
+  return Array.from(document.querySelectorAll('#workspace-nav [data-view]')).some(b=>b.dataset.view===name)?name:null;
+}
+
+function workspaceLocation(active=view){
+  const current=active==='machine'||active==='home'?'machines':active;
+  const links=document.querySelectorAll('#workspace-nav [data-view]');
+  for(const link of links){
+    const selected=link.dataset.view===current;
+    link.classList.toggle('active',selected);
+    if(selected){
+      link.setAttribute('aria-current','page');
+      const group=link.closest('[role=group]')?.getAttribute('aria-label')||'More tools';
+      $('#content').dataset.area=group;
+      $('#workspace-group').textContent=group;
+      $('#workspace-location').textContent=active==='machine'?'Machine details':link.textContent.trim();
+      document.title=$('#workspace-location').textContent+' · Proxmate';
+      const tools=link.closest('details');
+      if(tools)tools.open=true;
+    }else link.removeAttribute('aria-current');
+  }
+}
+
+function navigateWorkspace(name){
+  const previous=view;
+  view=name;
+  if(previous!==name||location.hash!=='#'+name)history.pushState({},'','#'+name);
+  render();
+  if(previous!==name){
+    $('#content').focus({preventScroll:true});
+    document.documentElement.scrollTop=0;
+  }
+}
+
+window.addEventListener('hashchange',()=>{
+  if(location.hash.startsWith('#machine/')||location.hash==='#content')return;
+  view=workspaceRoute()||'machines';
+  render();
+});
+
+async function openMediaTool(filename,node,advanced){
+  const server=serverInfo?.id;
+  try{
+    const inventory=await api('state');
+    if(server!==serverInfo?.id||view!=='media')return;
+    if(!inventory.details[node])throw Error('The selected node is unavailable. Refresh the ISO library.');
+    state=inventory;
+    if(advanced)await openWizard('linux-iso',filename,'vm',node);
+    else openAction('upload-iso',null,filename,node);
+  }catch(error){notice(error.message)}
+}
+const openMediaUpload=(filename,node)=>openMediaTool(filename,node,false);
+const openMediaAdvanced=(filename,node)=>openMediaTool(filename,node,true);
+
+let activityFilter='all';
+function renderActivity(){
+  const active=['running','waiting','queued'];
+  const attention=['failed','interrupted'];
+  const matches=(job,key)=>key==='all'||(key==='active'?active:attention).includes(job.status);
+  const filters=[['all','All jobs'],['active','In progress'],['attention','Needs attention']];
+  const filtered=jobs.filter(j=>matches(j,activityFilter));
+  $('#content').innerHTML=title('Activity','Track builds and script runs. Open a job to inspect its result.')+
+    '<div class="activity-filters inventory-filters" role="group" aria-label="Filter jobs">'+filters.map(([key,label])=>
+      `<button data-activity-filter="${key}" aria-pressed="${key===activityFilter}">${label} <span>${jobs.filter(j=>matches(j,key)).length}</span></button>`).join('')+
+    '</div>'+(filtered.length?activity(filtered):'<div class="build-empty"><span class="bi bi-activity" aria-hidden="true"></span><strong>No jobs in this view</strong></div>');
+  for(const filter of document.querySelectorAll('[data-activity-filter]'))filter.onclick=()=>{
+    activityFilter=filter.dataset.activityFilter;renderActivity();
+    document.querySelector(`[data-activity-filter="${activityFilter}"]`).focus({preventScroll:true});
+  };
+}
 function render(){
+  const showServer=!state&&!['scripts','tasks','credentials','jobs'].includes(view);
+  workspaceLocation(showServer?'server':view);
+  if(workspaceRoute()&&workspaceRoute()!==view&&view!=='machine')history.replaceState({},'','#'+view);
+  if(view==='jobs'){renderActivity();return}
   if(state&&!state.details&&needsInventoryDetails()){loadInventoryDetails();return}
-  if(typeof serverRender==='function'&&serverRender())return;if(view==='machine'&&typeof renderMachine==='function'){renderMachine();return}if(typeof simpleRender==='function'&&simpleRender())return;if(view==='jobs'&&!state){$('#content').innerHTML=title('Activity','History across server connections.')+activity();return;}if(typeof lifecycleRender==='function'&&lifecycleRender())return;if(typeof managementRender==='function'&&managementRender())return;if(!state)return;const guests=state.resources.filter(r=>r.vmid),templates=guests.filter(r=>r.template),vms=guests.filter(r=>!r.template);let html='';
+  if(typeof serverRender==='function'&&serverRender())return;if(view==='machine'&&typeof renderMachine==='function'){renderMachine();return}if(typeof simpleRender==='function'&&simpleRender())return;if(typeof lifecycleRender==='function'&&lifecycleRender())return;if(typeof managementRender==='function'&&managementRender())return;if(!state)return;const guests=state.resources.filter(r=>r.vmid),templates=guests.filter(r=>r.template),vms=guests.filter(r=>!r.template);let html='';
 if(view==='overview'){html=title('Your lab, at a glance.','Less repetition. More time to build.', '<button class="primary" data-wizard="linux-cloud">＋ Build a machine</button>')+`<div class="stats"><div class="stat"><span>VIRTUAL MACHINES</span><strong>${vms.length}</strong></div><div class="stat"><span>READY TEMPLATES</span><strong>${templates.length}</strong></div><div class="stat"><span>RUNNING GUESTS</span><strong>${vms.filter(r=>r.status==='running').length}</strong></div><div class="stat"><span>ACTIVE JOBS</span><strong>${jobs.filter(j=>['running','queued','waiting'].includes(j.status)).length}</strong></div></div><h2>A shortcut to your next project</h2><div class="cards"><div class="card"><span class="icon">▧</span><h3>Build once. Use again.</h3><p>Create an Ubuntu cloud template, or prepare a Windows or Linux installer VM.</p><button data-wizard="linux-cloud">Linux wizard</button></div><div class="card"><span class="icon">⌘</span><h3>Put your playbook to work.</h3><p>Run Ansible against your inventory and keep the result in one place.</p>${btn('Run a playbook →','ansible')}</div><div class="card"><span class="icon">◷</span><h3>A little peace of mind.</h3><p>Take a compressed VM backup on your Proxmox backup storage.</p>${btn('Take a backup →','backup')}</div></div><h2>Your machines <span class="subtle">${vms.length} guests</span></h2>`+table(['Name','Status','Node','Resources','Actions'],guestRows(vms));}
 if(view==='templates')html=title('Templates','A good starting point, every time.', '<button class="primary" data-simple="windows" data-purpose="template">＋ Template wizard</button>')+`<div class="panel"><div class="panel-head"><div><h3>Windows & Linux from ISO</h3><p>Choose Windows Server, Ubuntu, Debian or Rocky Linux. We install your software, prepare the guest and make it reusable.</p></div><button data-simple="windows" data-purpose="template">Windows template</button><button data-simple="ubuntu" data-purpose="template">Ubuntu template</button><button data-simple="debian" data-purpose="template">Debian template</button><button data-simple="rocky" data-purpose="template">Rocky template</button></div></div>`+table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true));
-if(view==='machines')html=title('Virtual machines','Clone a template and get straight to work.','<button class="primary" data-simple="windows">＋ Create machines</button>')+table(['Name','Status','Node','Resources','Actions'],guestRows(vms));
 if(view==='backups')html=title('Backups','Snapshot-mode backups, compressed with Zstandard.','<button class="primary" data-action="backup">＋ Take backup</button>')+table(['Backup archive','Node','Size'],Object.entries(state.details).flatMap(([node,d])=>(d.backups||[]).map(b=>`<tr><td>${esc(b.volid)}</td><td>${esc(node)}</td><td>${(b.size/1073741824).toFixed(2)} GB</td></tr>`)))+'<p><button data-view="recovery">Restore, test backups and manage retention</button></p><h2>Backup activity</h2>'+activity(jobs.filter(job=>job.action==='backup'));
 if(view==='ansible')html=title('Ansible','Your playbooks. Your inventory. One place to run them.','<button class="primary" data-action="ansible">＋ Run playbook</button>')+`<p>Playbooks run as the Proxmate service user inside the container. Configure SSH credentials and known_hosts for your targets. This is an administrator code-execution feature.</p>`+activity(jobs.filter(job=>job.action==='ansible'));
-if(view==='jobs')html=title('Activity','Every operation, with its outcome and log.')+activity();
-if(view==='media')html=title('ISO library','Local media mounted read-only. Upload an image to Proxmox when you need it.')+table(['Image','Size','Action'],state.local_isos.map(f=>`<tr><td>${esc(f.name)}</td><td>${(f.bytes/1073741824).toFixed(2)} GB</td><td><button ${['ubuntu','debian','rocky'].includes(f.guided_os)?'data-simple="'+f.guided_os+'"':mediaCategory({label:f.name})?'data-simple="windows"':'data-wizard="linux-iso"'} data-filename="${esc(f.name)}">Use in wizard</button> <button data-upload="${esc(f.name)}">Upload only</button></td></tr>`));
+
 $('#content').innerHTML=html;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));}
 function options(items,value,label){return items.map(x=>`<option value="${esc(value(x))}">${esc(label(x))}</option>`).join('')}
 function select(name,label,items){return `<label>${label}<select name="${name}" required>${items}</select></label>`}
@@ -129,12 +208,17 @@ function openJobLog(id){
   $('#form-error').textContent='';$('#editor .modal-footer').hidden=true;
   $('#editor').showModal();readJobLog(log);
 }
-document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.view){view=b.dataset.view;render()}if(b.dataset.action)openAction(b.dataset.action,b.dataset.id);if(b.dataset.upload)openAction('upload-iso',null,b.dataset.upload);if(b.dataset.log)openJobLog(b.dataset.log)});
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.view)navigateWorkspace(b.dataset.view);if(b.dataset.action)openAction(b.dataset.action,b.dataset.id);if(b.dataset.upload)openAction('upload-iso',null,b.dataset.upload);if(b.dataset.log)openJobLog(b.dataset.log)});
 const navToggle=$('#nav-toggle');
 function toggleNav(open){
   navToggle.setAttribute('aria-expanded',String(open));
   document.querySelector('aside').classList.toggle('nav-open',open);
 }
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&navToggle.getAttribute('aria-expanded')==='true'){
+    toggleNav(false);navToggle.focus();
+  }
+});
 navToggle.onclick=()=>toggleNav(navToggle.getAttribute('aria-expanded')==='false');
 $('#workspace-nav').addEventListener('click',e=>{
   if(e.target.closest('[data-view]')&&navToggle.getAttribute('aria-expanded')==='true'){
@@ -142,10 +226,24 @@ $('#workspace-nav').addEventListener('click',e=>{
     $('#content').focus();
   }
 });
-$('#editor').addEventListener('close',()=>$('.modal-footer').hidden=false);$('#close').onclick=()=>$('#editor').close();$('#refresh').onclick=async()=>{await refresh();if(view==='machine'&&machinePage){await openMachine(machinePage.target);return}if(mg&&!['machines','home','jobs','server'].includes(view)){await loadManagement();render()}};$('#logout').onclick=async()=>{await api('logout',{});location.reload()};
+$('#editor').addEventListener('close',()=>$('.modal-footer').hidden=false);
+$('#close').onclick=()=>$('#editor').close();
+$('#refresh').onclick=async()=>{
+  const button=$('#refresh'),page=view,server=serverInfo?.id;
+  button.disabled=true;
+  try{
+    await refresh();
+    if(view!==page||server!==serverInfo?.id)return;
+    if(view==='machine'&&machinePage)await openMachine(machinePage.target);
+    else if(view==='media')$('.media-refresh')?.click();
+    else if(mg&&[...managementViews,'scripts'].includes(view)){await loadManagement();render()}
+  }catch(error){notice(error.message)}
+  finally{button.disabled=false}
+};
+$('#logout').onclick=async()=>{await api('logout',{});location.reload()};
 $('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await api('login',{password:new FormData(e.target).get('password')});csrf=r.csrf;$('#login').close();e.target.reset();$('#notice').hidden=true;await refresh()}catch(err){$('#login-error').textContent=err.message}};
 $('#action-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const d={action,...fixed,...Object.fromEntries(new FormData(e.target))};if(!d.ssh_key)delete d.ssh_key;if(d.prepared)d.prepared=true;if(d.host_confirmed)d.host_confirmed=true;await api('jobs',d);$('#editor').close();view='jobs';notice('Operation queued. Follow its progress below.');await refresh()}catch(err){$('#form-error').textContent=err.message}finally{b.disabled=false}};
-async function startDashboard(){try{csrf=(await api('session')).csrf;await refresh()}catch{if(!$('#login').open)$('#login').showModal()}}
+async function startDashboard(){view=workspaceRoute()||view;try{csrf=(await api('session')).csrf;await refresh()}catch{if(!$('#login').open)$('#login').showModal()}}
 if(document.readyState==='complete')startDashboard();else document.addEventListener('DOMContentLoaded',startDashboard,{once:true});
 let polling=false,lastInventoryRead=Date.now();
 

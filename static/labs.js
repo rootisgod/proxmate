@@ -3,11 +3,12 @@ function labActive(fields) {
   return fields.isConnected && $('#lab-dialog').open;
 }
 
-function labStep(title, html, next, progress, submit) {
+function labStep(title, html, next, progress, submit, validate) {
   const dialog = $('#lab-dialog'), form = $('#lab-form');
   const fields = document.createElement('div');
   fields.innerHTML = html;
   $('#lab-fields').replaceChildren(fields);
+  form.noValidate = !!validate;
   $('#lab-title').textContent = title;
   $('#lab-next').textContent = next;
   $('#lab-next').disabled = false;
@@ -15,7 +16,7 @@ function labStep(title, html, next, progress, submit) {
   $('#lab-error').textContent = '';
   form.onsubmit = async event => {
     event.preventDefault();
-    if ($('#lab-next').disabled) return;
+    if ($('#lab-next').disabled || (validate && !validate(fields))) return;
     $('#lab-next').disabled = true;
     fields.inert = true;
     $('#lab-error').textContent = '';
@@ -165,8 +166,8 @@ function labPlacement(row, machine, options) {
   const dest = options.destinations.find(d => d.node === node);
   const slot = row.querySelector('.lab-placement');
   const pairs = values => values.map(value => [value, value]);
-  let html = labSelect('storage', 'VM storage', pairs(dest.storage_choices), dest.storage) +
-    labSelect('iso_storage', 'ISO storage', pairs(dest.iso_storages), dest.iso_storage) +
+  let html = labSelect('storage', 'VM disk storage', pairs(dest.storage_choices), dest.storage) +
+    labSelect('iso_storage', 'Setup media storage', pairs(dest.iso_storages), dest.iso_storage) +
     labSelect('bridge', 'Network bridge', pairs(dest.bridges), dest.bridge);
   const source = machine.source, windows = machine.os === 'windows';
   if (source.kind === 'template') {
@@ -338,19 +339,29 @@ function mapLab(pack, options, previous = Object.create(null)) {
       (source.edition ? ' · ' + esc(source.edition) : '') + (hardware.length ? '<br>' + hardware.join(' · ') : '') +
       '<br>' + afterLabel(machine) + '</p>' + labTasks(pack,machine) +
       '<div class="form-grid">' + wf('name','New machine name',saved?.name || names[i],'text','required maxlength="12" pattern="[A-Za-z](?:[A-Za-z0-9\\-]{0,10}[A-Za-z0-9])?"') +
-      labSelect('node','Destination node',nodes,saved?.node || nodes[0][0]) + '</div>' +
+      labSelect('node','Proxmox node',nodes,saved?.node || nodes[0][0]) + '</div>' +
       '<div class="form-grid lab-placement"></div>' + labAccess(machine) + '</fieldset>';
   });
-  const fields = labStep('Set up ' + pack.name, cards.join(''), 'Review lab', 'Checking machines and local sources…', async area => {
+  const pickRole = (area,i) => {
+    for (const row of area.querySelectorAll('[data-machine-index]')) row.hidden = Number(row.dataset.machineIndex) !== i;
+    for (const button of area.querySelectorAll('[data-map-role]')) button.setAttribute('aria-pressed',String(Number(button.dataset.mapRole) === i));
+  };
+  const switcher = cards.length > 1 ? '<nav class="lab-mapping-roles" aria-label="Deployment roles">' +
+    pack.machines.map((m,i) => '<button type="button" data-map-role="' + i + '"><strong>' + esc(m.key) + '</strong><small>' +
+      (m.source.kind === 'existing' ? 'Run on existing VM' : m.settings?.purpose === 'template' ? 'Create template' : 'Create VM') + '</small></button>').join('') + '</nav>' : '';
+  const fields = labStep('Set up ' + pack.name,'<div class="lab-mapping">' + switcher + '<div>' + cards.join('') + '</div></div>',
+    'Review lab', 'Checking machines and local sources…', async area => {
     const bindings = Object.create(null), secrets = Object.create(null);
     for (const row of area.querySelectorAll('[data-machine-index]')) {
       const machine = pack.machines[Number(row.dataset.machineIndex)];
       const prompts = [...row.querySelectorAll('[data-prompt]')];
       const inputs = Object.fromEntries(prompts.map(input => [input.dataset.prompt,input.value]));
       if (machine.source.kind === 'existing') {
-        const existing = await existingLabBinding(row,machine,options);
-        bindings[machine.key] = existing.binding;
-        secrets[machine.key] = prompts.length ? {...existing.secrets,inputs} : existing.secrets;
+        try {
+          const existing = await existingLabBinding(row,machine,options);
+          bindings[machine.key] = existing.binding;
+          secrets[machine.key] = prompts.length ? {...existing.secrets,inputs} : existing.secrets;
+        } catch (error) { pickRole(area,Number(row.dataset.machineIndex)); throw error; }
         continue;
       }
       const binding = Object.fromEntries([...row.querySelectorAll('[name]')].filter(input => !input.closest('.lab-access'))
@@ -362,6 +373,7 @@ function mapLab(pack, options, previous = Object.create(null)) {
         .map(input => [input.name,input.value]));
       if (prompts.length) login.inputs = inputs;
       if (machine.settings?.key_login && !login.ssh_public_key?.trim() && !login.github_username?.trim()) {
+        pickRole(area,Number(row.dataset.machineIndex));
         throw Error('Supply a workstation public key or GitHub account for ' + machine.key + '.');
       }
       secrets[machine.key] = login;
@@ -369,7 +381,15 @@ function mapLab(pack, options, previous = Object.create(null)) {
     if (!labActive(area)) return;
     const review = await api('simple/labs/plan',{pack_id:pack.id,bindings,secrets});
     if (labActive(area)) confirmLab(pack,options,bindings,review);
+  },area => {
+    for (const row of area.querySelectorAll('[data-machine-index]')) {
+      const input = row.querySelector('input:invalid, select:invalid, textarea:invalid');
+      if (input) { pickRole(area,Number(row.dataset.machineIndex)); input.reportValidity(); return false; }
+    }
+    return true;
   });
+  for (const button of fields.querySelectorAll('[data-map-role]')) button.onclick = () => pickRole(fields,Number(button.dataset.mapRole));
+  pickRole(fields,0);
   fields.querySelectorAll('[data-machine-index]').forEach(row => {
     const machine = pack.machines[Number(row.dataset.machineIndex)], node = row.querySelector('[name=node]');
     if (machine.source.kind === 'existing') {
@@ -401,15 +421,26 @@ function confirmLab(pack, options, bindings, review) {
         ' · ' + esc(target.credential_name) + '</p><p>' + esc(machine.key) + ' · ' + afterLabel(machine) + '</p>' +
         (plan.snapshot_before ? '<p>Take a snapshot before running scripts.</p>' : '') + labTasks(pack,imported,plan.tasks) + '</fieldset>';
     }
+    const files = [...new Set((imported.tasks || []).map(t => t.file).filter(Boolean))];
+    const bundled = files.length ? '<details class="lab-tasks"><summary>Bundled script source (' + files.length + ')</summary>' +
+      files.map(path => '<h4>' + esc(path) + '</h4><pre>' + esc(pack.scripts[path]) + '</pre>').join('') + '</details>' : '';
     return '<fieldset><legend>Create machine · ' + esc(machine.key) + '</legend><p>' + afterLabel(machine) + '</p>' +
       buildReview(plan, imported.os === 'windows', false) +
       '<p>Mapped source · ' + esc(plan.source.value) + (plan.iso_storage ? ' · ISO storage ' + esc(plan.iso_storage) : '') +
       (imported.os === 'windows' && plan.source.kind === 'iso' ? ' · Guest tools ' + esc(plan.guest_tools) : '') + '</p>' +
-      labTasks(pack,imported) + '</fieldset>';
+      bundled + '</fieldset>';
   });
   const license = pack.machines.some(m => m.os === 'windows' && m.source.kind !== 'existing') ? ' I am authorised to use the Windows media and accept its licence.' : '';
   const existing = review.machines.some(m => m.mode === 'existing');
-  const fields = labStep('Review ' + review.name, cards.join('') + '<button type="button" id="lab-edit">Edit deployment settings</button>' +
+  const details = cards.length === 1 ? cards.join('') : review.machines.map((machine,i) => {
+    const isTarget = machine.mode === 'existing';
+    const target = isTarget ? machine.plan.targets[0] : machine.plan.machines[0];
+    const action = isTarget ? 'Run scripts on existing VM' : machine.plan.purpose === 'template' ? 'Create template' : 'Create VM';
+    return '<details class="lab-review-role" name="lab-reviewed-role"' + (i === 0 ? ' open' : '') +
+      '><summary><strong>' + esc(target.name) + '</strong><span>' + action + ' · ' + esc(target.node) + ' / VM ' + esc(target.vmid) +
+      '</span></summary>' + cards[i] + '</details>';
+  }).join('');
+  const fields = labStep('Review ' + review.name,'<div class="lab-review-summary">' + details + '</div><button type="button" id="lab-edit">Edit deployment settings</button>' +
     wc('confirmed','Deploy the reviewed lab in the listed order.' + license) +
     (existing ? wc('existing_confirmed','Run the listed scripts on the existing VMs identified above.') : '') +
     (review.dangerous ? wc('risk_confirmed','I reviewed and approve the scripts and sensitive settings in this lab.') : ''),
@@ -420,41 +451,122 @@ function confirmLab(pack, options, bindings, review) {
       if (!labActive(area)) return;
       showLabRun(run);
       await refresh();
+    },area => {
+      const missing = area.querySelector('input[required]:not(:checked)');
+      if (!missing) return true;
+      $('#lab-error').textContent = missing.name === 'existing_confirmed' ? 'Confirm the changes to the listed existing VMs.' :
+        missing.name === 'risk_confirmed' ? 'Review and approve the scripts and sensitive settings.' : 'Confirm the reviewed deployment before continuing.';
+      missing.scrollIntoView?.({block:'center'});
+      missing.focus();
+      return false;
     });
   for (const input of fields.querySelectorAll('[type=checkbox]')) input.required = true;
   $('#lab-edit').onclick = () => mapLab(pack,options,bindings);
 }
 
+function renderLabsWorkspace() {
+  let workspace = $('#labs-workspace');
+  if (!workspace) {
+    $('#content').innerHTML = '<div id="labs-workspace"><div class="lab-page-head">' +
+      workspaceHeading('Labs','Build reusable processes for new and existing machines.') +
+      '<div class="lab-page-actions"><button id="lab-import"><span class="bi bi-upload" aria-hidden="true"></span> Import ZIP</button>' +
+      '<button class="primary" id="lab-create"><span class="bi bi-plus-lg" aria-hidden="true"></span> Create lab</button></div></div>' +
+      '<nav class="lab-page-tabs" aria-label="Lab views"><button type="button" data-lab-list="packs"><span class="bi bi-box-seam" aria-hidden="true"></span> Saved packs</button>' +
+      '<button type="button" data-lab-list="runs"><span class="bi bi-clock-history" aria-hidden="true"></span> Deployments</button></nav><section class="lab-library"></section></div>';
+    workspace = $('#labs-workspace');
+    $('#lab-create').onclick = () => openLabDesigner();
+    $('#lab-import').onclick = importLab;
+    workspace.querySelector('.lab-page-tabs').onclick = event => {
+      const button = event.target.closest('[data-lab-list]');
+      if (button) showLabLibrary(workspace,button.dataset.labList);
+    };
+    showLabLibrary(workspace,'packs');
+  } else loadLabList(workspace.dataset.selected);
+  return true;
+}
+
+function showLabLibrary(workspace,kind) {
+  workspace.dataset.selected = kind;
+  for (const tab of workspace.querySelectorAll('[data-lab-list]')) {
+    if (tab.dataset.labList === kind) tab.setAttribute('aria-current','page'); else tab.removeAttribute('aria-current');
+  }
+  const packs = kind === 'packs', library = workspace.querySelector('.lab-library');
+  library.setAttribute('aria-label',packs ? 'Saved lab packs' : 'Lab deployments');
+  library.innerHTML = '<div class="lab-list-toolbar"><label class="lab-search"><span>Search ' + (packs ? 'packs' : 'deployments') +
+    '</span><input type="search" placeholder="Search by name"></label>' +
+    (packs ? '<button type="button" id="lab-export">Export saved builds</button>' :
+      '<label>Status<select class="lab-status-filter"><option value="">All statuses</option>' +
+      ['queued','running','waiting','succeeded','failed','interrupted'].map(status => '<option>' + status + '</option>').join('') + '</select></label>') +
+    '</div><div id="lab-' + kind + '" class="lab-list-results"></div>';
+  if (packs) $('#lab-export').onclick = selectLabBuilds;
+  const results = library.querySelector('.lab-list-results');
+  library.querySelector('input').oninput = () => drawLabList(results,kind);
+  const status = library.querySelector('.lab-status-filter');
+  if (status) status.onchange = () => drawLabList(results,kind);
+  loadLabList(kind);
+}
+
 async function loadLabList(kind) {
   const area = $('#lab-' + kind);
   if (!area) return;
-  const packs = kind === 'packs', title = packs ? 'Saved lab packs' : 'Lab deployments';
+  const revision = area._labRevision = (area._labRevision || 0) + 1;
+  if (!area._labRecords) area.innerHTML = '<p class="lab-list-message" role="status">Loading ' + (kind === 'packs' ? 'saved packs' : 'deployments') + '…</p>';
   try {
     const records = await api('simple/labs/' + kind);
-    if (!area.isConnected || !records.length) return;
-    const heading = document.createElement('h3');
-    heading.textContent = title;
-    area.replaceChildren(heading);
-    for (const record of records) {
-      const row = document.createElement('div');
-      row.className = 'saved-build';
-      const label = document.createElement('span');
-      label.textContent = record.name;
-      const details = document.createElement('small');
-      const summary = packs ? record.machine_count + (record.machine_count === 1 ? ' machine' : ' machines') : record.status;
-      details.textContent = new Date(record.created * 1000).toLocaleString() + ' · ' + summary;
-      label.append(details);
-      row.append(label);
-      if (packs) {
-        const link = document.createElement('a');
-        link.href = '/api/simple/labs/packs/' + encodeURIComponent(record.id) + '/export';
-        link.download = '';
-        link.textContent = 'Download ZIP';
-        row.append(buildButton('Set up lab', () => openSavedPack(record.id)),link);
-      } else row.append(buildButton('View deployment', () => openLabRun(record.id)));
-      area.append(row);
-    }
-  } catch (error) { if (area.isConnected) area.textContent = title + ' could not be loaded. ' + error.message; }
+    if (!area.isConnected || area._labRevision !== revision) return;
+    if (area._labRecords && JSON.stringify(area._labRecords) === JSON.stringify(records)) return;
+    area._labRecords = records;
+    drawLabList(area,kind);
+  } catch (error) {
+    if (!area.isConnected || area._labRevision !== revision) return;
+    delete area._labRecords;
+    area.innerHTML = '<div class="lab-list-message" role="alert"><strong>Could not load ' +
+      (kind === 'packs' ? 'saved packs' : 'deployments') + '</strong><p>' + esc(error.message) + '</p><button type="button">Retry</button></div>';
+    area.querySelector('button').onclick = () => loadLabList(kind);
+  }
+}
+
+function drawLabList(area,kind) {
+  if (!area._labRecords) return;
+  const packs = kind === 'packs', library = area.parentElement;
+  const query = (library.querySelector('[type=search]')?.value || '').trim().toLowerCase();
+  const status = library.querySelector('.lab-status-filter')?.value;
+  const rows = area._labRecords.filter(r => r.name.toLowerCase().includes(query) && (!status || r.status === status));
+  if (!rows.length) {
+    const filtered = !!area._labRecords.length;
+    const heading = filtered ? 'No matches' : packs ? 'No saved lab packs yet' : 'No deployments yet';
+    const detail = filtered ? 'Try a different name or clear your filters.' : packs ?
+      'Create your first lab or import a pack to define the machines and steps.' : 'Deploy a reviewed pack to follow each machine and its job log here.';
+    area.innerHTML = '<div class="lab-list-empty"><span aria-hidden="true" class="lab-empty-mark bi bi-' +
+      (filtered ? 'search' : packs ? 'box-seam' : 'clock-history') + '"></span><h2>' + heading + '</h2><p>' + detail + '</p>' +
+      (filtered ? '<button type="button">Clear filters</button>' : packs ? '<a href="/api/simple/labs/example" download>Download example pack</a>' :
+        '<button type="button">Browse saved packs</button>') + '</div>';
+    if (filtered) area.querySelector('button').onclick = () => {
+      library.querySelector('input').value = '';
+      if (status) library.querySelector('select').value = '';
+      drawLabList(area,kind);
+      library.querySelector('input').focus();
+    };
+    else if (!packs) area.querySelector('button').onclick = () => $('#labs-workspace [data-lab-list=packs]').click();
+    return;
+  }
+  area.innerHTML = '<table class="lab-records"><thead><tr><th scope="col">' + (packs ? 'Lab pack' : 'Deployment') +
+    '</th><th scope="col">' + (packs ? 'Roles' : 'Status') + '</th><th scope="col">' + (packs ? 'Saved' : 'Started') +
+    '</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>' + rows.map((r,i) =>
+      '<tr data-record="' + i + '"><th scope="row">' + esc(r.name) + '</th><td>' +
+      (packs ? esc(r.machine_count) + (r.machine_count === 1 ? ' role' : ' roles') : '<span class="pill ' + esc(r.status) + '">' + esc(r.status) + '</span>') +
+      '</td><td>' + esc(new Date(r.created * 1000).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})) +
+      '</td><td><div class="lab-row-actions">' + (packs ? '<button type="button" data-pack-action="setup">Set up lab</button>' +
+      '<button type="button" data-pack-action="edit">Edit a copy</button><a href="/api/simple/labs/packs/' + encodeURIComponent(r.id) + '/export" download>Download ZIP</a>' :
+      '<button type="button" data-pack-action="run">View deployment</button>') + '</div></td></tr>').join('') + '</tbody></table>';
+  area.onclick = event => {
+    const button = event.target.closest('[data-pack-action]');
+    if (!button) return;
+    const record = rows[Number(button.closest('tr').dataset.record)];
+    if (button.dataset.packAction === 'edit') openLabDesigner(record.id);
+    else if (button.dataset.packAction === 'setup') openSavedPack(record.id);
+    else openLabRun(record.id);
+  };
 }
 
 async function openSavedPack(id) {

@@ -502,9 +502,11 @@ simple = register_simple(app,manager,lifecycle)
 from lab_exchange import register as register_lab_exchange
 from lab_runs import register as register_lab_runs
 from lab_sources import register as register_lab_sources
+from media_library import register as register_media_library
 register_lab_exchange(app,manager)
 register_lab_runs(app,manager,simple)
 register_lab_sources(app,manager,lifecycle)
+register_media_library(app)
 
 from server_connection import ServerConnection
 import operations
@@ -539,7 +541,7 @@ def connection_boundary():
 
     # A guided login may take a transport timeout. Keep the selected server pinned
     # while allowing unrelated inventory, job and record requests to proceed.
-    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan','lab_plan','lab_import','lab_export','lab_create_pack','lab_machine_source') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
+    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan','lab_plan','lab_import','lab_export','lab_create_pack','lab_machine_source','media_inventory','media_verify') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
         server.machine_requests += 1
         g.machine_request = True
         g.connection_locked = False

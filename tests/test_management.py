@@ -138,6 +138,23 @@ def test_snapshot_failure_aborts_tasks_but_reports_other_vm(lab):
     assert any('RESULT: failed' in s for s in log)
 
 
+def test_standalone_review_returns_exact_library_sources_in_order(lab):
+    app, client, headers, fake, runs = lab
+    setup_guest(app)
+    body = '- ansible.windows.win_command: hostname'
+    saved = app.manager.save('tasks', dict(name='Report host', platform='windows', kind='ansible', body=body))
+    draft = {'targets': [{'node': 'pve', 'vmid': 201}], 'tasks': [{'id': 'install-chocolatey'}, {'id': saved['id']}]}
+    reply = client.post('/api/simple/existing-plan', json=draft, headers=headers)
+    assert reply.status_code == 200, reply.json
+    assert reply.json['tasks'] == [{'name': 'Install Chocolatey', 'params': {}},
+                                   {'name': 'Report host', 'params': {}, 'source': body}]
+    app.manager.save('tasks', {**saved, 'body': '- ansible.windows.win_command: whoami'})
+    frozen = app.manager.load_plan(reply.json['id'])
+    assert reply.json['tasks'][1]['source'] == frozen['tasks'][1]['item']['body']
+    assert 'source' not in app.manager.summary(frozen)['tasks'][1]
+    assert not fake.writes and not runs
+
+
 def test_first_domain_controller_reviews_and_runs_with_a_write_only_password(lab):
     app,c,h,fake,runs=lab
     setup_guest(app)

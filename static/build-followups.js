@@ -22,6 +22,7 @@ async function loadGuidedRecipes(area){
       detail.textContent=(recipe.os==='windows'?'Windows':linuxNames[recipe.os])+' · '+recipe.edition;
       label.append(detail);
       row.append(label,buildButton('Use build',()=>repeatGuidedBuild(recipe,{recipe_id:recipe.id})),
+        buildButton('Use in lab',()=>openLabDesigner(null,null,recipe.id)),
         buildButton('Remove',async()=>{
           if(!window.confirm('Remove “'+recipe.name+'” from saved builds?'))return;
           try{await api('simple/recipes/'+encodeURIComponent(recipe.id)+'/delete',{});await loadGuidedRecipes(area)}

@@ -155,6 +155,16 @@ def upload_generated(p,node,storage,path,log):
     return storage+':iso/'+path.name
 
 
+def local_iso_inventory():
+    root = Path(os.getenv('ISO_DIR', 'D:/ISOs'))
+    result = []
+    for path in sorted(root.glob('*')):
+        if path.suffix.lower() != '.iso' or not path.is_file(): continue
+        stat = path.stat()
+        result.append(dict(name=path.name, bytes=stat.st_size, mtime=stat.st_mtime_ns))
+    return result
+
+
 def inventory(*, include_backups=True, only_node=None):
     p = Proxmox()
     nodes = p.call('GET', 'nodes')
@@ -171,10 +181,9 @@ def inventory(*, include_backups=True, only_node=None):
             if include_backups and 'backup' in s.get('content', '').split(',') and s.get('active'):
                 backups += p.call('GET', f'nodes/{node}/storage/{s["storage"]}/content', content='backup')
         details[node] = {'storage': stores, 'network': p.call('GET', f'nodes/{node}/network'), 'isos': isos, 'backups': backups}
-    root = Path(os.getenv('ISO_DIR', 'D:/ISOs'))
     return {'nodes': nodes, 'resources': p.resources(), 'details': details,
             'next_id': int(p.call('GET', 'cluster/nextid')),
-            'local_isos': [{'name': f.name, 'bytes': f.stat().st_size,'mtime': f.stat().st_mtime_ns} for f in sorted(root.glob('*')) if f.suffix.lower()=='.iso' and f.is_file()]}
+            'local_isos': local_iso_inventory()}
 
 
 ACTIONS = {'provision', 'finish-setup', 'linux-template', 'installer', 'clone', 'backup', 'convert-template', 'ansible', 'upload-iso', 'start'}

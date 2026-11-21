@@ -318,6 +318,11 @@ def resolve_tasks(machine, manifest, scripts, secret_inputs=None):
     return _selections(machine, manifest, scripts, secret_inputs or {})
 
 
+def portable_steps(machine, metadata, scripts):
+    """Read frozen step definitions while keeping destination prompts unresolved."""
+    return _selections(machine, {'scripts': metadata}, scripts, None)
+
+
 def _validate(manifest, scripts):
     _fields(manifest, {'version', 'name', 'machines', 'scripts'}, 'lab manifest')
     version = manifest.get('version')

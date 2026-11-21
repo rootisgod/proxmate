@@ -67,7 +67,7 @@ scripts:
 
 ## Review and execution
 
-1. On **Create → Lab packs → Create lab**, define new machines or use an existing VM as a starting point. Assign each a key, an OS, an install source and its ordered library tasks. Set prerequisites using the other machine keys. Saving captures the chosen custom scripts and their inputs. Password-typed inputs become deployment prompts.
+1. On **Labs → Create lab**, define new machines or use an existing VM as a starting point. Assign each a key, an OS, an install source and its ordered library tasks. Set prerequisites using the other machine keys. Saving captures the chosen custom scripts and their inputs. Password-typed inputs become deployment prompts.
 2. **Save lab** stores the definition on this dashboard. A ZIP is only needed to transfer the definition, so you can go straight to setup or return later. Other ways to start include importing a hand-written ZIP or exporting one or more reviewed builds. Saved and imported packs share the same portable format and deployment workflow.
 3. Map the machines to the selected Proxmox server. Discover available node, storage, bridge and source options. Inspect Windows editions. Supply credentials, any required prompts and a fresh destination name where needed.
 4. Review the entire lab. Proxmate uses the guided planner for each machine and freezes the resulting plans. Confirm that review once to create a durable lab run. Repeating the confirmation returns the same run. A new deployment requires a new review.
@@ -108,3 +108,5 @@ Saved builds made before portable snapshots were introduced can be exported from
 2. Add export from frozen guided sources and import inspection. Test that the receiving library can be empty and that changes to the original script cannot affect the archive.
 3. Reuse the guided review and worker. Reserve distinct destinations, enqueue the reviewed jobs together and gate claims on prerequisite outcomes. Verify retry, failure, restart and host isolation.
 4. Expose compose, inspect, map, review and run history in Create. Publish the HTTP contract and agent examples. Exercise the dashboard and API across the import/review boundary before deployment.
+
+A lab can start with a saved guided build. **Edit a copy** reopens a stored pack with its embedded step definitions, ordered inputs and named prompts. Saving a changed definition gives it a new pack ID. The original ZIP remains downloadable.

@@ -3,6 +3,94 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {JSDOM}=require('jsdom');
 
+test('sidebar stays distinct from the workspace and its navigation stays legible in both themes',()=>{
+  const {window:w}=new JSDOM(fs.readFileSync('static/index.html','utf8'));
+  const doc=w.document;
+  function luminance(rgb){
+    const channels=rgb.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+    assert.ok(channels,'Expected an opaque sRGB colour, got '+rgb);
+    const [r,g,b]=channels.slice(1).map(value=>{
+      const v=Number(value)/255;
+      return v<=0.04045 ? v/12.92 : ((v+0.055)/1.055)**2.4;
+    });
+    return 0.2126*r+0.7152*g+0.0722*b;
+  }
+  function check(first,second,minimum,label){
+    const a=luminance(first), b=luminance(second);
+    const ratio=(Math.max(a,b)+0.05)/(Math.min(a,b)+0.05);
+    assert.ok(ratio>=minimum,doc.documentElement.dataset.theme+' '+label+' contrast '+ratio.toFixed(2));
+  }
+  function background(element){
+    for(let node=element;node;node=node.parentElement){
+      const colour=w.getComputedStyle(node).backgroundColor;
+      if(colour!=='rgba(0, 0, 0, 0)' && colour!=='transparent') return colour;
+    }
+    throw new Error('No opaque background for '+element.tagName);
+  }
+  try{
+    for(const link of doc.querySelectorAll('link[rel=stylesheet]')){
+      const style=doc.createElement('style');
+      style.textContent=fs.readFileSync('.'+link.getAttribute('href'),'utf8');
+      link.replaceWith(style);
+    }
+    doc.querySelector('button[data-view=machines]').classList.add('active');
+    for(const theme of ['light','dark']){
+      doc.documentElement.dataset.theme=theme;
+      const rail=doc.querySelector('.workspace-rail'), canvas=background(doc.querySelector('main'));
+      check(background(rail),canvas,theme==='light'?7:2,'sidebar/workspace');
+      for(const selector of ['.brand','.nav-section-label','button[data-view=jobs]','button.active','.advanced-nav summary','.advanced-nav button','.aside-bottom a','#logout']){
+        const el=rail.querySelector(selector);
+        check(w.getComputedStyle(el).color,background(el),4.5,selector);
+      }
+      const icon=rail.querySelector('button.active .bi');
+      check(w.getComputedStyle(icon).color,background(icon),3,'current page icon');
+    }
+  }finally{w.close()}
+});
+
+test('appearance follows the device, remembers an override and synchronizes open tabs',()=>{
+  const dom=new JSDOM(fs.readFileSync('static/index.html','utf8'),{url:'https://dashboard.test',runScripts:'outside-only'});
+  const w=dom.window, root=w.document.documentElement, picker=w.document.querySelector('#appearance');
+  const device=new w.EventTarget();
+  device.matches=true;
+  w.matchMedia=()=>device;
+  const choose=mode=>{picker.value=mode;picker.dispatchEvent(new w.Event('change',{bubbles:true}))};
+  try{
+    w.eval(fs.readFileSync('static/theme.js','utf8'));
+    assert.equal(root.dataset.theme,'dark');assert.equal(picker.value,'system');
+    assert.equal(w.localStorage.length,0);
+    choose('light');
+    device.dispatchEvent(new w.Event('change'));
+    assert.equal(root.dataset.theme,'light');assert.equal(w.localStorage.getItem('proxmate.appearance'),'light');
+    w.dispatchEvent(new w.StorageEvent('storage',{key:'proxmate.appearance',newValue:'dark'}));
+    assert.equal(root.dataset.theme,'dark');assert.equal(picker.value,'dark');
+    choose('system');device.matches=false;device.dispatchEvent(new w.Event('change'));
+    assert.equal(root.dataset.theme,'light');assert.equal(w.localStorage.length,0);
+    device.matches=true;device.dispatchEvent(new w.Event('change'));
+    assert.equal(root.dataset.theme,'dark');
+  }finally{w.close()}
+});
+
+test('appearance resolves before the body exists and works with unavailable storage',async()=>{
+  const script=fs.readFileSync('static/theme.js','utf8');
+  const html='<head><script>'+script+';window.firstTheme=document.documentElement.dataset.theme;</script></head>'+
+    '<body><label><span class="appearance-icon"></span><select id="appearance"><option>system</option><option>light</option><option>dark</option></select></label></body>';
+  for(const blocked of [false,true]){
+    const dom=new JSDOM(html,{url:'https://dashboard.test',runScripts:'dangerously',beforeParse(w){
+      if(blocked)Object.defineProperty(w,'localStorage',{get(){throw new Error('unavailable')}});
+      else w.localStorage.setItem('proxmate.appearance','dark');
+    }});
+    const w=dom.window, picker=w.document.querySelector('select');
+    try{
+      await new Promise(resolve=>w.document.addEventListener('DOMContentLoaded',resolve,{once:true}));
+      assert.equal(w.firstTheme,blocked?'light':'dark');
+      assert.equal(picker.value,blocked?'system':'dark');
+      picker.value='dark';picker.dispatchEvent(new w.Event('change',{bubbles:true}));
+      assert.equal(w.document.documentElement.dataset.theme,'dark');
+    }finally{w.close()}
+  }
+});
+
 test('the script editor mounts its gutter and language styles with the document nonce',async()=>{
   const {outputFiles}=await require('esbuild').build({
     entryPoints:['editor/code.mjs'],bundle:true,format:'iife',globalName:'codeEditor',write:false
@@ -31,6 +119,7 @@ test('existing VMs ask for a missing login and show only the selected script inp
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     assert.equal(form.elements.packages,undefined);assert.equal(form.elements.chocolatey,undefined);
     form.elements.script.value='install-chocolatey';form.elements.script.dispatchEvent(new w.Event('change'));
+    form.querySelector('[data-add-script]').click();
     form.elements.guest_username.value='Administrator';form.elements.guest_password.value='Test-Login#123';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const payload=f.calls.find(c=>c[0]==='/api/simple/existing-plan')[1];
@@ -45,9 +134,9 @@ test('existing VMs ask for a missing login and show only the selected script inp
 test('machine inventory is the landing screen with advanced tools collapsed',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
-    assert.match(w.document.querySelector('h1').textContent,/^Operations$/);
+    assert.match(w.document.querySelector('h1').textContent,/^Inventory$/);
     w.document.querySelector('nav [data-view=create]').click();await f.settle();
-    assert.equal(w.document.querySelector('h1').textContent,'Create');
+    assert.equal(w.document.querySelector('h1').textContent,'Create machine');
     assert.ok(w.document.querySelector('[data-simple="windows"]'));
     assert.ok(w.document.querySelector('[data-simple="ubuntu"]'));
     assert.equal(w.document.querySelector('.advanced-nav').open,false);
@@ -120,6 +209,7 @@ test('inventory keeps filters and runs software on exactly the checked machines'
     assert.equal(form.querySelector('select[name=os]'),null);assert.equal(form.elements.packages,undefined);
     assert.equal(form.elements.guest_password,undefined);
     form.elements.script.value='linux-package';form.elements.script.dispatchEvent(new w.Event('change'));
+    form.querySelector('[data-add-script]').click();
     form.querySelector('[data-run-param=package]').value='curl';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const plan=f.calls.find(([url])=>url==='/api/simple/existing-plan')[1];
@@ -197,6 +287,62 @@ test('the built-in domain controller script prompts for a masked restore passwor
     form.requestSubmit();await f.settle();
     assert.deepEqual(f.calls.find(([url])=>url==='/api/simple/existing-plan')[1].tasks,
       [{id,params:{domain_name:'ad.example.test',dsrm_password:'Literal !{{chars}} #123'}}]);
+  }finally{f.close()}
+});
+
+test('script catalog filters builtins and saved source and opens a lab using the selected script',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    f.records.tasks.push({id:'folder',name:'Project directory',kind:'ansible',platform:'linux',
+      parameters:{owner:'Folder owner'},defaults:{owner:'operator'},body:'- ansible.builtin.file: {path: /opt/team, state: directory}'});
+    doc.querySelector('nav [data-view=scripts]').click();await f.settle();
+    const search=doc.querySelector('[data-library-filter=query]'),platform=doc.querySelector('[data-library-filter=platform]');
+    assert.ok(doc.querySelector('[data-library-id=install-chocolatey]'));
+    search.value='owner';search.dispatchEvent(new w.Event('input',{bubbles:true}));
+    const shown=()=>[...doc.querySelectorAll('[data-library-id]:not([hidden])')];
+    assert.deepEqual(shown().map(e=>e.dataset.libraryId),['folder']);
+    assert.match(shown()[0].textContent,/Default operator/);
+    assert.match(shown()[0].querySelector('pre').textContent,/\/opt\/team/);
+    platform.value='windows';platform.dispatchEvent(new w.Event('change',{bubbles:true}));
+    assert.equal(shown().length,0);assert.equal(doc.querySelector('[data-library-empty]').hidden,false);
+    let launch;w.openLabDesigner=(...args)=>{launch=args};
+    platform.value='linux';platform.dispatchEvent(new w.Event('change',{bubbles:true}));
+    shown()[0].querySelector('[data-script-to-lab]').click();assert.deepEqual(launch,[null,'folder']);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('standalone runs select exact targets and review every library script in order before queueing',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    f.records.tasks.push({id:'report',name:'Collect details',kind:'powershell',platform:'windows',body:'Write-Output draft'});
+    f.records.connections.push({node:'pve',vmid:201,platform:'windows'});
+    const original=w.fetch;let plan;
+    w.fetch=async(url,options)=>{
+      if(url==='/api/simple/existing-plan'){
+        plan=JSON.parse(options.body);
+        return {ok:true,json:async()=>({id:'run-plan',operation:'tasks',targets:[{node:'pve',vmid:201,name:'Test VM'}],
+          tasks:[{name:'Collect details',params:{},source:'Write-Output reviewed'},{name:'Install Chocolatey',params:{}}],dangerous:true})};
+      }
+      return original(url,options);
+    };
+    doc.querySelector('nav [data-view=run-scripts]').click();await f.settle();
+    assert.equal(doc.querySelector('h1').textContent,'Run scripts');
+    const next=doc.querySelector('[data-choose-run-scripts]');
+    assert.ok(next.disabled);doc.querySelector('[data-run-target]').click();assert.ok(!next.disabled);
+    next.click();await f.settle();
+    const form=doc.querySelector('#manage-form'),choose=form.elements.script;
+    for(const id of ['install-chocolatey','report']){
+      choose.value=id;choose.dispatchEvent(new w.Event('change'));form.querySelector('[data-add-script]').click();
+    }
+    form.querySelector('[data-task-action=up][data-index="1"]').click();
+    assert.equal(doc.activeElement.dataset.index,'0');
+    form.requestSubmit();await f.settle();
+    assert.deepEqual(plan,{targets:[{node:'pve',vmid:201}],tasks:[{id:'report',params:{}},{id:'install-chocolatey',params:{}}]});
+    assert.equal(form.querySelectorAll('.reviewed-scripts li').length,2);assert.match(form.textContent,/Write-Output reviewed/);
+    assert.doesNotMatch(form.textContent,/Write-Output draft/);
+    assert.ok(form.querySelector('[name=risk_confirmed]'));assert.ok(!f.calls.some(([url])=>url==='/api/manage/run'));
+    assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
 
@@ -314,14 +460,14 @@ test('edition inspection preserves edits and ignores obsolete responses',async()
     const response=await fetch(url,opts);
     if(url==='/api/simple/options'){
       const options=await response.json();
-      options.local_isos.push({id:'library:install.iso',label:'install.iso (ISO library)'});
+      options.local_isos.push({id:'library:win_2022.iso',label:'win_2022.iso (ISO library)',windows_label:'Windows Server 2022'});
     }
     return response;
   };
   try{
     await f.build('windows');
     const form=w.document.querySelector('#simple-form'),next=w.document.querySelector('#simple-next');
-    form.elements.source.value='library:install.iso';
+    form.elements.source.value='library:win_2022.iso';
     form.elements.source.dispatchEvent(new w.Event('change'));await f.settle();
     assert.equal(pending.length,2);
     form.elements.name.value='custom';
@@ -366,7 +512,7 @@ test('browsing media and editing disks preserve the chosen edition and machine d
     doc.querySelector('#add-data-disk').click();
     assert.equal(doc.activeElement,fields.disk_size_0);
     doc.querySelector('#simple-next').click();await f.settle();
-    assert.equal(doc.activeElement.textContent,'2. Software');
+    assert.equal(doc.activeElement.textContent,'2. Software & scripts');
     doc.querySelector('#simple-back').click();
     assert.equal(doc.activeElement.textContent,'1. Machine');
     assert.equal(fields.edition.value,'8');assert.equal(lookups,1);
@@ -616,7 +762,14 @@ test('server settings test drafts without persisting or exposing saved passwords
     const form=w.document.querySelector('#server-form');
     assert.equal(form.elements.password.value,'');
     assert.equal(form.elements.url.value,f.server.url);
+    const summary=w.document.querySelector('.server-summary');
+    assert.match(summary.textContent,/SSH fingerprintConfigured/);
     form.elements.password.value='new-draft-secret';
+    form.elements.url.value='https://new-pve.example:8006';
+    w.eval('render()');
+    assert.equal(w.document.querySelector('#server-form'),form);
+    assert.ok(summary.textContent.includes(f.server.url));
+    assert.ok(!summary.textContent.includes('new-pve'));
     w.document.querySelector('#server-test').click();await f.settle();
     assert.match(w.document.querySelector('#server-result').textContent,/Connection successful/);
     const call=f.calls.find(c=>c[0]==='/api/server/test');
@@ -666,7 +819,9 @@ test('refresh after another tab replaces the server closes obsolete operation fo
     w.document.querySelector('#editor').showModal();
     w.document.querySelector('#refresh').click();await f.settle();
     assert.equal(w.document.querySelector('#editor').open,false);
-    assert.equal(w.document.querySelector('#connection-label').textContent,f.server.url);
+    const connection=w.document.querySelector('#connection-label');
+    assert.equal(connection.textContent,new URL(f.server.url).host);
+    assert.equal(connection.title,'Connected to '+f.server.url);
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
@@ -704,8 +859,8 @@ test('machine page keeps the selected VM through discovery, login and return to 
     assert.ok(w.document.querySelector('#content [data-simple="apply"]'));
     assert.equal(form.elements.password,undefined);
     w.document.querySelector('.machine-back').click();
-    assert.equal(w.document.querySelector('h1').textContent,'Operations');
-    assert.equal(w.location.hash,'');assert.deepEqual(f.errors,[]);
+    assert.equal(w.document.querySelector('h1').textContent,'Inventory');
+    assert.equal(w.location.hash,'#machines');assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
 
@@ -782,7 +937,7 @@ test('a late machine detail response cannot reopen a closed machine page',async(
     w.document.querySelector('.machine-link').click();
     w.document.querySelector('.machine-back').click();
     resolve({ok:true,json:async()=>({name:'Obsolete guest'})});await f.settle();
-    assert.equal(w.document.querySelector('h1').textContent,'Operations');
+    assert.equal(w.document.querySelector('h1').textContent,'Inventory');
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
@@ -803,19 +958,26 @@ test('Windows template review preserves the name, clone mode, disks and software
     form.elements.disk_size_0.value='80';form.elements.disk_label_0.value='Data';form.elements.disk_letter_0.value='F';
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     form.elements.manual_updates.checked=true;
-    const parameter=form.querySelector('[data-script-param]'),selectScript=form.querySelector('[name=saved_script]');
-    assert.equal(parameter.value,'Lab');assert.ok(parameter.disabled);
-    selectScript.click();assert.ok(!parameter.disabled);
+    form.querySelector('[data-section=scripts]').click();
+    assert.equal(form.querySelector('[data-task-input]'),null);
+    form.querySelector('[data-add-catalog=share]').click();
+    let parameter=form.querySelector('[data-task-input=share_name]');
+    assert.equal(parameter.value,'Lab');
     parameter.value='two words';assert.ok(!parameter.checkValidity());
     assert.ok(!parameter.closest('.software-pane').hidden);
-    selectScript.click();assert.ok(parameter.disabled && parameter.checkValidity());
-    selectScript.click();parameter.value='Lab';
+    form.querySelector('[data-task-action=remove]').click();assert.equal(form.querySelector('[data-task-input]'),null);
+    form.querySelector('[data-add-catalog=share]').click();
+    form.querySelector('[data-add-catalog=share]').click();
+    parameter=form.querySelectorAll('[data-task-input=share_name]')[1];
+    parameter.value='Second';
+    form.querySelectorAll('[data-task-action=up]')[1].click();
     form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const payload=f.calls.find(([u])=>u==='/api/simple/plan')[1];
     assert.equal(payload.source_kind,'template');assert.equal(Number(payload.template_id),9000);
     assert.equal(payload.name,'files-01');assert.equal(payload.manual_updates,true);
     assert.deepEqual(payload.data_disks,[{size:80,label:'Data',letter:'F'}]);
-    assert.deepEqual(payload.tasks,[{id:'share',params:{share_name:'Lab'}}]);
+    assert.deepEqual(payload.tasks,[{id:'share',params:{share_name:'Second'}},{id:'share',params:{share_name:'Lab'}}]);
+    assert.equal(payload.scriptSteps,undefined);
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
@@ -826,8 +988,8 @@ test('Windows ISO picker categorizes candidates and keeps other media browsable'
     const fetch=w.fetch;
     w.fetch=async(url,opts)=>{
       const res=await fetch(url,opts);if(url!=='/api/simple/options')return res;
-      const d=await res.json();d.destinations[0].isos=[{id:'local:iso/win2022.iso',label:'win2022.iso'},
-        {id:'local:iso/virtio-win-2025.iso',label:'virtio-win-2025.iso'},{id:'local:iso/sql2022.iso',label:'sql2022.iso'}];
+      const d=await res.json();d.destinations[0].isos=[{id:'local:iso/win2022.iso',label:'win2022.iso',windows_label:'Windows Server 2022'},
+        {id:'local:iso/virtio-win-2025.iso',label:'virtio-win-2025.iso',windows_label:null},{id:'local:iso/sql2022.iso',label:'sql2022.iso',windows_label:null}];
       return {ok:true,json:async()=>d};
     };
     await f.build('windows');
@@ -836,6 +998,53 @@ test('Windows ISO picker categorizes candidates and keeps other media browsable'
     assert.match(w.document.querySelector('#simple-fields').textContent,/win2022\.iso/);
     form.elements.all_media.checked=true;form.elements.all_media.dispatchEvent(new w.Event('change'));await f.settle();
     assert.equal(form.elements.source.options.length,3);assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('ISO Library filters node files and explicitly verifies before handing the selected image to Create',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try {
+    const source='local:iso/windows-server.iso',tools='local:iso/virtio-win.iso';
+    const listing={node:'pve',nodes:[{node:'pve',status:'online'},{node:'other',status:'online'}],warnings:[],
+      ssh_configured:true,driver_isos:[tools],files:[
+        {id:source,name:'windows-server.iso',location:'proxmox',storage:'local',family:'windows',bytes:2**30},
+        {id:'library:other.iso',name:'other.iso',location:'library',family:'other',bytes:1200}]};
+    const fetch=w.fetch,checks=[],handoffs=[];
+    w.fetch=async(url,opts)=>{
+      if(url==='/api/simple/media')return {ok:true,json:async()=>listing};
+      if(url==='/api/simple/media?node=other')return {ok:true,json:async()=>({...listing,node:'other',driver_isos:[],files:[]})};
+      if(url==='/api/simple/media/verify'){
+        checks.push(JSON.parse(opts.body));
+        return {ok:true,json:async()=>({node:'pve',source,os:'windows',status:'verified',agent_iso:tools,
+          checked_at:1,detail:'Media verified.',editions:[{index:1,label:'Server Standard',build:'26100',language:'en-US',compatible:true}]})};
+      }
+      return fetch(url,opts);
+    };
+    w.openSimpleMedia=(...args)=>handoffs.push(args);
+    doc.querySelector('nav [data-view=media]').click();await f.settle();
+    assert.equal(doc.querySelector('h1').textContent,'ISO Library');
+    assert.equal(checks.length,0);
+    assert.equal(doc.querySelectorAll('.media-file').length,2);
+    assert.match(doc.querySelector('[data-family=rocky]').textContent,/No candidates/);
+    const search=doc.querySelector('[name=media_search]');
+    search.value='not an iso';search.dispatchEvent(new w.Event('input',{bubbles:true}));
+    assert.match(doc.querySelector('.media-files').textContent,/No files match/);
+    search.value='';search.dispatchEvent(new w.Event('input',{bubbles:true}));
+    doc.querySelector('[data-family=windows]').click();
+    assert.equal(doc.querySelectorAll('.media-file').length,1);
+    doc.querySelector('[data-check-group]').click();await f.settle();
+    assert.deepEqual(checks,[{node:'pve',source,os:'windows',agent_iso:tools}]);
+    assert.match(doc.querySelector('.media-files').textContent,/Server Standard/);
+    assert.ok(doc.querySelector('[data-check-group]').disabled);
+    doc.querySelector('[data-check]').click();await f.settle();
+    assert.equal(checks.length,2);
+    doc.querySelector('[data-use]').click();
+    assert.deepEqual(handoffs,[['windows','pve',source,tools]]);
+    const node=doc.querySelector('[name=media_node]');node.value='other';
+    node.dispatchEvent(new w.Event('change',{bubbles:true}));await f.settle();
+    assert.match(doc.querySelector('.media-files').textContent,/No ISO files/);
+    assert.equal(doc.querySelector('[data-use]'),null);
+    assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
 
@@ -864,7 +1073,7 @@ async function fixture(initialServer={},startAtHome=false){
     else if(url==='/api/lifecycle/plan')value={id:'recovery-plan',operation:'backup-restore',node:'pve',vmid:202,name:'restore-test',archive:'local:backup/vzdump-qemu-201-test.vma.zst',boot_test:true,disconnected:true,notes:[],dangerous:false};
     else if(url==='/api/lifecycle/run')value={id:'recovery-job'};
     else if(url.startsWith('/api/simple/software'))value={platforms:{'pve:201':'windows'},features:[{id:'Web-Server',name:'Web server (IIS)'}]};
-    else if(url==='/api/simple/options')value={iso_setup_letters:['D','E','F'],destinations:[{node:'pve',storage:'local-lvm',iso_storage:'local',bridge:'vmbr0',management_cidr:'192.0.2.0/24',agent_iso:'local:iso/virtio.iso',storage_choices:['local-lvm'],iso_storages:['local'],bridges:['vmbr0'],driver_isos:['local:iso/virtio.iso'],isos:[{id:'local:iso/server.iso',label:'Windows Server 2025.iso'}]}],local_isos:[],profiles:{'ubuntu-24.04':'Ubuntu 24.04 LTS'},features:[{id:'Web-Server',name:'Web server (IIS)'}]};
+    else if(url==='/api/simple/options')value={iso_setup_letters:['D','E','F'],destinations:[{node:'pve',storage:'local-lvm',iso_storage:'local',bridge:'vmbr0',management_cidr:'192.0.2.0/24',agent_iso:'local:iso/virtio.iso',storage_choices:['local-lvm'],iso_storages:['local'],bridges:['vmbr0'],driver_isos:['local:iso/virtio.iso'],isos:[{id:'local:iso/server.iso',label:'Windows Server 2025.iso',windows_label:'Windows Server 2025'}]}],local_isos:[],profiles:{'ubuntu-24.04':'Ubuntu 24.04 LTS'},features:[{id:'Web-Server',name:'Web server (IIS)'}]};
     else if(url==='/api/simple/editions')value={identity:'media-v1',editions:[{index:7,name:'Windows Server Standard',label:'Standard (Desktop Experience)',desktop:true,language:'en-US'}]};
     else if(url==='/api/simple/plan'){const d=JSON.parse(opts.body);value={id:'simple-plan',machines:Array.from({length:Number(d.count||1)},(_,i)=>({vmid:202+i,name:d.name+'-0'+(i+1),node:'pve',memory:4096,cores:2,disk:64,storage:'local-lvm',bridge:'vmbr0'})),edition:'Standard (Desktop Experience)',purpose:d.purpose,tasks:[{name:'Install Chocolatey',params:{}}],remote_access:'HTTPS WinRM',notes:[],dangerous:false};}
     else if(url==='/api/simple/run')value={jobs:[{id:'new-job'}]};
@@ -891,6 +1100,41 @@ async function fixture(initialServer={},startAtHome=false){
   return {w,calls,errors,records,server,settle,build,close:()=>dom.window.close()};
 }
 
+test('guest credentials filter VM connections, preserve focus and show verification after rotation',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    f.records.credentials.push({id:'win',name:'Windows admins',platform:'windows',username:'win-admin',updated:2,has_password:true},
+      {id:'ssh',name:'Linux deploy',platform:'linux',username:'svc-linux',updated:3,has_private_key:true,has_become_password:true});
+    f.records.connections.push({node:'pve',vmid:201,credential_id:'win',machine_identity:'stable-id',verified_at:11000,credential_revision:2});
+    doc.querySelector('[data-view="credentials"]').click();await f.settle();
+    const query=doc.querySelector('#credential-query'),platform=doc.querySelector('#credential-platform'),list=doc.querySelector('#credential-list');
+    assert.equal(list.querySelectorAll('.credential-entry').length,2);
+    assert.match(list.textContent,/SSH key, sudo password/);
+    query.value='Test VM';query.dispatchEvent(new w.Event('input'));query.focus();
+    const usage=list.querySelector('.credential-usage');usage.open=true;
+    assert.match(usage.textContent,/Test VM.*201.*Last verified/);
+    w.eval('render()');
+    assert.equal(doc.activeElement,query);
+    assert.equal(list.querySelector('.credential-usage'),usage);
+    assert.equal(usage.open,true);
+    f.records.credentials[0].updated=4;await w.eval('loadManagement();');w.eval('render()');
+    assert.match(list.textContent,/Credential changed since verification/);
+    platform.value='linux';platform.dispatchEvent(new w.Event('change'));
+    assert.match(list.textContent,/No matching credentials/);
+    doc.querySelector('#credential-clear').click();
+    list.querySelector('[data-record="ssh"][data-mg="edit-credentials"]').click();
+    const fields=doc.querySelector('#manage-form').elements;
+    assert.equal(fields.private_key.value,'');assert.equal(fields.ca_pem.disabled,true);
+    assert.equal(fields.platform.disabled,true);
+    doc.querySelector('#manage-close').click();
+    doc.querySelector('[data-mg="new-credentials"]').click();
+    assert.equal(fields.password.required,true);
+    fields.platform.value='linux';fields.platform.dispatchEvent(new w.Event('change'));
+    assert.equal(fields.password.required,false);assert.equal(fields.private_key.disabled,false);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('management tabs render, secrets are blank on edit, and VM controls are available',async()=>{
   const f=await fixture(),{w}=f;
   try{
@@ -916,8 +1160,9 @@ test('task sequence survives parameters and review submits exact targets, then r
   try{
     w.document.querySelector('[data-view="tasks"]').click();await f.settle();
     w.document.querySelector('[data-mg="apply"]').click();await f.settle();
-    w.document.querySelector('[name=task_choice]').value='install-chocolatey';
-    w.document.querySelector('[data-mg="add-task"]').click();
+    const script=w.document.querySelector('[name=library_script]');
+    script.value='install-chocolatey';script.dispatchEvent(new w.Event('change'));
+    w.document.querySelector('[data-add-script]').click();
     w.document.querySelector('[name=target]').checked=true;
     w.document.querySelector('#manage-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
     const plan=f.calls.find(c=>c[0]==='/api/manage/plan')[1];
@@ -1390,7 +1635,7 @@ test('exporting guided and saved lab builds downloads the reviewed sources and c
     return original(url,opts);
   };
   try{
-    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    doc.querySelector('nav [data-view=labs]').click();await f.settle();
     doc.querySelector('#lab-export').click();await f.settle();
     doc.querySelectorAll('#lab-fields input').forEach(input=>input.click());
     doc.querySelector('#lab-next').click();await f.settle();
@@ -1449,7 +1694,7 @@ test('import inspects scripts, maps local media and secrets, then confirms one f
     return json([]);
   };
   try{
-    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    doc.querySelector('nav [data-view=labs]').click();await f.settle();
     doc.querySelector('#lab-import').click();
     const file=doc.querySelector('#lab-fields [type=file]'),upload=()=>doc.querySelector('#lab-form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
     Object.defineProperty(file,'files',{value:[new w.File(['portable zip'],'lab.zip')]});
@@ -1501,9 +1746,9 @@ test('reopening a saved lab handles optional manifest fields, stale dialogs and 
   };
   try{
     w.eval("jobs=[{status:'waiting',target:{name:'longmachi-01'}}]");
-    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    doc.querySelector('nav [data-view=labs]').click();await f.settle();
     const shelf=doc.querySelector('#lab-packs');
-    assert.match(shelf.textContent,/Saved pack.*2 machines/);
+    assert.match(shelf.textContent,/Saved pack.*2 roles/);
     assert.equal(shelf.querySelector('a').getAttribute('href'),'/api/simple/labs/packs/portable/export');
     shelf.querySelector('button').click();await f.settle();
     doc.querySelector('#lab-close').click();doc.querySelector('#lab-import').click();
@@ -1540,20 +1785,29 @@ test('Create lab combines new builds, copied settings and existing guest roles w
     return orig(url,opts);
   };
   const change=(el,value)=>{el.value=value;el.dispatchEvent(new w.Event('change',{bubbles:true}))};
-  const addTask=(row,id)=>{change(row.querySelector('[name=library_script]'),id);row.querySelector('[data-add-script]').click()};
+  const addTask=(row,id)=>{
+    row.querySelector('[data-role-pane=process]').click();
+    row.querySelector('[data-add-catalog="'+id+'"]').click();
+  };
+  const addRole=async(mode,source)=>{
+    doc.querySelector('#design-add-role').click();
+    doc.querySelector('[name=role_method][value='+mode+']').click();
+    if(source)change(doc.querySelector('#design-add-panel [name=existing_vm]'),source);
+    doc.querySelector('#design-accept-role').click();await f.settle();
+  };
   try{
-    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    doc.querySelector('nav [data-view=labs]').click();await f.settle();
     doc.querySelector('#lab-create').click();await f.settle();
     doc.querySelector('[name=lab_name]').value='Pair and role';
-    doc.querySelector('#design-new').click();
+    await addRole('new');
     const first=doc.querySelector('.design-machine');
     first.querySelector('[name=key]').value='tools';
     first.querySelector('[name=cores]').value='4';
     addTask(first,'linux-package');first.querySelector('[data-task-input=package]').value='curl';
-    change(doc.querySelector('[name=existing_vm]'),'0');
-    doc.querySelector('#design-copy').click();await f.settle();
+    await addRole('copy','0');
     const second=doc.querySelectorAll('.design-machine')[1];
     assert.equal(second.querySelector('[name=cores]').value,'8');
+    assert.equal(second.querySelector('[name=memory_gb]').value,'8');
     assert.equal(second.querySelector('[name=media_hint]').value,'name:Windows Server 2025.iso');
     [...second.querySelectorAll('button')].find(b=>b.textContent==='Read editions from ISO').click();await f.settle();
     change(second.querySelector('[name=edition_label]'),'Standard (Desktop Experience)');
@@ -1561,13 +1815,14 @@ test('Create lab combines new builds, copied settings and existing guest roles w
     addTask(second,'dc');second.querySelector('[data-task-input=domain]').value='lab.example.test';
     second.querySelector('[data-task-action=up][data-index="1"]').click();
     second.querySelector('[data-dependency]').click();
-    doc.querySelector('#design-existing').click();await f.settle();
+    await addRole('existing','0');
     const third=doc.querySelectorAll('.design-machine')[2];
     assert.equal(third.querySelector('[name=os]').value,'windows');
-    assert.equal(third.querySelector('[name=memory]'),null);assert.equal(third.querySelector('.design-task-list li'),null);
+    assert.equal(third.querySelector('[name=memory_gb]'),null);assert.equal(third.querySelector('[data-script-step]'),null);
     addTask(third,'install-chocolatey');
     assert.equal(doc.querySelector('#lab-fields input[type=password]'),null);
-    assert.match(second.textContent,/Collected at deployment/);
+    assert.match(second.textContent,/deployment/i);
+    assert.equal(first.hidden,true);assert.equal(third.hidden,false);
     doc.querySelector('#lab-next').click();await f.settle();
     const draft=calls.find(([path])=>path.endsWith('/packs'))[1];
     assert.deepEqual(draft,{name:'Pair and role',machines:[
@@ -1604,7 +1859,7 @@ test('existing-only lab deliberately selects its target, uses the saved login an
     return {ok:true,json:async()=>value};
   };
   try{
-    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    doc.querySelector('nav [data-view=labs]').click();await f.settle();
     doc.querySelector('#lab-packs button').click();await f.settle();
     assert.equal(f.calls.some(([url])=>url==='/api/simple/options'),false);
     const target=doc.querySelector('#lab-fields [name=target]');
@@ -1627,6 +1882,111 @@ test('existing-only lab deliberately selects its target, uses the saved login an
     doc.querySelector('#lab-next').click();await f.settle();
     assert.deepEqual(requests.find(([url])=>url.endsWith('/run'))[1],{plan_id:'review',confirmed:true,risk_confirmed:true,existing_confirmed:true});
     assert.match(doc.querySelector('#lab-run').textContent,/Scripts on existing VM/);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('Labs lists support retries and filters, and saved packs retain frozen steps when edited as copies',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document,original=w.fetch;
+  let attempts=0,created;
+  const machine={key:'files',os:'ubuntu',source:{kind:'cloud'},settings:{cores:4},tasks:[{file:'tasks/tools.yml'}],
+    editable_tasks:[{name:'Frozen tools',parameters:{folder:'Folder'},defaults:{folder:'Tools'},params:{folder:'Demo'}}],secret_inputs:[]};
+  const saved={id:'original',name:'Lab A',machines:[machine],scripts:{'tasks/tools.yml':'- name: Prepare tools'}};
+  w.fetch=async(url,opts={})=>{
+    const json=value=>({ok:true,json:async()=>value});
+    if(url==='/api/simple/labs/packs'&&opts.method==='POST'){created=JSON.parse(opts.body);return json({id:'copy',name:created.name})}
+    if(url==='/api/simple/labs/packs'){
+      if(++attempts===1)return {ok:false,status:503,json:async()=>({error:'Temporarily unavailable'})};
+      return json([{id:'original',name:'Lab A',machine_count:1,created:1}]);
+    }
+    if(url==='/api/simple/labs/runs')return json([]);
+    if(url==='/api/simple/labs/packs/original')return json(saved);
+    if(url==='/api/simple/recipes')return json([{id:'recipe',name:'Windows seed'}]);
+    if(url==='/api/simple/recipes/recipe/lab-source')return json({base_recipe_id:'recipe',os:'windows',source:{kind:'iso'},settings:{},
+      tasks:[{name:'Frozen setup',parameters:{},params:{}}]});
+    return original(url,opts);
+  };
+  try{
+    doc.querySelector('nav [data-view=labs]').click();await f.settle();
+    assert.match(doc.querySelector('#lab-packs').textContent,/Could not load/);
+    doc.querySelector('#lab-packs button').click();await f.settle();
+    const search=doc.querySelector('.lab-library input[type=search]');
+    search.value='absent';search.dispatchEvent(new w.Event('input'));
+    assert.match(doc.querySelector('#lab-packs').textContent,/No matches/);doc.querySelector('#lab-packs button').click();
+    doc.querySelector('[data-lab-list=runs]').click();await f.settle();assert.match(doc.querySelector('#lab-runs').textContent,/No deployments yet/);
+    doc.querySelector('[data-lab-list=packs]').click();await f.settle();
+    doc.querySelector('#lab-packs [data-pack-action=edit]').click();await f.settle();
+    assert.equal(doc.querySelector('#lab-next').textContent,'Save copy');
+    assert.equal(doc.querySelector('[name=lab_name]').value,'Lab A (copy)');
+    const first=doc.querySelector('.design-machine');
+    assert.match(first.querySelector('.design-process').textContent,/Frozen tools/);
+    first.querySelector('[data-task-input=folder]').value=''; // Save should navigate back to this role to report the missing setting.
+    doc.querySelector('#design-add-role').click();doc.querySelector('[name=role_method][value=saved]').click();
+    doc.querySelector('[name=saved_build]').value='recipe';doc.querySelector('#design-accept-role').click();await f.settle();
+    const second=doc.querySelectorAll('.design-machine')[1];
+    assert.equal(first.hidden,true);assert.equal(second.hidden,false);
+    second.querySelector('[data-role-pane=settings]').click();second.querySelector('[data-dependency]').click();
+    doc.querySelector('#lab-next').click();await f.settle();
+    assert.equal(created,undefined);assert.equal(first.hidden,false);assert.equal(first.querySelector('.design-process').hidden,false);
+    first.querySelector('[data-task-input=folder]').value='Fresh';
+    const filter=first.querySelector('[data-script-search]');
+    filter.value='Linux package';filter.dispatchEvent(new w.Event('input'));
+    assert.ok(first.querySelector('[data-add-catalog=linux-package]'));assert.equal(first.querySelector('[data-add-catalog=install-chocolatey]'),null);
+    doc.querySelector('#lab-next').click();await f.settle();
+    assert.deepEqual(created,{name:'Lab A (copy)',machines:[
+      {key:'files',os:'ubuntu',source:{kind:'cloud'},settings:{cores:4},after:[],base_pack_id:'original',base_role:'files',tasks:[{original:0,params:{folder:'Fresh'}}]},
+      {key:'Windows-seed',os:'windows',source:{kind:'iso'},settings:{},after:['files'],base_recipe_id:'recipe',tasks:[{original:0,params:{}}]}]});
+    assert.equal(f.calls.some(([url])=>url==='/api/simple/labs/run'),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('workspace navigation has named destinations and preserves routes through browser history',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    const navigate=name=>doc.querySelector('nav [data-view="'+name+'"]').click();
+    navigate('create');await f.settle();
+    assert.equal(w.location.hash,'#create');
+    assert.equal(doc.querySelector('nav [aria-current=page]').textContent,'Create machine');
+    doc.querySelector('[data-build-purpose=template]').click();
+    assert.equal(doc.querySelectorAll('.platform-card[data-purpose=template]').length,4);
+    navigate('labs');await f.settle();assert.equal(doc.querySelector('#workspace-location').textContent,'Labs');
+    w.history.back();await new Promise(resolve=>w.addEventListener('hashchange',resolve,{once:true}));
+    assert.equal(doc.querySelector('h1').textContent,'Create machine');
+    navigate('machines');
+    w.eval("state.resources.push({type:'qemu',template:1,node:'pve',vmid:998,name:'golden-base'})");
+    doc.querySelector('[data-machine-status=templates]').click();
+    assert.equal(doc.querySelector('.operation-controls').hidden,true);
+    assert.ok(doc.querySelector('[data-clone-template="998"]'));
+    navigate('jobs');doc.querySelector('[data-activity-filter=active]').click();
+    assert.equal(doc.querySelector('[data-activity-filter=active]').getAttribute('aria-pressed'),'true');
+    assert.equal(f.calls.some(([url])=>url==='/api/state'),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('a checked installer is handed to the wizard on its exact node with its chosen guest tools',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  const fetch=w.fetch,source='pool:iso/unlabelled.iso',agent='pool:iso/virtio-test.iso';
+  w.fetch=async(url,opts)=>{
+    const result=await fetch(url,opts);
+    if(url==='/api/simple/options'){
+      const options=await result.json();
+      options.destinations.push({...options.destinations[0],node:'second',agent_iso:'pool:iso/virtio-old.iso',
+        isos:[{id:source,label:'unlabelled.iso',windows_label:null},{id:'pool:iso/win2025.iso',label:'win2025.iso',windows_label:'Windows Server 2025'}],driver_isos:[agent]});
+    }
+    return result;
+  };
+  try{
+    await w.eval('openSimpleMedia("windows","second",'+JSON.stringify(source)+','+JSON.stringify(agent)+')');
+    const form=doc.querySelector('#simple-form');
+    assert.equal(form.elements.node.value,'second');
+    assert.equal(form.elements.source.value,source);
+    assert.equal(form.elements.agent_iso.value,agent);
+    doc.querySelector('#simple-close').click();
+    await w.eval('openSimpleMedia("windows","second","missing.iso")');
+    assert.equal(doc.querySelector('#simple-dialog').open,false);
+    assert.match(doc.querySelector('#notice').textContent,/no longer available/);
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });

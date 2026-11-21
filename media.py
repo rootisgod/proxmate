@@ -14,11 +14,32 @@ import pycdlib
 import paramiko
 import operations
 import diagnostics
+from provisioning import LOCALES
 
 
 def volume_revision(item):
     if item.get('ctime') and item.get('size') is not None:
         return f"{item['ctime']}-{item['size']}"
+
+
+def driver_sources(volumes):
+    tools=[v for v in volumes if 'virtio' in v.lower() and v.lower().endswith('.iso')]
+    return sorted(tools,key=lambda v:tuple(int(x) for x in re.findall(r'\d+',v)),reverse=True)
+
+
+def windows_iso_label(filename):
+    """Candidate label for browsing filenames; installation eligibility comes from the WIM."""
+    if re.search(r'virtio|driver|guest.tools|sql|exchange|visual.studio|linux|ubuntu|debian|fedora|rocky|darwin|proxmate-(unattend|clone|seed|ubuntu)', filename, re.I):
+        return None
+    year = re.search(r'(?<!\d)(?:2016|2019|2022|2025)(?!\d)', filename)
+    if not year and not re.search(r'windows|(?:^|[^a-z])win(?:srv|server|\d|[^a-z]|$)|server', filename, re.I):
+        return None
+    client = re.search(r'(?:windows|win)[ _.-]*(10|11)(?!\d)', filename, re.I)
+    if client:
+        return 'Windows ' + client[1]
+    if year:
+        return 'Windows Server ' + year[0]
+    return 'Windows Server' if 'server' in filename.lower() else 'Windows installation media'
 
 
 class RemoteISO(io.BufferedIOBase):
@@ -110,7 +131,8 @@ def source_file(source,node=None):
     if not isinstance(source,str): raise ValueError('Choose an ISO')
     if source.startswith('library:'):
         filename=source[8:]
-        if not re.fullmatch(r'[A-Za-z0-9_. -]+\.iso',filename,re.I): raise ValueError('Invalid local ISO name')
+        if not re.fullmatch(r'[A-Za-z0-9_. -]+\.iso',filename,re.I):
+            raise ValueError('Use a mounted ISO filename containing letters, numbers, spaces, dots, underscores or hyphens.')
         root=Path(os.getenv('ISO_DIR','D:/ISOs')).resolve();path=(root/filename).resolve()
         if path.parent!=root or not path.is_file(): raise ValueError('ISO is no longer in the library')
         with path.open('rb') as stream:
@@ -202,12 +224,31 @@ def msi_digest(iso):
         return digest.hexdigest()
 
 
-def review_guest_agent(source,node,build):
-    flavour='2k25' if int(build)>=26100 else '2k22' if int(build)>=20348 else '2k19'
+def windows_edition_issue(edition):
+    build=str(edition.get('build') or '')
+    if not build.isdecimal() or int(build)<17763:
+        return 'Automatic setup supports Windows Server 2019 or newer. Use Advanced for older images.'
+    if edition.get('language') not in LOCALES:
+        return 'This image language is not supported by the automatic answer file'
+    return None
+
+
+def review_guest_agent_builds(source,node,builds):
+    """Check a single driver disc for multiple editions, reading its MSI only once."""
     with open_iso(source,node) as iso:
-        if image_entry(iso,f'/vioserial/{flavour}/amd64/vioser.inf') is None: return None
-        if image_entry(iso,'/guest-agent/qemu-ga-x86_64.msi') is None: return None
-        return msi_digest(iso)
+        supported=[]
+        for build in set(builds):
+            flavour='2k25' if int(build)>=26100 else '2k22' if int(build)>=20348 else '2k19'
+            if image_entry(iso,f'/vioserial/{flavour}/amd64/vioser.inf') is not None:
+                supported.append(build)
+        if not supported or image_entry(iso,'/guest-agent/qemu-ga-x86_64.msi') is None:
+            return {}
+        digest=msi_digest(iso)
+        return dict.fromkeys(supported,digest)
+
+
+def review_guest_agent(source,node,build):
+    return review_guest_agent_builds(source,node,[build]).get(build)
 
 
 def guest_agent_sha256(source,node):

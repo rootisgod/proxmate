@@ -1,4 +1,56 @@
 /* Operations on existing, explicitly selected Proxmox guests. */
+let scriptTargetServer = '', scriptTargetQuery = '';
+const scriptTargetKeys = new Set();
+
+function runScriptsPage() {
+  if (serverInfo?.id !== scriptTargetServer) {
+    scriptTargetServer = serverInfo?.id; scriptTargetKeys.clear(); scriptTargetQuery = '';
+  }
+  const guests = mgGuests(), running = new Set(guests.filter(g => g.status === 'running').map(machineKey));
+  for (const key of scriptTargetKeys) if (!running.has(key)) scriptTargetKeys.delete(key);
+  const count = scriptTargetKeys.size;
+  const rows = guests.map(g => {
+    const key = machineKey(g), name = g.name || 'VM ' + g.vmid, text = (name + ' ' + key).toLowerCase();
+    return '<label class="script-target-row" data-target-text="' + esc(text) + '"' +
+      (text.includes(scriptTargetQuery.toLowerCase()) ? '' : ' hidden') + '><input type="checkbox" data-run-target="' +
+      esc(key) + '"' + (scriptTargetKeys.has(key) ? ' checked' : '') + (running.has(key) ? '' : ' disabled') +
+      '><span><strong>' + esc(name) + '</strong><small>' + esc(key) + '</small></span><span class="pill ' +
+      esc(g.status) + '">' + esc(g.status) + '</span></label>';
+  }).join('');
+  return title('Run scripts','Choose the running guests, then select library scripts or enter a one-off script.') +
+    (!state ? '<p>Connect a Proxmox server to choose guest machines.</p><button data-view="server">Server connection</button>' :
+      '<section class="script-targets" aria-label="Target machines"><div class="script-target-toolbar"><label>Search machines' +
+      '<input type="search" data-run-target-search placeholder="Name, node or VM ID" value="' + esc(scriptTargetQuery) +
+      '"></label></div>' + rows + '<p class="script-count" data-no-target-matches' +
+      (guests.some(g => ((g.name || 'VM ' + g.vmid) + ' ' + machineKey(g)).toLowerCase().includes(scriptTargetQuery.toLowerCase())) ? ' hidden' : '') +
+      '>' + (guests.length ? 'No machines match this search.' : 'No virtual machines are available.') + '</p>' +
+      '<div class="script-target-footer"><span data-selection-count role="status">' + count +
+      ' selected</span><button type="button" class="primary" data-choose-run-scripts' + (count ? '' : ' disabled') +
+      '>Choose scripts</button></div></section>');
+}
+document.addEventListener('input', event => {
+  if (!event.target.matches('[data-run-target-search]')) return;
+  scriptTargetQuery = event.target.value;
+  let shown = 0;
+  for (const row of document.querySelectorAll('[data-target-text]')) {
+    row.hidden = !row.dataset.targetText.includes(scriptTargetQuery.toLowerCase());
+    if (!row.hidden) shown++;
+  }
+  document.querySelector('[data-no-target-matches]').hidden = shown > 0;
+});
+document.addEventListener('change', event => {
+  const box = event.target.closest('[data-run-target]');
+  if (!box) return;
+  if (box.checked) scriptTargetKeys.add(box.dataset.runTarget); else scriptTargetKeys.delete(box.dataset.runTarget);
+  document.querySelector('[data-selection-count]').textContent = scriptTargetKeys.size + ' selected';
+  document.querySelector('[data-choose-run-scripts]').disabled = !scriptTargetKeys.size;
+});
+document.addEventListener('click', async event => {
+  if (!event.target.closest('[data-choose-run-scripts]')) return;
+  const guests = mgGuests().filter(g => scriptTargetKeys.has(machineKey(g)));
+  try { await openScriptRun(guests); } catch (err) { notice(err.message); }
+});
+
 function powerButton(guest) {
   if(!['running','stopped'].includes(guest.status))return '';
   return '<button type="button" data-guest-power="'+esc(machineKey(guest))+'">'+(guest.status==='running'?'Shut down':'Power on')+'</button>';
@@ -34,19 +86,22 @@ function targetSummary(guests) {
     '<li><strong>'+esc(g.name || 'VM '+g.vmid)+'</strong> · '+esc(machineKey(g))+'</li>').join('')+'</ul>';
 }
 
-function reviewGuestOperation(plan, back, source='') {
-  const label = {tasks:'Run script', start:'Power on', shutdown:'Shut down'}[plan.operation];
-  const task = plan.tasks[0];
-  const settings = Object.entries(task?.params || {});
-  const fields = (task?'<h3>'+esc(task.name)+'</h3>':'')+
-    (settings.length?'<dl class="review-grid">'+settings.map(([k,v])=>'<dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd>').join('')+'</dl>':'')+
-    (source?'<details><summary>Script source</summary><pre class="run-source">'+esc(source)+'</pre></details>':'')+
+function reviewGuestOperation(plan, back, oneOffSource='') {
+  const tasks = plan.tasks || [];
+  const label = {tasks:tasks.length > 1 ? 'Run scripts' : 'Run script',start:'Power on',shutdown:'Shut down'}[plan.operation];
+  const steps = tasks.map((task,i) => {
+    const settings = Object.entries(task.params || {}), source = task.source || (i === 0 ? oneOffSource : '');
+    return '<li><strong>' + esc(task.name) + '</strong>' + (settings.length ? '<dl class="review-grid">' +
+      settings.map(([k,v]) => '<dt>' + esc(k) + '</dt><dd>' + esc(v) + '</dd>').join('') + '</dl>' : '') +
+      (source ? scriptSource({body:source}) : '') + '</li>';
+  }).join('');
+  const fields = (steps ? '<h3>Script order</h3><ol class="reviewed-scripts">' + steps + '</ol>' : '') +
     '<h3>Target machines</h3><ul class="run-targets">'+plan.targets.map(t=>'<li><strong>'+esc(t.name||'VM '+t.vmid)+'</strong> · '+esc(machineKey(t))+
       (t.guest_host?'<small>'+esc(t.credential_name)+' · '+esc(t.guest_host)+' · '+esc(t.platform==='windows'?'WinRM':'SSH')+'</small>':'')+'</li>').join('')+'</ul>'+
-    (plan.dangerous?wc('risk_confirmed','I have reviewed and trust this script on the listed machines.'):'')+
+    (plan.dangerous?wc('risk_confirmed','I have reviewed and trust the selected scripts on these machines.'):'')+
     '<button type="button" data-edit-run>Back</button>';
-  mgDialog('Review '+(task?'script run':label.toLowerCase()),fields,async values=>{
-    if(plan.dangerous&&!values.risk_confirmed)throw Error('Confirm that you trust the script before running it.');
+  mgDialog('Review '+(steps?'script run':label.toLowerCase()),fields,async values=>{
+    if(plan.dangerous&&!values.risk_confirmed)throw Error('Confirm that you trust these scripts before running them.');
     await api('manage/run',{plan_id:plan.id,confirmed:true,risk_confirmed:!!values.risk_confirmed});
     $('#manage-dialog').close();view='jobs';await refresh();
     notice(label+' queued for '+plan.targets.length+' machine'+(plan.targets.length===1?'':'s')+'. Follow the job in Progress.');
@@ -127,21 +182,15 @@ function scriptRunForm(context,draft) {
     '<div id="run-setup"></div>',async()=>{
     if(!draft.os)throw Error('Choose the guest operating system.');
     const form=$('#manage-form'),fields=form.elements;
-    const params={};
-    draft.params={};
-    for(const el of form.querySelectorAll('[data-run-param]')){
-      const key=el.dataset.runParam;
-      params[key]=paramValue(el);
-      if(el.type!=='password')draft.params[key]=params[key];
-    }
     const payload={targets};
     let source='';
     if(draft.mode==='library'){
-      const task=scripts.find(t=>t.id===fields.script.value&&t.platform===draft.os);
-      if(!task)throw Error('Choose a library script.');
-      payload.tasks=[{id:task.id,params}];source=task.body||'';
+      const steps=rememberLibrary();
+      if(!steps.length)throw Error('Add at least one library script.');
+      payload.tasks=steps.map(s=>({...s.ref,params:s.params}));
     }else{
-      source=fields.body.value;
+      const params=Object.fromEntries([...form.querySelectorAll('[data-run-param]')].map(el=>[el.dataset.runParam,paramValue(el)]));
+      draft.params={...params}; source=fields.body.value;
       payload.one_off={platform:draft.os,kind:fields.kind.value,body:source,
         parameters:Object.fromEntries(Object.keys(params).map(key=>[key,key])),params};
     }
@@ -159,50 +208,31 @@ function scriptRunForm(context,draft) {
       reviewGuestOperation(plan,()=>openScriptRun(guests,draft.mode==='library'?draft.script:'',draft),source);
   },'Review run');
   const setup=$('#run-setup');
-  let driveRequest;
-  function renderParams(parameters,values,types={}) {
-    const entries=Object.entries(parameters);
-    const box=$('#run-params');
+  let driveRequest,sequence;
+  function rememberLibrary() {
+    const steps=sequence.steps();
+    draft.tasks=steps.map(s=>({...s.ref,params:Object.fromEntries(Object.entries(s.params)
+      .filter(([key])=>s.item.input_types?.[key]?.type!=='password'))}));
+    draft.script='';
+    return steps;
+  }
+  function renderParams(parameters,values) {
+    const entries=Object.entries(parameters), box=$('#run-params');
     box.innerHTML=entries.length?'<fieldset><legend>Parameters</legend><div class="form-grid">'+entries.map(([key,label])=>
-      '<label>'+esc(label)+paramControl(scriptInputValue(types,key),scriptInputValue(values,key),'data-run-param="'+esc(key)+'"')+'</label>').join('')+'</div></fieldset>':'';
-    const drives=[...box.querySelectorAll('[data-run-param]')].filter(el=>scriptInputValue(types,el.dataset.runParam)?.type==='drive');
-    if(!drives.length)return;
-    for(const el of drives)el.innerHTML='<option value="">Checking drive letters…</option>';
-    const retry=document.createElement('button');retry.type='button';retry.textContent='Retry drive discovery';retry.hidden=true;box.append(retry);
-    async function loadLetters(){
-      retry.hidden=true;
-      try{
-        driveRequest??=api('simple/drive-letters',{targets});
-        const {occupied}=await driveRequest;
-        if(!retry.isConnected)return;
-        for(const el of drives){
-          const key=el.dataset.runParam;
-          el.outerHTML=paramControl(types[key],scriptInputValue(values,key),'data-run-param="'+esc(key)+'"',occupied);
-        }
-      }catch(err){
-        driveRequest=null;if(!retry.isConnected)return;
-        for(const el of drives)el.innerHTML='<option value="">Drive discovery unavailable</option>';
-        retry.hidden=false;$('#manage-error').textContent=err.message;
-      }
-    }
-    retry.onclick=()=>{$('#manage-error').textContent='';loadLetters()};loadLetters();
+      '<label>'+esc(label)+paramControl(null,scriptInputValue(values,key),'data-run-param="'+esc(key)+'"')+'</label>').join('')+'</div></fieldset>':'';
   }
   function scriptFields(){
     const holder=$('#run-script'), library=draft.mode==='library';
     if(library){
       const available=scripts.filter(t=>t.platform===draft.os&&(t.id!=='windows-domain-controller'||guests.length===1));
-      const choices=[['','Choose a script'],...available.slice().sort((a,b)=>Number(!!b.kind)-Number(!!a.kind)||a.name.localeCompare(b.name)).map(t=>[t.id,t.name])];
-      holder.innerHTML=ws('script','Library script',choices,draft.script)+'<div id="run-params"></div><div id="run-script-details"></div>';
-      const select=holder.querySelector('select');select.required=true;
-      const choose=()=>{
-        const task=available.find(t=>t.id===select.value);
-        if(select.value!==draft.script)draft.params={};
-        draft.script=select.value;
-        renderParams(task?.parameters||{},{...task?.defaults,...draft.params},task?.input_types);
-        $('#run-script-details').innerHTML=(task?.builtin?'<p>'+esc(task.description)+'</p>':'')+
-          (task?.body?'<details><summary>View script source</summary><pre class="run-source">'+esc(task.body)+'</pre></details>':'');
-      };
-      select.onchange=choose;choose();
+      const refs=draft.tasks || (draft.script ? [{id:draft.script,params:draft.params}] : []);
+      const steps=refs.map(s=>({ref:{id:s.id},item:available.find(t=>t.id===s.id),params:s.params})).filter(s=>s.item);
+      sequence=mountScriptSequence(holder,{catalog:available,steps,runInputs:true,getOccupied:async()=>{
+        try {
+          driveRequest??=api('simple/drive-letters',{targets});
+          return (await driveRequest).occupied;
+        } catch(error) { driveRequest=null;throw error; }
+      }});
     }else{
       const languages=Object.entries(scriptFormats).filter(([kind])=>kind!=='shell'||draft.os==='linux');
       holder.innerHTML=ws('kind','Language',languages,draft.kind)+'<label>Script source<textarea name="body" required maxlength="100000" rows="8" spellcheck="false"></textarea></label><small id="run-syntax-help"></small><div id="run-params"></div>';
@@ -227,7 +257,9 @@ function scriptRunForm(context,draft) {
       '</div><div id="run-script"></div><div id="run-login"></div>';
     for(const button of setup.querySelectorAll('[data-run-mode]'))button.onclick=()=>{
       if(button.dataset.runMode===draft.mode)return;
-      draft.mode=button.dataset.runMode;draft.params={};
+      if(draft.mode==='library')rememberLibrary();
+      else for(const el of setup.querySelectorAll('[data-run-param]'))draft.params[el.dataset.runParam]=paramValue(el);
+      draft.mode=button.dataset.runMode;
       for(const other of setup.querySelectorAll('[data-run-mode]'))other.setAttribute('aria-pressed',String(other===button));
       scriptFields();
     };
@@ -250,6 +282,6 @@ function scriptRunForm(context,draft) {
     chooser.onchange=toggle;toggle();
   }
   const os=$('#manage-form').elements.os;
-  if(os)os.onchange=()=>{draft.os=os.value;draft.script='';draft.kind='ansible';draft.params={};setupFields()};
+  if(os)os.onchange=()=>{draft.os=os.value;draft.script='';draft.tasks=[];draft.kind='ansible';draft.params={};setupFields()};
   setupFields();
 }

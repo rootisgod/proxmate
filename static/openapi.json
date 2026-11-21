@@ -6,7 +6,7 @@
     "description": "Single-admin LAN API. Configuration writes are immediate; infrastructure actions run in a serialized durable queue. Guest management requires reviewing a frozen plan, then confirming its ID. No automatic retries or rollback."
   },
   "externalDocs": {
-    "description": "Windows and Ubuntu provisioning guide for agents",
+    "description": "Guided provisioning and lab packs for agents",
     "url": "/static/llms.txt"
   },
   "servers": [
@@ -27,6 +27,8 @@
       }
     },
     "schemas": {
+      "InstallerCheck": {"type": "object", "required": ["node", "source", "os", "status", "detail", "checked_at"], "properties": {"node": {"type": "string"}, "source": {"type": "string"}, "os": {"type": "string"}, "detail": {"type": "string"}, "agent_iso": {"type": "string"}, "release": {"type": "string"}, "kind": {"type": "string"}, "status": {"type": "string", "enum": ["verified", "failed", "missing"]}, "checked_at": {"type": "number", "description": "Unix timestamp in seconds"}, "install_sources": {"type": "array", "items": {"type": "string"}}, "editions": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "integer"}, "label": {"type": "string"}, "build": {"type": "string"}, "language": {"type": "string"}, "compatible": {"type": "boolean"}, "reason": {"type": "string", "nullable": true}}}}}},
+      "IsoInventory": {"type": "object", "required": ["nodes", "node", "files", "warnings", "driver_isos", "ssh_configured"], "properties": {"node": {"type": "string", "nullable": true}, "nodes": {"type": "array", "items": {"type": "object", "properties": {"node": {"type": "string"}, "status": {"type": "string"}}}}, "files": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "location": {"type": "string"}, "family": {"type": "string"}, "storage": {"type": "string", "nullable": true}, "bytes": {"type": "integer", "nullable": true}, "revision": {"type": "string", "nullable": true}, "check": {"$ref": "#/components/schemas/InstallerCheck"}}}}, "warnings": {"type": "array", "items": {"type": "string"}}, "driver_isos": {"type": "array", "items": {"type": "string"}}, "ssh_configured": {"type": "boolean"}, "recommended": {"type": "object", "description": "Suggested source ID by OS for bounded installer checks.", "additionalProperties": {"type": "string"}}}},
       "LabAuthorMachine": {
         "type": "object", "required": ["key","os","source"], "additionalProperties": false,
         "properties": {
@@ -36,7 +38,10 @@
             "properties":{"kind":{"type":"string","enum":["iso","template","cloud","existing"]},"hint":{"type":"string"},"edition":{"type":"string"}}},
           "settings": {"type":"object","description":"Portable settings from the version 1 specification. Memory in MiB and disks in GiB."},
           "after": {"type":"array","items":{"type":"string"}},
-          "base_job_id": {"type":"string","description":"Guided job supplying any referenced original task definitions."},
+          "base_job_id": {"type":"string","description":"Guided job supplying original steps. Choose at most one base source."},
+          "base_recipe_id": {"type":"string","description":"Saved build supplying frozen original steps."},
+          "base_pack_id": {"type":"string","description":"Saved pack supplying frozen original steps. Requires base_role."},
+          "base_role": {"type":"string","description":"Machine key in base_pack_id."},
           "tasks": {"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":false,
             "oneOf":[{"required":["id"]},{"required":["original"]}],
             "properties":{"id":{"type":"string"},"original":{"type":"integer","minimum":0},
@@ -61,7 +66,7 @@
       "LabInspection": {
         "type": "object",
         "required": ["id","name","manifest","scripts","machines"],
-        "properties": {"id":{"type":"string"},"name":{"type":"string"},"manifest":{"type":"object","description":"Portable lab.yaml v1 or v2. See the format specification."},"scripts":{"type":"object","additionalProperties":{"type":"string"}},"machines":{"type":"array","items":{"type":"object","required":["key","os","source","secret_inputs"],"properties":{"key":{"type":"string"},"os":{"type":"string"},"source":{"type":"object"},"after":{"type":"array","items":{"type":"string"}},"settings":{"type":"object"},"tasks":{"type":"array","items":{"type":"object"}},"secret_inputs":{"type":"array","items":{"type":"object","required":["key","label"],"properties":{"key":{"type":"string"},"label":{"type":"string"}}}}}}}}
+        "properties": {"id":{"type":"string"},"name":{"type":"string"},"manifest":{"type":"object","description":"Portable lab.yaml v1 or v2. See the format specification."},"scripts":{"type":"object","additionalProperties":{"type":"string"}},"machines":{"type":"array","items":{"type":"object","required":["key","os","source","secret_inputs"],"properties":{"key":{"type":"string"},"os":{"type":"string"},"source":{"type":"object"},"after":{"type":"array","items":{"type":"string"}},"settings":{"type":"object"},"tasks":{"type":"array","items":{"type":"object"}},"editable_tasks":{"type":"array","description":"Frozen original steps in the same order, with names, public parameters, defaults, input_types and params.","items":{"type":"object"}},"secret_inputs":{"type":"array","items":{"type":"object","required":["key","label"],"properties":{"key":{"type":"string"},"label":{"type":"string"}}}}}}}}
       },
       "LabBinding": {
         "type": "object",
@@ -1600,6 +1605,9 @@
     "/api/simple/labs/import": {
       "post": {"summary":"Inspect and save a portable lab ZIP","description":"No guest jobs are created. Imports are scoped to the selected server. Repeating identical ZIP bytes returns the existing pack.","parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["archive"],"properties":{"archive":{"type":"string","format":"byte","description":"Base64-encoded ZIP. Maximum decoded size 2 MiB."}},"additionalProperties":false}}}},"responses":{"200":{"description":"Inspect and save a portable lab ZIP","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabInspection"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}}
     },
+    "/api/simple/media": {"get": {"summary": "Discover node and mounted installation media", "parameters": [{"name": "node", "in": "query", "schema": {"type": "string"}, "description": "Online node. Defaults to the first online node."}], "responses": {"200": {"description": "ISO candidates and any recently recorded checks", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IsoInventory"}}}}, "400": {"description": "Invalid node"}, "401": {"description": "Authentication required"}}}},
+    "/api/simple/media/verify": {"post": {"summary": "Check one installer and its guided setup prerequisites", "parameters": [{"name": "X-Proxmate-Server", "in": "header", "required": true, "schema": {"type": "string"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["node", "source", "os"], "additionalProperties": false, "properties": {"node": {"type": "string"}, "source": {"type": "string"}, "os": {"type": "string", "enum": ["windows", "ubuntu", "debian", "rocky"]}, "agent_iso": {"type": "string", "description": "Listed Proxmox VirtIO ISO, for Windows only."}}}}}}, "responses": {"200": {"description": "Inspection result. No job is queued.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InstallerCheck"}}}}, "400": {"description": "Invalid input or ISO unavailable"}, "401": {"description": "Authentication required"}, "409": {"description": "Disconnected or stale selected server"}, "429": {"description": "Two checks already running"}}}},
+    "/api/simple/recipes/{id}/lab-source": {"get": {"summary": "Get portable machine settings and editable frozen steps from a saved build", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Portable original with public inputs", "content": {"application/json": {"schema": {"type": "object", "required": ["base_recipe_id", "os", "source", "settings", "tasks"], "properties": {"base_recipe_id": {"type": "string"}, "os": {"type": "string"}, "source": {"type": "object"}, "settings": {"type": "object"}, "tasks": {"type": "array", "items": {"type": "object"}}}}}}}, "400": {"description": "Unknown build or no portable snapshot"}, "401": {"description": "Authentication required"}}}},
     "/api/simple/labs/packs": {
       "get": {"summary":"List saved lab packs","description":"Newest first on the selected server.","responses":{"200":{"description":"Locally authored and imported packs","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/LabPackSummary"}}}}},"400":{"description":"Resource unavailable"},"401":{"description":"Administrator authentication required"}}},
       "post": {
@@ -2822,7 +2830,7 @@
     "/api/simple/options": {
       "get": {
         "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
-        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 installer IDs ordered newest first. The ubuntu object lists suggested packages, firewall/update policies and install_sources. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. rocky_isos lists Rocky Linux 10 x86_64 DVD, Minimal and Boot images per destination. rocky_templates lists prepared Rocky templates. Also includes Windows media, programs and settings.",
+        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 installer IDs ordered newest first. The ubuntu object lists suggested packages, firewall/update policies and install_sources. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. rocky_isos lists Rocky Linux 10 x86_64 DVD, Minimal and Boot images per destination. rocky_templates lists prepared Rocky templates. Also includes Windows media, programs and settings. destinations[].isos[] and local_isos[] contain windows_label, a display category inferred from the filename or null. Inspect actual editions before choosing an image.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -3449,7 +3457,7 @@
     "/api/simple/existing-plan": {
       "post": {
         "summary": "Review library tasks or a one-off script on existing guests",
-        "description": "Reuse each VM login. Missing connections require a compatible saved or new guest credential. A successful review saves those new connections and freezes script source and inputs. Pasted scripts stay outside the library. Submit the plan ID to /api/manage/run with the returned risk confirmation requirement.",
+        "description": "Reuse each VM login. Missing connections require a compatible saved or new guest credential. A successful review saves those new connections and freezes script source and inputs. Library selections with stored source include the frozen text in tasks[].source. Pasted scripts stay outside the library and their submitted text stays out of the review response. Submit the plan ID to /api/manage/run with the returned risk confirmation requirement.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"

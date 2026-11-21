@@ -1,0 +1,109 @@
+@font-face {
+  font-family: Geist;
+  src: url('/static/editor-assets/fonts/geist-latin.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* Shared roles for both appearances. Components use accent for text and action
+   for filled controls, so both stay legible when the surface becomes dark. */
+:root {
+  color-scheme: light;
+  --font-ui: Geist, "Segoe UI", system-ui, sans-serif;
+  --canvas: #f8f6f2;
+  --surface: #fff;
+  --surface-soft: #faf9f6;
+  --surface-hover: #f0f2f4;
+  --ink: #1e2b38;
+  --muted: #52616f;
+  --line: #d9dcd9;
+  --field-line: #8996a2;
+  --accent: #26579e;
+  --action: #2c5eb0;
+  --action-hover: #204c90;
+  --on-action: #fff;
+  --accent-soft: #e7effb;
+  --accent-line: #92aed2;
+  --focus: #2864b5;
+
+  --rail: #223854;
+  --rail-strong: #fff;
+  --rail-text: #dce6f2;
+  --rail-muted: #b8c9dd;
+  --rail-hover: #2e4764;
+  --rail-current: #395474;
+  --rail-rule: #4d6480;
+  --rail-edge: #7a90a9;
+  --rail-marker: #ffca83;
+  --rail-focus: #c1e2ff;
+  --success: #11674d;
+  --success-soft: #def4e9;
+  --warning: #815104;
+  --warning-soft: #fcf0cc;
+  --danger: #9f3343;
+  --danger-soft: #fde8ea;
+  --blue: #285ea1;
+  --blue-soft: #e3efff;
+  --violet: #7243a6;
+  --violet-soft: #f2eafd;
+  --rose: #973d6a;
+  --rose-soft: #fceaf3;
+  --orange: #944424;
+  --orange-soft: #ffede2;
+  --code-bg: #203044;
+  --code-ink: #e0e8fa;
+  --selection: #cbdff8;
+  --shadow: rgb(34 46 60 / 8%);
+  --scrim: rgb(20 29 51 / 46%);
+  --brand-bg: #3062a4;
+  --brand-fg: #fff;
+  --brand-tip: var(--rail-marker);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #141a22;
+  --surface: #202a35;
+  --surface-soft: #1b242e;
+  --surface-hover: #2a3643;
+  --ink: #eff3f7;
+  --muted: #b2c0ce;
+  --line: #3b4857;
+  --field-line: #748699;
+  --accent: #a5cbff;
+  --action: #9bc4ff;
+  --action-hover: #bbd8ff;
+  --on-action: #112944;
+  --accent-soft: #253b53;
+  --accent-line: #597698;
+  --focus: #a5d3ff;
+
+  --rail: #294f73;
+  --rail-text: #e4edf6;
+  --rail-muted: #cad8e8;
+  --rail-hover: #345a7c;
+  --rail-current: #406283;
+  --rail-rule: #50718e;
+  --rail-edge: #8ea4bb;
+  --success: #8de4bb;
+  --success-soft: #183a32;
+  --warning: #f1ca80;
+  --warning-soft: #3e3323;
+  --danger: #ffacb7;
+  --danger-soft: #442936;
+  --blue: #9fc9ff;
+  --blue-soft: #24354e;
+  --violet: #d4adf5;
+  --violet-soft: #372c4a;
+  --rose: #f1aacb;
+  --rose-soft: #422b40;
+  --orange: #ffb996;
+  --orange-soft: #423026;
+  --code-bg: #111a24;
+  --code-ink: #e1e6f5;
+  --selection: #375879;
+  --shadow: rgb(5 8 16 / 30%);
+  --scrim: rgb(4 7 15 / 68%);
+}
+
+a { color:var(--accent); }

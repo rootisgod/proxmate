@@ -25,7 +25,7 @@ import linux_install
 import ubuntu_build
 import windows_build
 import windows_setup
-from provisioning import PROFILES,LOCALES,windows_setup_key,windows_options
+from provisioning import PROFILES,windows_setup_key,windows_options
 from guest_tasks import DOMAIN_CONTROLLER, public_params, selected_drive_letters
 from vm_config import lab_machine_identity, machine_identity, vm_path
 
@@ -60,6 +60,12 @@ def choose(items,capability):
     return max(choices,key=lambda s:s.get('avail',0))['storage']
 
 
+def iso_option(source, revision, *, local=False):
+    filename = source[8:] if local else source.rsplit('/', 1)[-1]
+    return dict(id=source, label=filename + (' (ISO library)' if local else ''), revision=revision,
+                windows_label=media.windows_iso_label(filename))
+
+
 def discovery(inv):
     candidates=[]
     for n in inv['nodes']:
@@ -75,15 +81,13 @@ def discovery(inv):
             try: subnets[item['iface']]=str(ipaddress.ip_interface(item.get('cidr') or item['address']+'/'+str(item['netmask'])).network)
             except (ValueError, KeyError): continue
         subnet=subnets.get(bridge['iface'],'')
-        tools=[i['volid'] for i in d['isos'] if 'virtio' in i['volid'].lower() and i['volid'].lower().endswith('.iso')]
-        # Prefer explicitly versioned media; guest bootstrap verifies signed installers.
-        tools.sort(key=lambda v:tuple(int(x) for x in re.findall(r'\d+',v)),reverse=True)
+        tools=media.driver_sources(i['volid'] for i in d['isos'])
         candidates.append(dict(node=n['node'],storage=disk,iso_storage=iso,bridge=bridge['iface'],management_cidr=subnet,bridge_subnets=subnets,
             agent_iso=tools[0] if tools else '',storage_choices=[s['storage'] for s in d['storage'] if s.get('active') and 'images' in s.get('content','').split(',')],
             iso_storages=[s['storage'] for s in d['storage'] if s.get('active') and 'iso' in s.get('content','').split(',')],bridges=[b['iface'] for b in bridges],
-            driver_isos=tools,isos=[{'id':i['volid'],'label':i['volid'].split('/')[-1],'revision':media.volume_revision(i)} for i in d['isos'] if i['volid'].lower().endswith('.iso')]))
+            driver_isos=tools,isos=[iso_option(i['volid'],media.volume_revision(i)) for i in d['isos'] if i['volid'].lower().endswith('.iso')]))
     if not candidates: raise ValueError('No online server has disk storage, ISO storage and a network bridge available')
-    local=[{'id':'library:'+i['name'],'label':i['name']+' (ISO library)','revision':str(i['mtime'])+'-'+str(i['bytes']) if i.get('mtime') else None} for i in inv['local_isos']]
+    local=[iso_option('library:'+i['name'],str(i['mtime'])+'-'+str(i['bytes']) if i.get('mtime') else None,local=True) for i in inv['local_isos']]
     for dest in candidates:
         for distro, installer in LINUX_INSTALLERS.items():
             dest[distro+'_isos'] = installer.candidates(dest['isos'] + local)
@@ -151,7 +155,14 @@ class SimpleFlow:
         else:
             selections=self.m.task_selection(d.get('tasks'))
         discovered=self.discover_connections(targets,selections,d)
-        return self.m.create_plan(dict(operation='tasks',targets=targets),selections=selections,discovered=discovered)
+        reviewed=self.m.create_plan(dict(operation='tasks',targets=targets),selections=selections,discovered=discovered)
+        # Return the library text frozen into this review. One-off text already belongs
+        # to the caller; generated setup and recovery steps can contain credentials.
+        if 'tasks' in d:
+            for task, selection in zip(reviewed['tasks'],selections,strict=True):
+                if 'body' in selection['item']:
+                    task['source']=selection['item']['body']
+        return reviewed
 
     def discover_connections(self,targets,selections,d,*,lab=False):
         """Prepare missing guest logins without publishing them before the caller commits."""
@@ -193,7 +204,7 @@ class SimpleFlow:
                     if lab: record['machine_identity']=identity
                     discovered['connections',record['id']]=record
                 except Exception as exc:
-                    raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Operations > Refresh connection to verify its address and login.') from exc
+                    raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Inventory > Refresh connection to verify its address and login.') from exc
         return discovered
 
     def plan(self,d,progress=lambda stage:None):
@@ -274,7 +285,8 @@ class SimpleFlow:
                 if d.get('edition_identity') and d['edition_identity']!=inspected['identity']: raise ValueError('ISO editions changed. Refresh the source before reviewing.')
                 edition=next((e for e in inspected['editions'] if str(e['index'])==str(d.get('edition'))),None)
                 if not edition: raise ValueError('Choose a Windows Server edition from this ISO')
-                if int(edition.get('build') or 0)<17763: raise ValueError('Automatic setup supports Windows Server 2019 or newer. Use Advanced for older images.')
+                issue=media.windows_edition_issue(edition)
+                if issue: raise ValueError(issue)
                 agent=d.get('agent_iso') or dest['agent_iso']
                 if not agent or agent not in dest['driver_isos']: raise ValueError('Add a trusted VirtIO guest-tools ISO to Proxmox, then refresh. It supplies the Windows guest agent.')
                 candidates=[agent] if d.get('agent_manual') else [agent]+[v for v in dest['driver_isos'] if v!=agent]
@@ -390,7 +402,6 @@ class SimpleFlow:
                     b.update(management_cidr=template['management_cidr'],clone_token=uuid.uuid4().hex)
                 else:
                     locale=d.get('locale','en-GB');language=edition['language']
-                    if language not in LOCALES: raise ValueError('This image language is not supported by the automatic answer file')
                     cfg.update(source_kind='local' if source.startswith('library:') else 'proxmox',iso_storage=dest['iso_storage'],
                         windows=dict(image_index=edition['index'],hostname=name,admin_password=credential['password'],ui_language=language,
                             locale=locale,keyboard=locale,timezone=d.get('timezone','GMT Standard Time'),accept_eula=True,wipe_disk=True,rdp=management.boolean(d.get('rdp',False))))

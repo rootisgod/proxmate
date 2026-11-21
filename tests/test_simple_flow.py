@@ -636,8 +636,11 @@ def test_review_cache_uses_server_observed_revisions_and_fresh_worker_check(simp
     assert calls[-1]=='os' and calls.count('os')==2
     submission=c.post('/api/simple/run',json={'plan_id':plan['id'],'confirmed':True},headers=h)
     monkeypatch.setattr(media,'inspect_source',lambda *a:{'identity':'replaced'})
-    assert app.run_next_job()
-    assert c.get(submission.json['jobs'][0]['url'],headers=h).json['status']=='failed'
+    submitted=submission.json['jobs']
+    assert submitted
+    for _ in submitted:
+        assert app.run_next_job()
+    assert all(c.get(job['url'],headers=h).json['status']=='failed' for job in submitted)
 
 
 def test_async_review_releases_http_and_records_diagnostics(simple_lab,monkeypatch):

@@ -86,15 +86,6 @@ function windowsTemplates(){
   return (state?.resources||[]).filter(t=>t.type==='qemu'&&t.template&&(!t.ostype||/^(win|w2k)/i.test(t.ostype)));
 }
 
-function mediaCategory(iso){
-  const name=iso.label.replace(/ \(ISO library\)$/,'');
-  if(/virtio|driver|guest.tools|sql|exchange|visual.studio|ubuntu|debian|fedora|rocky|darwin|proxmate-(unattend|clone|seed|ubuntu)/i.test(name))return '';
-  const year=name.match(/(?:2016|2019|2022|2025)/)?.[0];
-  if(!year&&!/windows|(?:^|[^a-z])win(?:srv|server|\d|[^a-z]|$)|server/i.test(name))return '';
-  const client=name.match(/(?:windows|win)[ _.-]*(10|11)(?!\d)/i);
-  return client?'Windows '+client[1]:year?'Windows Server '+year:/server/i.test(name)?'Windows Server':'Windows installation media';
-}
-
 function windowsSourceFields(d){
   const templates=windowsTemplates().filter(t=>simpleOptions.destinations.some(n=>n.node===t.node));
   let html=d.purpose==='vm'&&templates.length?ws('source_kind','Install from',[['iso','Windows ISO'],['template','Windows template']],d.source_kind):'';
@@ -106,14 +97,14 @@ function windowsSourceFields(d){
       ws('clone_mode','Copy type',[['full','Full copy (independent VM)'],['linked','Linked copy (requires source template)']],d.clone_mode||'full')+
       wc('generalized','This is a Sysprep-generalized Windows Server template with the QEMU guest agent installed.',d.generalized);
   }else{
-    const all=simpleSources(), candidates=all.filter(mediaCategory);
+    const all=simpleSources(), candidates=all.filter(s=>s.windows_label);
     const sources=d.all_media||!candidates.length?all:candidates;
     if(!sources.some(s=>s.id===d.source))d.source=sources[0]?.id||'';
     const selected=sources.find(s=>s.id===d.source);
     const location=s=>s.id.startsWith('library:')?s.label:s.id;
     const labels=sources.map(s=>{
-      const category=mediaCategory(s);
-      const repeated=category&&sources.filter(other=>mediaCategory(other)===category).length>1;
+      const category=s.windows_label;
+      const repeated=category&&sources.filter(other=>other.windows_label===category).length>1;
       return [s.id,d.all_media||!category?location(s):category+(repeated?' · '+location(s):'')];
     });
     html+=ws('source','Windows Server ISO',labels,d.source)+ws('edition','Windows edition',(d.editions||[]).map(e=>[e.index,e.label]),d.edition)+

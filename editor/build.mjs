@@ -1,5 +1,5 @@
 import {build} from 'esbuild';
-import {readFile, writeFile} from 'node:fs/promises';
+import {readFile, writeFile, cp} from 'node:fs/promises';
 
 const out = 'static/editor-assets';
 const result = await build({
@@ -15,3 +15,9 @@ for (const root of [...roots].sort()) {
   licenses.push(name + '\n' + license);
 }
 await writeFile(out + '/licenses.txt', licenses.join('\n'));
+
+// Serve the workspace icons locally on isolated homelab networks.
+await cp('node_modules/bootstrap-icons/font', out + '/icons', {recursive:true});
+await cp('node_modules/bootstrap-icons/LICENSE', out + '/icons/LICENSE');
+await cp('node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2', out + '/fonts/geist-latin.woff2');
+await cp('node_modules/@fontsource-variable/geist/LICENSE', out + '/fonts/LICENSE');

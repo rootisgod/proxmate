@@ -14,6 +14,10 @@ Keep the guide aligned with the API handlers and [OpenAPI specification](static/
 
 When a documented example changes, update its assertions and verify it against the test lab. The Windows example is exercised by `python -m pytest -q tests/test_simple_flow.py::test_agent_guide_example_reviews_without_creating_a_job`, which submits the guide's request for review and checks that the job queue stays empty.
 
+## Compose dashboard workflows from machines and scripts
+
+Follow the [workspace interaction model](docs/interface-workflows.md). Put machine settings in guided provisioning and script inputs in the script catalog. Create machine, Run scripts and Labs share the ordered step picker. Preserve the distinction between saving a definition and reviewing specific destination machines for execution.
+
 Treat published lab packs and versioned built-in task references as compatibility contracts. Version 1 creates new guests. In-place task roles require version 2, an explicit local target, and separate approval. Keep authoring free of infrastructure changes and login secrets. When changing portable settings, script resolution or deployment behavior, update [the pack specification](static/lab-packs.md) and run `python -m pytest -q tests -k lab`. Verify that an archive still works on a second dashboard with an empty script library and fresh credentials.
 
 ## Keep changes easy to reason about

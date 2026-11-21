@@ -38,6 +38,47 @@ def create_source_job(client, headers):
     return job, script, body
 
 
+def test_saved_build_and_pack_copy_keep_reviewed_steps_after_library_removal(simple_lab):
+    app, client, headers, _ = simple_lab
+    job, script, body = create_source_job(client, headers)
+    saved = post(client, headers, '/api/simple/recipes', {'name': 'Ready for labs', 'job_id': job}, 201).json
+    with app.db() as con:
+        con.execute("DELETE FROM records WHERE kind='tasks' AND id=?", (script['id'],))
+    source = client.get('/api/simple/recipes/' + saved['id'] + '/lab-source', headers=headers).json
+    assert source['base_recipe_id'] == saved['id']
+    assert source['tasks'][0]['params']['folder'] == 'Historical'
+    assert 'Old restore' not in json.dumps(source)
+    entry = dict(source, key='dc', tasks=[{'original': 1}, {'original': 0}])
+    pack = post(client, headers, PACKS, {'name': 'First lab', 'machines': [entry]}, 201).json
+    opened = client.get(PACKS + '/' + pack['id'], headers=headers).json
+    machine = opened['machines'][0]
+    assert [t['name'] for t in machine['editable_tasks']] == ['Set up a Windows domain controller', 'Tools directory']
+    assert machine['editable_tasks'][0]['params'] == {'domain_name': 'old.example.test'}
+
+    # Imported packs may use their own named prompts and file paths.
+    manifest = opened['manifest']
+    manifest['machines']['dc']['tasks'][0]['with']['dsrm_password'] = {'prompt': 'lab_recovery'}
+    imported = post(client, headers, LABS + '/import', {
+        'archive': base64.b64encode(lab_pack.write_pack(manifest, opened['scripts'])).decode(),
+    }).json
+    path = PACKS + '/' + imported['id'] + '/export'
+    original = client.get(path, headers=headers).data
+    entry.pop('base_recipe_id')
+    entry.update(base_pack_id=imported['id'], base_role='dc', tasks=[
+        {'original': 1, 'params': {'folder': 'Second'}}, {'original': 1}, {'original': 0}])
+    copy = post(client, headers, PACKS, {'name': 'Second lab', 'machines': [entry]}, 201).json
+    first, second, dc = copy['machines'][0]['tasks']
+    assert first['file'] == second['file'] and copy['scripts'][first['file']] == body
+    assert [t['with']['folder'] for t in (first, second)] == ['Second', 'Historical']
+    assert dc['with']['dsrm_password'] == {'prompt': 'lab_recovery'}
+    assert client.get(path, headers=headers).data == original
+    for invalid in ({'base_role': 'missing'}, {'base_job_id': job}, {'tasks': [{'original': 99}]},
+                    {'tasks': [{'original': 0, 'params': {'dsrm_password': 'should-stay-private'}}]}):
+        result = post(client, headers, PACKS, {'name': 'Bad copy', 'machines': [dict(entry, **invalid)]}, 400)
+        assert 'should-stay-private' not in result.get_data(as_text=True)
+    assert len(client.get('/api/jobs', headers=headers).json) == 1
+
+
 def test_author_from_blank_catalog_mix_roles_without_touching_guests(simple_lab, monkeypatch):
     app, client, headers, _ = simple_lab
     def no_host(*args, **kwargs):

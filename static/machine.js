@@ -103,8 +103,8 @@ window.addEventListener('hashchange',()=>{
 function renderMachine(){
   const page=machinePage;
   if(!page||page.server!==serverInfo?.id){view='machines';render();return}
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view==='machines'));
-  const back='<button class="machine-back" data-view="machines">← Operations</button>';
+  workspaceLocation('machine');
+  const back='<button class="machine-back" data-view="machines">← Inventory</button>';
   const d=page.data;
   if(!d){
     $('#content').innerHTML=back+'<p role="status">'+esc(page.error||'Reading machine details…')+'</p>';
@@ -193,9 +193,6 @@ function connectMachine(page){
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button');
   if(!b)return;
-  if(b.dataset.view&&location.hash.startsWith('#machine/')){
-    history.pushState({},'',location.pathname+location.search);machinePage=null;
-  }
   if(b.dataset.machine||b.dataset.refreshConnection){
     const guest=mgGuests().find(r=>machineKey(r)===(b.dataset.machine||b.dataset.refreshConnection));
     if(guest)await openMachine({node:guest.node,vmid:guest.vmid},true,{refreshConnection:!!b.dataset.refreshConnection});

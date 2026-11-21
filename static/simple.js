@@ -12,6 +12,12 @@ function resetMachineFilters(){
 }
 
 function machineRows(){
+  if(machineFilters.status==='templates'){
+    const query=machineFilters.query.trim().toLowerCase();
+    const templates=state.resources.filter(r=>r.type==='qemu'&&r.template&&
+      [r.name,r.node,r.vmid].some(value=>String(value).toLowerCase().includes(query))).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    return templates.map(t=>`<tr><td class="pick"><span class="bi bi-layers" aria-hidden="true"></span></td><td class="machine-name"><strong>${esc(t.name||'Template')}</strong><small>${esc(t.node)} · VM ${esc(t.vmid)}</small></td><td class="machine-state"><span class="pill">Template</span></td><td class="capacity">${esc(t.maxcpu??'—')} vCPU<small>${t.maxmem?(t.maxmem/1073741824).toLocaleString()+' GiB RAM':'Memory unavailable'}</small></td><td class="machine-actions"><button data-clone-template="${esc(t.vmid)}">Clone template</button></td></tr>`).join('')||'<tr><td colspan="5" class="inventory-empty">No matching templates. <button data-view="create">Create machine or template</button></td></tr>';
+  }
   const guests=mgGuests().slice().sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const query=machineFilters.query.trim().toLowerCase();
   const shown=guests.filter(g=>(machineFilters.status==='all'||g.status===machineFilters.status)&&
@@ -20,7 +26,7 @@ function machineRows(){
   return shown.map(g=>{
     const key=machineKey(g),name=g.name||'VM '+g.vmid;
     return `<tr><td class="pick"><input type="checkbox" aria-label="Select ${esc(name)} on ${esc(g.node)}" data-machine-key="${esc(key)}" ${machineFilters.selected.has(key)?'checked':''}></td>
-      <td class="machine-name"><button class="machine-link" data-machine="${esc(key)}">${esc(name)}</button><small>${esc(g.node)} · VM ${esc(g.vmid)}</small>${g.last_winrm_check?'<small>WinRM login checked '+esc(new Date(g.last_winrm_check*1000).toLocaleDateString())+'</small>':''}</td>
+      <td class="machine-name"><button class="machine-link" data-machine="${esc(key)}"><span class="bi bi-pc-display-horizontal" aria-hidden="true"></span> ${esc(name)}</button><small>${esc(g.node)} · VM ${esc(g.vmid)}</small>${g.last_winrm_check?'<small>WinRM login checked '+esc(new Date(g.last_winrm_check*1000).toLocaleDateString())+'</small>':''}</td>
       <td class="machine-state"><span class="pill ${esc(g.status)}">${esc(g.status||'unknown')}</span></td>
       <td class="capacity">${esc(g.maxcpu??'—')} vCPU<small>${g.maxmem?(g.maxmem/1073741824).toLocaleString(undefined,{maximumFractionDigits:1})+' GiB RAM':'Memory unavailable'}</small></td>
       <td class="machine-actions"><div class="row-actions"><button data-simple="apply" data-id="${esc(g.vmid)}" aria-label="Run script on ${esc(name)}">Run script</button><button type="button" data-refresh-connection="${esc(key)}" aria-label="Refresh connection for ${esc(name)}">Refresh connection</button><details class="machine-menu"><summary>Manage</summary><div>${powerButton(g)}${mgButton('More VM controls','manage-vm',g.vmid)}<button data-machine="${esc(key)}">Guest connection</button>${mgButton('Snapshots','snapshots',g.vmid)}</div></details></div></td></tr>`;
@@ -44,12 +50,13 @@ function updateMachineInventory(){
   for(const key of machineFilters.selected)if(!available.has(key))machineFilters.selected.delete(key);
   for(const button of document.querySelectorAll('[data-machine-status]')){
     const status=button.dataset.machineStatus;
-    button.querySelector('span').textContent=status==='all'?guests.length:guests.filter(g=>g.status===status).length;
+    button.querySelector('span').textContent=status==='templates'?state.resources.filter(r=>r.type==='qemu'&&r.template).length:status==='all'?guests.length:guests.filter(g=>g.status===status).length;
   }
   $('#run-selected').textContent=selectionLabel();
   $('#run-selected').disabled=!guests.length;
+  $('.operation-controls').hidden=machineFilters.status==='templates';
   const nodes=onlineNodes();
-  $('#content .title p').textContent='Discovered across '+nodes+' online Proxmox node'+(nodes===1?'':'s')+'.';
+  $('#content .title p').textContent=guests.length+' virtual machine'+(guests.length===1?'':'s')+' across '+nodes+' online Proxmox node'+(nodes===1?'':'s')+'.';
   const html=machineRows();
   if(rows._lastRows!==html){
     const focused=document.activeElement;
@@ -77,14 +84,14 @@ function renderRecentJobs(){
 }
 
 function renderMachines(){
-  const filters=[['all','All machines'],['running','Running'],['stopped','Stopped']];
-  $('#content').innerHTML=title('Operations','')+
+  const filters=[['all','All machines'],['running','Running'],['stopped','Stopped'],['templates','Templates']];
+  $('#content').innerHTML=title('Inventory','','<button class="primary" data-view="create"><span class="bi bi-plus-lg" aria-hidden="true"></span> Create machine</button>')+
     `<section class="inventory panel" aria-label="Machine inventory"><div class="inventory-tools"><label>Find a machine<input id="machine-search" type="search" placeholder="Name, node or VM ID" value="${esc(machineFilters.query)}"></label>
     <div class="operation-controls"><button type="button" class="primary" id="run-selected" data-simple="apply">Run script</button>
     <details class="machine-menu"><summary>Power</summary><div><button data-bulk-power="start">Power on</button><button data-bulk-power="shutdown">Graceful shutdown</button></div></details></div></div>
     <div class="inventory-filters" role="group" aria-label="Filter by status">${filters.map(([id,label])=>`<button data-machine-status="${id}" aria-pressed="${machineFilters.status===id}">${label} <span></span></button>`).join('')}</div>
     <table><thead><tr><th aria-label="Select"></th><th>Machine</th><th>Status</th><th>Resources</th><th>Actions</th></tr></thead><tbody id="machine-rows"></tbody></table></section>
-    <section id="recent-jobs" class="recent-jobs" aria-label="Recent jobs"><div><h2>Recent jobs</h2><button data-view="jobs">View progress</button></div><ul></ul></section>`;
+    <section id="recent-jobs" class="recent-jobs" aria-label="Recent jobs"><div><h2>Recent jobs</h2><button data-view="jobs">View activity</button></div><ul></ul></section>`;
   updateMachineInventory();
   renderRecentJobs();
   $('#machine-search').oninput=e=>{machineFilters.query=e.target.value;updateMachineInventory()};
@@ -103,37 +110,63 @@ function renderMachines(){
   };
 }
 
+let buildPurpose='vm';
+const buildPlatforms=[
+  ['windows','Windows Server','windows','Unattended setup, WinRM and Windows roles'],
+  ['ubuntu','Ubuntu','ubuntu','Ubuntu Server LTS, cloud images and packages'],
+  ['debian','Debian','disc','Unattended Debian installation and packages'],
+  ['rocky','Rocky Linux','layers','Kickstart installation and packages']
+];
+
+function renderCreateWorkspace(){
+  const templates=state.resources.filter(r=>r.type==='qemu'&&r.template);
+  const purposes=[['vm','Virtual machine','pc-display'],['template','Reusable template','layers']];
+  $('#content').innerHTML=title('Create machine','Build a working VM or prepare a template for cloning.',
+    '<button data-view="media"><span aria-hidden="true" class="bi bi-disc"></span> ISO library</button>')+
+    '<section class="create-platforms panel"><div class="create-heading"><h2>Operating system</h2><div class="purpose-switch" role="group" aria-label="Build type">'+
+    purposes.map(([id,label,glyph])=>`<button type="button" data-build-purpose="${id}" aria-pressed="${id===buildPurpose}"><span class="bi bi-${glyph}" aria-hidden="true"></span> ${label}</button>`).join('')+
+    '</div></div><div class="platform-grid">'+buildPlatforms.map(([id,name,glyph,detail])=>
+      `<button class="platform-card" data-simple="${id}" data-purpose="${buildPurpose}"><span class="platform-mark platform-${id} bi bi-${glyph}" aria-hidden="true"></span><strong>${name}</strong><small>${detail}</small><span class="platform-arrow bi bi-arrow-right" aria-hidden="true"></span></button>`).join('')+
+    '</div></section><section id="saved-builds" class="build-shelf panel" aria-label="Saved builds"></section>'+
+    '<section class="template-shelf"><h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):
+      '<div class="build-empty"><span class="bi bi-layers" aria-hidden="true"></span><div><strong>No templates discovered</strong><p>Choose Reusable template above to prepare a base machine.</p></div></div>')+'</section>';
+  for(const button of document.querySelectorAll('[data-build-purpose]'))button.onclick=()=>{
+    buildPurpose=button.dataset.buildPurpose;
+    for(const choice of document.querySelectorAll('[data-build-purpose]'))choice.setAttribute('aria-pressed',String(choice===button));
+    for(const card of document.querySelectorAll('.platform-card'))card.dataset.purpose=buildPurpose;
+  };
+  loadGuidedRecipes($('#saved-builds'));
+}
+
 function simpleRender(){
-  if(!['home','scripts','machines','create'].includes(view))return false;
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
-  if(view==='home'||view==='machines'){
-    renderMachines();
-  }else if(view==='create'){
-    const templates=state.resources.filter(r=>r.type==='qemu'&&r.template);
-    const choices=[['vm','Virtual machine','Build a working guest from installation media or a template.'],
-      ['template','Reusable template','Install the OS and your scripts, then prepare the guest for cloning.']];
-    $('#content').innerHTML=title('Create','Choose what to build.')+'<div class="build-choices">'+choices.map(([purpose,name,description])=>
-      '<section class="panel"><h2>'+name+'</h2><p>'+description+'</p><div class="row-actions">'+
-      '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button><button data-simple="debian" data-purpose="'+purpose+'">Debian</button><button data-simple="rocky" data-purpose="'+purpose+'">Rocky Linux</button></div></section>').join('')+'</div>'+
-      '<section class="panel lab-tools"><h2>Lab packs</h2><p>Define machines, choose their setup scripts, and save the lab for deployment.</p><div class="row-actions"><button class="primary" id="lab-create">Create lab</button><button id="lab-import">Import ZIP</button><button id="lab-export">Export saved builds</button></div><div id="lab-packs"></div><div id="lab-runs"></div></section>'+
-      '<section id="saved-builds" aria-label="Saved builds"></section><h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
-    $('#lab-create').onclick=openLabDesigner;
-    $('#lab-import').onclick=importLab;
-    $('#lab-export').onclick=selectLabBuilds;
-    loadLabList('packs');
-    loadLabList('runs');
-    loadGuidedRecipes($('#saved-builds'));
-  }else{
-    if(!mg){$('#content').innerHTML=title('Script library','Loading your saved scripts…');if(!mgLoading){mgLoading=true;loadManagement().then(render).catch(e=>notice(e.message)).finally(()=>mgLoading=false)}return true}
-    $('#content').innerHTML=scriptLibrary();
-  }
+  if(view==='home'||view==='machines'){renderMachines();return true}
+  if(view==='create'){renderCreateWorkspace();return true}
+  if(view==='labs'){renderLabsWorkspace();return true}
+  if(view==='media'){renderMediaWorkspace();return true}
+  if(!['scripts','run-scripts'].includes(view))return false;
+  if(view==='run-scripts'){$('#content').innerHTML=runScriptsPage();return true}
+  if(!mg){
+    $('#content').innerHTML=title('Script library','Loading scripts…');
+    if(!mgLoading){
+      mgLoading=true;
+      loadManagement().then(render).catch(error=>{
+        if(view!=='scripts')return;
+        $('#content').innerHTML=title('Script library','Scripts could not be loaded.')+'<p role="alert">'+esc(error.message)+'</p><button id="retry-library">Retry</button>';
+        $('#retry-library').onclick=render;
+      }).finally(()=>mgLoading=false);
+    }
+  }else $('#content').innerHTML=scriptLibrary();
   return true;
 }
 
-async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=null){
+function openSimpleMedia(os,node,source,agent_iso){
+  return openSimple(os,'vm','',null,{node,source,agent_iso});
+}
+
+async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=null,mediaChoice=null){
   if(!state){view='server';render();return notice('Connect your Proxmox server first.')}
   try{
-    if(!serverInfo.ssh_fingerprint&&!sourceTemplate&&!(os==='windows'&&purpose==='vm'&&!filename&&windowsTemplates().length)){
+    if(!serverInfo.ssh_fingerprint&&!sourceTemplate&&(mediaChoice||!(os==='windows'&&purpose==='vm'&&!filename&&windowsTemplates().length))){
       view='server';render();
       $('.server-advanced').open=true;
       $('#server-form [name=ssh_fingerprint]').focus();
@@ -147,7 +180,14 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
       return notice('The selected template’s node needs online disk and ISO storage and an available network bridge.');
     }
     const defaultClone=sourceTemplate||(os==="windows"&&!serverInfo.ssh_fingerprint&&purpose==="vm"?windowsTemplates().find(t=>simpleOptions.destinations.some(n=>n.node===t.node)):null);
-    const dest=simpleOptions.destinations.find(n=>n.node===defaultClone?.node)||simpleOptions.destinations[0];
+    const desiredNode=mediaChoice?.node||defaultClone?.node;
+    const dest=desiredNode?simpleOptions.destinations.find(n=>n.node===desiredNode):simpleOptions.destinations[0];
+    if(!dest)throw Error('No eligible build destination. Check online storage and a network bridge on the selected node.');
+    if(mediaChoice){
+      const choices=os==='windows'?[...dest.isos,...simpleOptions.local_isos]:dest[os+'_isos']||[];
+      if(!choices.some(i=>i.id===mediaChoice.source))throw Error('This installer is no longer available to the build wizard on this node. Refresh the ISO library.');
+      if(mediaChoice.agent_iso&&!dest.driver_isos.includes(mediaChoice.agent_iso))throw Error('The selected guest tools ISO is no longer available on this node.');
+    }
     const used=new Set([...state.resources.map(g=>g.name),...jobs.filter(j=>['queued','running','waiting'].includes(j.status)).map(j=>j.target?.name)].filter(Boolean).map(name=>name.toLowerCase()));
     const prefix=os==='windows'?'win-server':os;
     let name=prefix;
@@ -155,9 +195,14 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
     const linuxIso=os!=='windows'&&dest[os+'_isos']?.length;
     simpleDraft={os,purpose,source_kind:defaultClone?'template':os==='ubuntu'&&!linuxIso?'cloud':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:linuxProfiles[os]||'ubuntu-24.04',username:os==='windows'?'ubuntu':os,password:'',
       node:dest.node,storage:dest.storage,iso_storage:dest.iso_storage,bridge:dest.bridge,management_cidr:dest.management_cidr,agent_iso:dest.agent_iso,
-      cores:2,memory_gb:os==='windows'||linuxIso?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scripts:[],script_params:{}};
+      cores:2,memory_gb:os==='windows'||linuxIso?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scriptSteps:[]};
     simpleStep=0;simplePlan=null;simpleBusy=false;$('#simple-fields').inert=false;$('#simple-back').disabled=false;
-    if(filename){simpleDraft.source='library:'+filename;simpleDraft.all_media=!mediaCategory({label:filename})}
+    if(mediaChoice){
+      Object.assign(simpleDraft,{source_kind:'iso',source:mediaChoice.source});
+      if(mediaChoice.agent_iso)Object.assign(simpleDraft,{agent_iso:mediaChoice.agent_iso,agent_manual:true});
+    }
+    if(filename)simpleDraft.source='library:'+filename;
+    if(os==='windows'&&(mediaChoice||filename))simpleDraft.all_media=!simpleSources().find(s=>s.id===simpleDraft.source)?.windows_label;
     $('#simple-next').disabled=false;
     drawSimple();$('#simple-dialog').showModal();focusSimpleStep();if(os==='windows')await loadEditions();
   }catch(e){notice(e.message)}
@@ -165,7 +210,7 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
 
 function simpleSources(){
   const dest=simpleOptions.destinations.find(n=>n.node===simpleDraft.node);
-  const priority=iso=>/server/i.test(iso.label)&&!/sql/i.test(iso.label)?(/2025/.test(iso.label)?2:1):0;
+  const priority=iso=>iso.windows_label==='Windows Server 2025'?2:iso.windows_label?.startsWith('Windows Server')?1:0;
   return [...dest.isos,...simpleOptions.local_isos].sort((a,b)=>priority(b)-priority(a)||a.label.localeCompare(b.label));
 }
 
@@ -200,17 +245,21 @@ function linuxSourceFields(d,dest){
 
 function collectSimple(){
   if(!simpleDraft)return;
-  const form=$('#simple-form');Object.assign(simpleDraft,Object.fromEntries(new FormData(form)));
-  form.querySelectorAll('input[type=checkbox][name]').forEach(i=>{if(!['feature','saved_script','common_program','windows_setting'].includes(i.name))simpleDraft[i.name]=i.checked});
+  const form=$('#simple-form');
+  for(const field of form.elements){
+    if(!field.name||field.disabled||field.closest('[data-build-sequence]'))continue;
+    if(!['checkbox','radio'].includes(field.type)||field.checked)simpleDraft[field.name]=field.value;
+  }
+  form.querySelectorAll('input[type=checkbox][name]').forEach(i=>{if(!i.closest('[data-build-sequence]')&&!['feature','common_program','windows_setting'].includes(i.name))simpleDraft[i.name]=i.checked});
   if(simpleStep===0&&simpleDraft.os==='windows')collectDataDisks(simpleDraft,form);
   if(simpleStep===1){
+    simpleDraft.scriptSteps=form.querySelector('[data-build-sequence]').sequence.steps();
     simpleDraft.packages=form.elements.packages.value;
     simpleDraft.common_programs=[...form.querySelectorAll('[name=common_program]:checked:not(:disabled)')].map(i=>i.value);
     simpleDraft.windows_settings=[...form.querySelectorAll('[name=windows_setting]:checked:not(:disabled)')].map(i=>i.value);
     for(const key of ['common_program','windows_setting'])delete simpleDraft[key];
     simpleDraft.features=[...form.querySelectorAll('[name=feature]:checked')].map(i=>i.value);
-    simpleDraft.scripts=[...form.querySelectorAll('[name=saved_script]:checked')].map(i=>i.value);
-    form.querySelectorAll('[data-script-param]').forEach(i=>{simpleDraft.script_params[i.dataset.scriptParam]=paramValue(i)});
+
   }
 }
 
@@ -262,8 +311,6 @@ function bulkChoices(label, options) {
 
 function softwareFields(d){
   const windows=d.os==='windows', platform=windows?'windows':'linux';
-  const saved=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform&&
-    (t.id!=='windows-domain-controller'||(d.purpose!=='template'&&Number(d.count||1)===1)));
   const linux=simpleOptions[d.os];
   const fresh=windows?freshWindowsSettings(d):linux?{
     settings:d.os==='ubuntu'?'<h3>Ubuntu settings</h3>'+ws('ubuntu_firewall','Firewall',Object.entries(linux.firewall),d.ubuntu_firewall||'default')+
@@ -281,16 +328,8 @@ function softwareFields(d){
   if(windows) sections.push(['features','Server features','<h3>Windows Server features</h3><div class="choice-grid">'+simpleOptions.features.map(f=>
     '<label class="check"><input type="checkbox" name="feature" value="'+esc(f.id)+'" '+((d.features||[]).includes(f.id)?'checked':'')+'>'+esc(f.name)+'</label>').join('')+
     '</div><p class="subtle">Windows may restart to finish installing a feature.</p>']);
-  sections.push(['scripts','Scripts','<h3>Guest scripts</h3>'+saved.map(t=>{
-    const selected=(d.scripts||[]).includes(t.id);
-    return '<div class="software-script"><label class="check"><input type="checkbox" name="saved_script" value="'+esc(t.id)+'" '+(selected?'checked':'')+'>'+esc(t.name)+'</label>'+
-      '<div class="script-parameters" '+(selected?'':'hidden')+'>'+Object.entries(t.parameters||{}).map(([key,label])=>
-      '<label>'+esc(label)+paramControl(scriptInputValue(t.input_types,key),d.script_params?.[t.id+':'+key]??scriptInputValue(t.defaults,key),
-        'data-script-param="'+esc(t.id+':'+key)+'"'+(selected?'':' disabled'),
-        [...(d.source_kind==='template'?[]:simpleOptions.iso_setup_letters||[]),...(d.data_disks||[]).map(disk=>disk.letter)])+'</label>').join('')+
-      '</div>'+(t.builtin?'<p>'+esc(t.description)+'</p>':'')+'<details><summary>View source</summary><pre>'+esc(t.body)+'</pre></details></div>';
-  }).join('')+(saved.length?'':'<p>Add scripts in the Script library to use them here.</p>')]);
-  const preferred=d.software_section||(d.scripts?.length?'scripts':'');
+  sections.push(['scripts','Scripts','<div data-build-sequence></div>']);
+  const preferred=d.software_section||(d.scriptSteps?.length?'scripts':'');
   const active=sections.some(([id])=>id===preferred)?preferred:sections[0][0];
   return '<div class="software-picker"><div class="software-sections" role="group" aria-label="Software categories">'+sections.map(([id,label])=>
     '<button type="button" data-section="'+id+'" aria-controls="software-'+id+'" aria-pressed="'+(id===active)+'">'+label+
@@ -302,11 +341,17 @@ function bindSoftware(root,d){
   const picker=root.querySelector('.software-picker');
   if(!picker) return;
   const buttons=[...picker.querySelectorAll('[data-section]')];
+  const platform=d.os==='windows'?'windows':'linux';
+  const catalog=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform&&
+    (t.id!=='windows-domain-controller'||(d.purpose!=='template'&&Number(d.count||1)===1)));
+  const occupied=[...(d.source_kind==='template'?[]:simpleOptions.iso_setup_letters||[]),...(d.data_disks||[]).map(disk=>disk.letter)];
+  d.scriptSteps=(d.scriptSteps||[]).filter(step=>catalog.some(item=>item.id===step.ref.id));
+
   const paneFor=button=>picker.querySelector('#software-'+button.dataset.section);
   function counts(){
     for(const button of buttons){
       const pane=paneFor(button);
-      let count=pane.querySelectorAll('input[type=checkbox]:checked:not(:disabled,[data-script-param])').length;
+      let count=button.dataset.section==='scripts'?(d.scriptSteps||[]).length:pane.querySelectorAll('input[type=checkbox]:checked:not(:disabled,[data-script-param])').length;
       const packages=pane.querySelector('[name=packages]');
       if(packages&&!packages.disabled){
         const names=[...pane.querySelectorAll('[name=common_program]:checked')].map(i=>i.value);
@@ -334,17 +379,17 @@ function bindSoftware(root,d){
   picker.oninput=counts;
   picker.onchange=e=>{
     if(e.target.name==='chocolatey')picker.querySelector('[name=packages]').disabled=!e.target.checked;
-    if(e.target.name==='saved_script'){
-      const params=e.target.closest('.software-script').querySelector('.script-parameters');
-      params.hidden=!e.target.checked;
-      for(const input of params.querySelectorAll('[data-script-param]'))input.disabled=params.hidden;
-    }
     counts();
   };
   picker.addEventListener('invalid',e=>{
-    if(e.target.hasAttribute('data-script-param') && e.target.closest('.software-pane').hidden)
+    if(e.target.hasAttribute('data-task-input') && e.target.closest('.software-pane').hidden)
       picker.querySelector('[data-section=scripts]').click();
   },true);
+  const host=root.querySelector('[data-build-sequence]');
+  host.sequence=mountScriptSequence(host,{
+    catalog,catalogView:'list',steps:d.scriptSteps,occupied,
+    onChange:steps=>{d.scriptSteps=steps;counts()}
+  });
   counts();
 }
 
@@ -359,7 +404,7 @@ function selectedSoftware(d){
   if(windows&&(d.chocolatey||packages.length))tasks.push({id:'install-chocolatey',params:{}});
   packages.forEach(p=>tasks.push({id:windows?'chocolatey-package':'linux-package',params:{package:p}}));
   if(windows)(d.features||[]).filter(f=>f!=='NET-Framework-Core').forEach(f=>tasks.push({id:'windows-feature',params:{feature:f}}));
-  (d.scripts||[]).forEach(id=>{const t=mg.tasks.find(t=>t.id===id);tasks.push({id,params:Object.fromEntries(Object.keys(t.parameters||{}).map(k=>[k,d.script_params?.[id+':'+k]??scriptInputValue(t.defaults,k)??'']))})});
+  for(const step of d.scriptSteps||[])tasks.push({...step.ref,params:step.params});
   return tasks;
 }
 
@@ -441,7 +486,7 @@ function machineConfigFields(d,dest){
 function drawSimple(){
   const d=simpleDraft;if(!d)return;
   $('#simple-title').textContent=simpleStep===2?'Ready to create':(d.os==='windows'?'Windows Server':linuxNames[d.os])+(d.purpose==='template'?' template':' VM setup');
-  $('#simple-steps').innerHTML=['Machine','Software','Review'].map((s,i)=>`<li tabindex="-1" ${i===simpleStep?'aria-current="step"':''}>${i+1}. ${s}</li>`).join('');
+  $('#simple-steps').innerHTML=['Machine','Software & scripts','Review'].map((s,i)=>`<li tabindex="-1" ${i===simpleStep?'aria-current="step"':''}>${i+1}. ${s}</li>`).join('');
   $('#simple-back').hidden=simpleStep===0;$('#simple-next').textContent=simpleStep===2?'Create '+simplePlan.machines.length+(d.purpose==='template'?' template':' machine'+(simplePlan.machines.length===1?'':'s')):simpleStep===1?'Review build':'Continue';
   let html='';
   if(simpleStep===0){
@@ -450,6 +495,10 @@ function drawSimple(){
       ws('purpose','Build type',[['vm','Working VM'],['template','Reusable template']],d.purpose)+
       '<div class="machine-name-count">'+wf('name','Machine name',d.name,'text','required maxlength="12" pattern="[A-Za-z][A-Za-z0-9\\-]{0,11}"')+
       (d.purpose==='vm'?wf('count','Quantity',d.count,'number','required min="1" max="20"'):'')+'</div><small id="batch-names" hidden></small>'+
+      '</section><section aria-labelledby="machine-source"><h3 id="machine-source">Installation source</h3>'+
+      (d.os==='windows'?windowsSourceFields(d):
+        linuxSourceFields(d,dest))+'</section>';
+    html+='</div><section class="machine-access" aria-labelledby="machine-access-heading"><h3 id="machine-access-heading">Guest login</h3><div class="machine-access-fields">'+
       (d.os==='windows'?wf('password','Administrator password',d.password,'password','required minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"'):
         wf('username','SSH login name',d.username,'text','required pattern="[a-z_][a-z0-9_\\-]{0,31}"')+
         wf('github_username','GitHub username for SSH keys (optional)',d.github_username||'','text','maxlength="39" autocomplete="off"')+
@@ -457,10 +506,8 @@ function drawSimple(){
         (d.purpose==='vm'?wc('ubuntu_password_enabled','Allow password sign-in',d.ubuntu_password_enabled)+
           (d.ubuntu_password_enabled?wf('ubuntu_password',(linuxNames[d.os])+' login password',d.ubuntu_password||'','password',
             'required minlength="12" maxlength="128" autocomplete="new-password"'):''):''))+
-      '</section><section aria-labelledby="machine-source"><h3 id="machine-source">Installation source</h3>'+
-      (d.os==='windows'?windowsSourceFields(d):
-        linuxSourceFields(d,dest))+'</section>';
-    html+='</div><div class="machine-options">'+machineConfigFields(d,dest)+(d.os==='windows'?dataDiskFields(d):'')+'</div>';
+      '</div></section>';
+    html+='<div class="machine-options">'+machineConfigFields(d,dest)+(d.os==='windows'?dataDiskFields(d):'')+'</div>';
   }else if(simpleStep===1)html=softwareFields(d);
   else html=buildReview(simplePlan,d.os==='windows');
   guidedHelp.close();
@@ -563,7 +610,7 @@ function reviewProgress(message){
 }
 async function reviewBuild(draft){
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
-  delete settings.script_params;
+  delete settings.scriptSteps;
   if(draft.os==='ubuntu'&&draft.source_kind!=='cloud')delete settings.profile;
   if(draft.os!=='ubuntu'||draft.source_kind!=='iso')delete settings.ubuntu_install_source;
   delete settings.ubuntu_password_enabled;

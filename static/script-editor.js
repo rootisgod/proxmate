@@ -1,25 +1,72 @@
 const scriptFormats = {ansible:'Ansible YAML', powershell:'PowerShell', shell:'POSIX shell'};
 
-function scriptLibrary() {
-  const scripts = mg.tasks.filter(t => t.kind);
-  function cards(records) {
-    return '<div class="script-cards">' + records.map(t =>
-      '<article class="panel script-card"><div class="script-meta">'+
-      esc(t.platform === 'windows' ? 'Windows' : 'Linux')+' · '+esc(scriptFormats[t.kind])+
-      '</div><h3>'+esc(t.name)+'</h3>'+(t.example||t.builtin?'<p>'+esc(t.description)+'</p>':'')+
-      (t.builtin?'<details><summary>View script source</summary><pre class="run-source">'+esc(t.body)+'</pre></details>':'')+
-      '<div class="row-actions">'+(t.builtin?'':mgButton(t.example?'Open example':'Edit script','edit-tasks',t.id))+
-      '<button data-simple-task="'+esc(t.id)+'">Run script</button>'+
-      (t.example||t.builtin?'':mgButton('Delete','delete-tasks',t.id))+'</div></article>').join('')+'</div>';
-  }
-  const saved = scripts.filter(t => !t.example&&!t.builtin), examples = scripts.filter(t => t.example);
-  const builtins = scripts.filter(t => t.builtin);
-  return title('Script library','Guest scripts for new and existing machines.',mgButton('New script','new-tasks'))+
-    '<button data-simple="apply">Run a script</button>'+
-    (builtins.length?'<h2>Built-in scripts</h2>'+cards(builtins):'')+
-    (saved.length?'<h2>Your scripts</h2>'+cards(saved):'')+
-    (examples.length?'<h2>Starter scripts</h2><p>Open an example to read it or save your own copy.</p>'+cards(examples):'');
+const libraryFilters = {query:'',platform:'',origin:'',language:''};
+
+function libraryVisible(item) {
+  return (!libraryFilters.platform || item.platform === libraryFilters.platform) &&
+    (!libraryFilters.origin || scriptOrigin(item) === libraryFilters.origin) &&
+    (!libraryFilters.language || (item.kind || 'task') === libraryFilters.language) && scriptMatches(item,libraryFilters.query);
 }
+
+function scriptLibrary() {
+  const items = [...mg.tasks].sort((a,b) => a.name.localeCompare(b.name));
+  const option = (key,value,label) => '<option value="' + value + '"' + (libraryFilters[key] === value ? ' selected' : '') + '>' + label + '</option>';
+  const filter = (key,label,any,choices) => '<label>' + label + '<select data-library-filter="' + key + '">' +
+    option(key,'',any) + choices.map(([value,title]) => option(key,value,title)).join('') + '</select></label>';
+  const rows = items.map(item => {
+    const origin = scriptOrigin(item), id = esc(item.id), keys = Object.entries(item.parameters || {});
+    const code = item.body ? '<pre tabindex="0">' + esc(item.body) + '</pre>' : '';
+    const inputs = keys.length ? '<dl class="script-schema">' + keys.map(([key,label]) =>
+      '<dt><code>' + esc(key) + '</code></dt><dd>' + esc(label) +
+      (item.input_types?.[key]?.type !== 'password' && Object.hasOwn(item.defaults || {},key) ?
+        ' · Default ' + esc(item.defaults[key]) : '') + '</dd>').join('') + '</dl>' : '';
+    const details = code || inputs ? '<details class="script-source"><summary>' +
+      (code && inputs ? 'Source and inputs' : code ? 'View source' : 'View inputs') + '</summary>' + inputs + code + '</details>' : '';
+    return '<article class="script-entry" data-library-id="' + id + '"' + (libraryVisible(item) ? '' : ' hidden') +
+      '><div class="script-entry-info"><span class="script-file" aria-hidden="true" data-kind="' + esc(item.kind) + '">' +
+      ({ansible:'YML',powershell:'PS1',shell:'SH'}[item.kind] || 'TASK') + '</span><div><h2>' + esc(item.name) +
+      '</h2><small>' + esc(item.platform === 'windows' ? 'Windows' : 'Linux') + ' · ' + esc(scriptLanguage(item)) + ' · ' + origin +
+      '</small>' + (item.description && (origin !== 'Saved' || !item.description.startsWith('Saved administrator script')) ?
+        '<p>' + esc(item.description) + '</p>' : '') + '</div></div><div class="script-entry-actions">' +
+      '<button type="button" data-simple-task="' + id + '">Run script</button><button type="button" data-script-to-lab="' + id + '">Use in lab</button>' +
+      (origin === 'Saved' ? mgButton('Edit','edit-tasks',item.id) : origin === 'Starter' ? mgButton('Save a copy','edit-tasks',item.id) : '') +
+      (origin === 'Saved' ? '<details class="script-options"><summary aria-label="More actions for ' + esc(item.name) + '">More</summary>' +
+        mgButton('Delete script','delete-tasks',item.id) + '</details>' : '') + '</div>' + details + '</article>';
+  }).join('');
+  const matched = items.filter(libraryVisible).length;
+  return title('Script library','Reusable guest scripts for machine builds, labs and standalone runs.',
+    '<button type="button" class="primary" data-mg="new-tasks">New script</button>') +
+    '<section class="script-catalog" aria-label="Scripts"><div class="script-filters"><label>Search scripts<input type="search" data-library-filter="query" value="' +
+    esc(libraryFilters.query) + '" placeholder="Name, input or purpose" autocomplete="off"></label>' +
+    filter('platform','Platform','All platforms',[['windows','Windows'],['linux','Linux']]) +
+    filter('origin','Source','All sources',[['Saved','Saved scripts'],['Built-in','Built-in tasks'],['Starter','Starter scripts']]) +
+    filter('language','Language','All languages',[...Object.entries(scriptFormats),['task','Guest task']]) +
+    '</div><p class="script-count" data-library-count role="status">' + matched + ' of ' + items.length + ' scripts</p>' +
+    '<div class="script-entries">' + rows + '</div><p data-library-empty' + (matched ? ' hidden' : '') + '>' +
+    (items.length ? 'No scripts match these filters.' : 'The library is empty. Create a script to use it in builds and runs.') + '</p></section>';
+}
+
+function filterLibrary(event) {
+  const control = event.target.closest('[data-library-filter]');
+  if (!control) return;
+  libraryFilters[control.dataset.libraryFilter] = control.value;
+  let visible = 0;
+  const index = new Map(mg.tasks.map(t => [t.id,t]));
+  for (const row of document.querySelectorAll('[data-library-id]')) {
+    row.hidden = !libraryVisible(index.get(row.dataset.libraryId));
+    if (!row.hidden) visible++;
+  }
+  document.querySelector('[data-library-count]').textContent = visible + ' of ' + mg.tasks.length + ' scripts';
+  document.querySelector('[data-library-empty]').hidden = visible > 0;
+}
+document.addEventListener('input',filterLibrary);
+document.addEventListener('change',filterLibrary);
+document.addEventListener('click',async event => {
+  const button = event.target.closest('[data-script-to-lab]');
+  if (!button) return;
+  try { await openLabDesigner(null,button.dataset.scriptToLab); }
+  catch (error) { notice(error.message); }
+});
 
 // Match the plain values accepted by guest_tasks.compile_task, including at review time.
 const scriptValueAttrs = String.raw`maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9_.+@:\-]{0,127}" title="Start with a letter or digit. The remaining characters can be letters, digits or _ . + @ : - (no spaces)."`;

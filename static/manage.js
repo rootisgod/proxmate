@@ -20,15 +20,66 @@ function managementRender(){
     if(!mgLoading){mgLoading=true;loadManagement().then(()=>render()).catch(e=>notice(e.message)).finally(()=>mgLoading=false)}
     return true;
   }
-  const headings={tasks:['Task library','Choose built-in tasks or save trusted scripts to apply to guests.'],credentials:['Guest credentials','Encrypted at rest. Separate from your Proxmox login. Secrets are write-only.'],groups:['VM groups','Save useful sets of machines. Every run reviews the exact targets.'],recipes:['Build recipes','Reuse a build configuration and an ordered set of follow-up tasks.'],schedules:['Scheduled maintenance','Explicitly enabled schedules. All times and maintenance windows are UTC. Missed runs are skipped.']};
-  let html=title(...headings[view],mgButton(view==='tasks'?'Save a script':view==='recipes'?'Create in build wizard':view==='schedules'?'Schedule an operation':'Add '+(view==='credentials'?'credential':'group'),'new-'+view));
+  if(view==='credentials'){renderCredentialWorkspace();return true}
   if(view==='tasks'){
-    html+='<div class="toolbar">'+mgButton('Apply tasks to VMs','apply')+mgButton('Check guest readiness','readiness')+`<button data-lc="helper">Guest bootstrap helper</button>`+'</div><div class="cards task-cards">'+mg.tasks.map(t=>`<article class="card"><span class="pill">${esc(t.platform)}${t.dangerous?' / review required':''}</span><h3>${esc(t.name)}</h3><p>${esc(t.description)}</p><div class="row-actions">${mgButton('Use task','use-task',t.id)}${t.kind&&!t.builtin?mgButton(t.example?'Open example':'Edit script','edit-tasks',t.id)+(t.example?'':mgButton('Delete','delete-tasks',t.id)):''}</div></article>`).join('')+'</div>';
-  }else if(view==='credentials')html+=table(['Name','Platform / user','Saved material','Actions'],mg.credentials.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.platform)}<small>${esc(c.username)}</small></td><td>${c.has_password?'Password ':''}${c.has_private_key?'SSH key ':''}${c.has_ca_pem?'CA certificate':''}</td><td>${mgButton('Edit / rotate','edit-credentials',c.id)} ${mgButton('Delete','delete-credentials',c.id)}</td></tr>`));
-  else if(view==='groups')html+=table(['Group','Members','Actions'],mg.groups.map(g=>`<tr><td>${esc(g.name)}</td><td>${g.targets.map(t=>esc(t.node+':'+t.vmid)).join(', ')}</td><td>${mgButton('Apply operation','use-group',g.id)} ${mgButton('Edit','edit-groups',g.id)} ${mgButton('Delete','delete-groups',g.id)}</td></tr>`));
+    $('#content').innerHTML=title('Advanced task controls','Review guest operations, check readiness, or prepare a guest bootstrap helper.')+
+      '<div class="toolbar">'+mgButton('Apply tasks to VMs','apply')+mgButton('Check guest readiness','readiness')+
+      '<button data-lc="helper">Guest bootstrap helper</button><button data-view="scripts">Script library</button></div>';
+    return true;
+  }
+  const headings={groups:['VM groups','Save useful sets of machines. Every run reviews the exact targets.'],recipes:['Build recipes','Reuse a build configuration and an ordered set of follow-up tasks.'],schedules:['Scheduled maintenance','Explicitly enabled schedules. All times and maintenance windows are UTC. Missed runs are skipped.']};
+  let html=title(...headings[view],mgButton(view==='recipes'?'Create in build wizard':view==='schedules'?'Schedule an operation':'Add group','new-'+view));
+  if(view==='groups')html+=table(['Group','Members','Actions'],mg.groups.map(g=>`<tr><td>${esc(g.name)}</td><td>${g.targets.map(t=>esc(t.node+':'+t.vmid)).join(', ')}</td><td>${mgButton('Apply operation','use-group',g.id)} ${mgButton('Edit','edit-groups',g.id)} ${mgButton('Delete','delete-groups',g.id)}</td></tr>`));
   else if(view==='recipes')html+='<p>Build first, finish OS installation, configure the guest connection, then apply the saved tasks. Recipes never store a Windows setup password.</p>'+table(['Recipe','Build / tasks','Actions'],mg.recipes.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.config.profile||r.config.kind)}<small>${r.tasks.length} follow-up tasks</small></td><td>${mgButton('Build','build-recipe',r.id)} ${mgButton('Apply tasks','apply-recipe',r.id)} ${mgButton('Edit tasks','edit-recipes',r.id)} ${mgButton('Delete','delete-recipes',r.id)}</td></tr>`));
   else if(view==='schedules')html+=table(['Schedule','When (UTC)','Latest result','Actions'],mg.schedules.map(s=>`<tr><td>${esc(s.name)}<small>${s.enabled?'Enabled':'Disabled'} / ${esc(s.summary.operation)} / ${s.summary.targets.length} VMs</small></td><td>Every ${s.interval_minutes} min<small>${s.window_start}:00 - ${s.window_end}:00<br>Next: ${new Date(s.next_run*1000).toISOString()}</small></td><td>${esc(s.last_status||s.last_report)}${s.last_job?`<small><button data-log="${esc(s.last_job)}">View run report</button></small>`:''}</td><td>${mgButton('Edit / enable','edit-schedules',s.id)} ${mgButton('Delete','delete-schedules',s.id)}</td></tr>`));
   $('#content').innerHTML=html;return true;
+}
+
+function renderCredentialWorkspace(){
+  if(!$('#credential-list')){
+    $('#content').innerHTML='<div class="settings-workspace">'+title('Guest credentials','Manage the logins Proxmate uses to run scripts on Windows and Linux guests.','<button type="button" class="primary" data-mg="new-credentials"><span class="bi bi-plus-lg" aria-hidden="true"></span> Add credential</button>')+
+      `<section class="panel credential-library" aria-label="Saved guest credentials">
+      <div class="settings-toolbar" id="credential-filters">
+        <label>Search credentials<input type="search" id="credential-query" placeholder="Name, user or VM"></label>
+        <label>Guest platform<select id="credential-platform"><option value="">All platforms</option><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
+        <span id="credential-count" role="status"></span>
+      </div><div id="credential-list"></div></section>
+      <p class="settings-help"><span class="bi bi-lock" aria-hidden="true"></span> Guest secrets are encrypted at rest. You can replace a saved secret by editing its credential.</p></div>`;
+    $('#credential-query').oninput=renderCredentialWorkspace;
+    $('#credential-platform').onchange=renderCredentialWorkspace;
+  }
+  const query=$('#credential-query').value.trim().toLowerCase(),platform=$('#credential-platform').value;
+  const guests=mgGuests(),rows=[];
+  for(const credential of mg.credentials){
+    if(platform&&credential.platform!==platform)continue;
+    const connections=mg.connections.filter(c=>c.credential_id===credential.id).map(connection=>{
+      const guest=guests.find(g=>g.node===connection.node&&Number(g.vmid)===Number(connection.vmid));
+      const target=[guest?.name,connection.node,'VM '+connection.vmid].filter(Boolean).join(' · ');
+      let status='Saved connection';
+      if(connection.verified_at&&connection.machine_identity&&connection.credential_revision!=null){
+        status=connection.credential_revision===credential.updated?'Last verified '+new Date(connection.verified_at*1000).toLocaleDateString():'Credential changed since verification';
+      }
+      return {target,status};
+    });
+    if(![credential.name,credential.username,credential.platform,...connections.map(c=>c.target)].join(' ').toLowerCase().includes(query))continue;
+    const material=[[credential.has_password,'Password'],[credential.has_private_key,'SSH key'],[credential.has_become_password,'sudo password'],[credential.has_ca_pem,'CA certificate']].filter(([present])=>present).map(([,label])=>label);
+    const usage=connections.length?`<details class="credential-usage"><summary>${connections.length} VM connection${connections.length===1?'':'s'}</summary><ul>${connections.map(c=>`<li>${esc(c.target)}<small>${esc(c.status)}</small></li>`).join('')}</ul></details>`:'<span class="settings-muted">No VM connections</span>';
+    rows.push(`<li class="credential-entry">
+      <div class="credential-name"><span class="settings-icon bi bi-key" aria-hidden="true"></span><div><strong>${esc(credential.name)}</strong><small>${esc(credential.username)}</small></div></div>
+      <div class="credential-method"><strong>${credential.platform==='windows'?'Windows · WinRM':'Linux · SSH'}</strong><small>${material.join(', ')||'No saved material'}</small></div>
+      <div>${usage}</div><div class="row-actions">${mgButton('Edit / rotate','edit-credentials',credential.id)}${mgButton('Delete','delete-credentials',credential.id)}</div></li>`);
+  }
+  $('#credential-filters').hidden=!mg.credentials.length;
+  const count=(rows.length===mg.credentials.length?'':rows.length+' of ')+mg.credentials.length+(mg.credentials.length===1?' credential':' credentials');
+  if($('#credential-count').textContent!==count)$('#credential-count').textContent=count;
+  const list=$('#credential-list');
+  const markup=rows.length?`<ul class="credential-entries" aria-label="Credentials">${rows.join('')}</ul>`:mg.credentials.length?
+    '<div class="settings-empty"><h2>No matching credentials</h2><p>Try another name, VM or platform.</p><button type="button" id="credential-clear">Clear filters</button></div>':
+    '<div class="settings-empty"><span class="settings-icon bi bi-key" aria-hidden="true"></span><h2>No guest credentials saved</h2><p>Add a Windows or Linux login to use it with a guest connection.</p></div>';
+  if(markup===list.renderedMarkup)return;
+  list.innerHTML=markup;list.renderedMarkup=markup;
+  const clear=$('#credential-clear');
+  if(clear)clear.onclick=()=>{$('#credential-query').value='';$('#credential-platform').value='';renderCredentialWorkspace();$('#credential-query').focus()};
 }
 
 function mgDialog(heading,html,save,button='Save'){
@@ -49,7 +100,24 @@ function selectedTargets(){return [...$('#manage-fields').querySelectorAll('[nam
 async function saveRecord(kind,d){await api('manage/'+kind,d);$('#manage-dialog').close();await loadManagement();if(view==='machine'&&kind==='connections'&&machinePage)await openMachine(machinePage.target);else render();notice('Saved.');}
 
 function editCredential(record={}){
-  mgDialog(record.id?'Edit credential (blank secrets keep existing values)':'Add guest credential','<div class="form-grid">'+wf('name','Friendly name',record.name||'','text','required')+mgSelect('platform','Guest OS',[['windows','Windows / WinRM HTTPS'],['linux','Linux / SSH']],record.platform||'windows')+wf('username','Guest username (DOMAIN\\user is supported)',record.username||'','text','required autocomplete="off"')+wf('password','Password','','password','autocomplete="new-password"')+wf('become_password','Linux sudo password (optional)','','password','autocomplete="new-password"')+mgArea('private_key','Linux private key (optional; unencrypted key)')+mgArea('ca_pem','WinRM issuing CA certificate PEM (optional)')+'<p class="wide">Use guest credentials only. Back up the data volume and its encryption key together. Rotation invalidates reviewed plans and schedules; review affected schedules again.</p></div>',d=>saveRecord('credentials',{...d,id:record.id}));
+  const editing=Boolean(record.id);
+  mgDialog(editing?'Edit guest credential':'Add guest credential','<div class="form-grid credential-fields">'+
+    wf('name','Credential name',record.name||'','text','required')+mgSelect('platform','Guest platform',[['windows','Windows / WinRM HTTPS'],['linux','Linux / SSH']],record.platform||'windows')+
+    wf('username','Guest username',record.username||'','text','required autocomplete="off"')+wf('password','Guest password','','password','autocomplete="new-password"')+
+    mgArea('private_key','SSH private key (unencrypted)')+wf('become_password','sudo password (optional)','','password','autocomplete="new-password"')+mgArea('ca_pem','WinRM issuing CA certificate (optional PEM)')+
+    (editing?'<p class="wide">Leave a secret blank to keep its saved value. After rotating a login, review affected plans and schedules again.</p>':'<p class="wide" id="credential-login-hint"></p>')+'</div>',d=>saveRecord('credentials',{...d,platform:editing?record.platform:d.platform,id:record.id}),editing?'Save changes':'Add credential');
+  const fields=$('#manage-form').elements;
+  const showPlatform=()=>{
+    const linux=fields.platform.value==='linux';
+    for(const [name,visible] of [['private_key',linux],['become_password',linux],['ca_pem',!linux]]){
+      fields[name].closest('label').hidden=!visible;fields[name].disabled=!visible;
+    }
+    fields.password.required=!editing&&!linux;
+    const hint=$('#credential-login-hint');
+    if(hint)hint.textContent=linux?'Enter a password or an SSH private key.':'Use the Windows guest password. Domain accounts can use DOMAIN\\username.';
+  };
+  fields.platform.disabled=editing;
+  fields.platform.onchange=showPlatform;showPlatform();
 }
 function editGroup(record={}){
   mgDialog('VM group','<div class="form-grid">'+wf('name','Group name',record.name||'','text','required')+mgSelect('credential_id','Optional credential for runs selected through this group', [['','Use each VM connection credential'],...mgCreds().slice(1)],record.credential_id)+targetFields(record.targets||[])+'</div>',d=>saveRecord('groups',{id:record.id,name:d.name,credential_id:d.credential_id,targets:selectedTargets()}));
@@ -65,13 +133,16 @@ function editConnection(vmid,preferredCredential=''){
 
 function taskPicker(values=[], forRecipe=false){
   mgSelectedTasks=structuredClone(values);
-  return '<fieldset class="wide"><legend>Tasks in execution order</legend><div class="task-add">'+mgSelect('task_choice','Add a task',mg.tasks.filter(t=>!forRecipe||!Object.values(t.input_types||{}).some(s=>s.type==='password')).map(t=>[t.id,`${t.platform}: ${t.name}`]))+mgButton('Add to sequence','add-task')+'</div><div id="task-sequence"></div></fieldset>';
+  return '<fieldset class="wide"><legend>Scripts in execution order</legend><div id="task-sequence" data-recipe="' + forRecipe + '"></div></fieldset>';
 }
 function drawTasks(){
-  const el=$('#task-sequence');if(!el)return;
-  el.innerHTML=mgSelectedTasks.map((s,i)=>{const t=mg.tasks.find(t=>t.id===s.id);return `<div class="sequence-item"><strong>${i+1}. ${esc(t?.name||'Missing task')}</strong><div class="row-actions">${mgButton('Move up','up-task',i)}${mgButton('Remove','remove-task',i)}</div>${Object.entries(t?.parameters||{}).map(([k,label])=>`<label>${esc(label)}${paramControl(scriptInputValue(t.input_types,k),scriptInputValue(s.params,k)??scriptInputValue(t.defaults,k),'data-task-index="'+i+'" data-param="'+esc(k)+'"')}</label>`).join('')}${t?.body?`<details><summary>Review script</summary><pre>${esc(t.body)}</pre></details>`:''}</div>`}).join('')||'<p>No tasks selected yet.</p>';
+  const host=$('#task-sequence');
+  if(!host)return;
+  const catalog=mg.tasks.filter(t=>host.dataset.recipe!=='true'||!Object.values(t.input_types||{}).some(s=>s.type==='password'));
+  const steps=mgSelectedTasks.map(s=>({item:mg.tasks.find(t=>t.id===s.id) || {id:s.id,name:'Unavailable script',parameters:{}},ref:{id:s.id},params:s.params}));
+  host.sequence=mountScriptSequence(host,{catalog,steps});
 }
-function collectTasks(){document.querySelectorAll('[data-task-index]').forEach(i=>{mgSelectedTasks[Number(i.dataset.taskIndex)].params[i.dataset.param]=paramValue(i)});return structuredClone(mgSelectedTasks);}
+function collectTasks(){return $('#task-sequence')?.sequence?.values() || [];}
 function editRecipe(record){
   mgDialog('Recipe follow-up tasks','<div class="form-grid">'+wf('name','Recipe name',record.name,'text','required')+mgSelect('credential_id','Suggested guest credential', [['','Choose later'],...mgCreds().slice(1)],record.credential_id)+taskPicker(record.tasks||[],true)+'<p class="wide">To change build settings, choose Build, edit the wizard, and save as a new recipe. Guest tasks run separately after installation and connection setup.</p></div>',d=>saveRecord('recipes',{...record,name:d.name,credential_id:d.credential_id,tasks:collectTasks()}));drawTasks();
 }
@@ -139,9 +210,6 @@ document.addEventListener('click',async e=>{
     else if(a==='apply-recipe'){const r=mg.recipes.find(r=>r.id===id);applyOperation({tasks:r.tasks});notice('Use the recipe credential when configuring each VM connection: '+(mg.credentials.find(c=>c.id===r.credential_id)?.name||'choose a guest credential'));}
     else if(a==='save-wizard-recipe')await saveWizardRecipe();
     else if(a==='schedule-plan')editSchedule();
-    else if(a==='add-task'){collectTasks();mgSelectedTasks.push({id:$('#manage-fields [name=task_choice]').value,params:{}});drawTasks()}
-    else if(a==='up-task'){collectTasks();const i=Number(id);if(i>0)[mgSelectedTasks[i-1],mgSelectedTasks[i]]=[mgSelectedTasks[i],mgSelectedTasks[i-1]];drawTasks()}
-    else if(a==='remove-task'){collectTasks();mgSelectedTasks.splice(Number(id),1);drawTasks()}
     else if(a.startsWith('edit-')){const kind=a.slice(5),r=mg[kind].find(r=>r.id===id);({credentials:editCredential,tasks:editScript,groups:editGroup,recipes:editRecipe,schedules:editSchedule})[kind](r)}
     else if(a.startsWith('delete-')){const kind=a.slice(7);mgDialog('Delete saved record','<p>Remove this saved configuration? Existing VMs, snapshots and job history are retained. Referenced records cannot be deleted.</p>'+wc('confirmed','Delete this record.'),async d=>{if(!d.confirmed)throw Error('Confirm deletion');await api(`manage/${kind}/${id}/delete`,{});$('#manage-dialog').close();await loadManagement();render()},'Delete record')}
   }catch(err){notice(err.message);if($('#manage-dialog').open)$('#manage-error').textContent=err.message}

@@ -1,7 +1,77 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Proxmate · Machine management</title><link rel="stylesheet" href="/static/style.css" nonce="{{ style_nonce }}"><script defer src="/static/notifications.js"></script><script defer src="/static/app.js"></script><script defer src="/static/wizard.js"></script><script defer src="/static/script-editor.js"></script><script defer src="/static/manage.js"></script><script defer src="/static/lifecycle.js"></script><script defer src="/static/server.js"></script><script defer src="/static/windows.js"></script><script defer src="/static/simple-help.js"></script><script defer src="/static/simple.js"></script><script defer src="/static/build-followups.js"></script><script defer src="/static/labs.js"></script><script defer src="/static/lab-designer.js"></script><script defer src="/static/guest-operations.js"></script><script defer src="/static/machine.js"></script></head>
-<body><a class="skip-link" href="#content">Skip to workspace</a><aside><a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>Proxmate</a><button type="button" id="nav-toggle" aria-expanded="false" aria-controls="workspace-nav">Menu</button><nav id="workspace-nav" aria-label="Workspace"><button data-view="machines" class="active">Operations</button><button data-view="create">Create</button><button data-view="scripts">Script library</button><button data-view="jobs">Progress</button><button data-view="server" class="server-nav">Server</button><details class="advanced-nav"><summary>Advanced</summary><button data-view="overview">Full dashboard</button><button data-view="tasks">All tasks</button><button data-view="credentials">Saved logins</button><button data-view="media">ISO library</button><button data-view="ansible">Full Ansible playbooks</button><button data-view="groups">VM groups</button><button data-view="recipes">Recipes</button><button data-view="backups">Backups</button><button data-view="schedules">Schedules</button><button data-view="versions">Template versions</button><button data-view="recovery">Backup recovery</button></details></nav><div class="aside-bottom"><a href="/api/docs" target="_blank">API documentation ↗</a><button id="logout">Sign out</button></div></aside>
-<main><header><span><i id="connection"></i> <span id="connection-label">Checking server connection</span></span><button id="refresh">↻ Refresh</button></header><div id="notice" role="status" hidden></div><section id="content" tabindex="-1"></section></main>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Proxmate · Inventory</title>
+  <meta name="color-scheme" content="light dark">
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/theme.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/style.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/editor-assets/icons/bootstrap-icons.min.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/workspace.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/script-workspace.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/lab-workspace.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/media-workspace.css" nonce="{{ style_nonce }}">
+  <link rel="stylesheet" href="/static/settings-workspace.css" nonce="{{ style_nonce }}">
+  <script defer src="/static/notifications.js"></script>
+  <script defer src="/static/app.js"></script>
+  <script defer src="/static/wizard.js"></script>
+  <script defer src="/static/script-editor.js"></script>
+  <script defer src="/static/script-workspace.js"></script>
+  <script defer src="/static/manage.js"></script>
+  <script defer src="/static/lifecycle.js"></script>
+  <script defer src="/static/server.js"></script>
+  <script defer src="/static/windows.js"></script>
+  <script defer src="/static/simple-help.js"></script>
+  <script defer src="/static/simple.js"></script>
+  <script defer src="/static/build-followups.js"></script>
+  <script defer src="/static/labs.js"></script>
+  <script defer src="/static/lab-designer.js"></script>
+  <script defer src="/static/guest-operations.js"></script>
+  <script defer src="/static/media-workspace.js"></script>
+  <script defer src="/static/machine.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to workspace</a>
+<aside class="workspace-rail">
+  <a class="brand" href="/" aria-label="Proxmate inventory"><span class="brand-mark" aria-hidden="true"></span>Proxmate</a>
+  <button type="button" id="nav-toggle" aria-expanded="false" aria-controls="workspace-nav">Menu</button>
+  <nav id="workspace-nav" aria-label="Workspace">
+    <div class="nav-section" role="group" aria-label="Workspace"><span class="nav-section-label" aria-hidden="true">Workspace</span>
+      <button data-view="machines"><span class="bi bi-hdd-stack" aria-hidden="true"></span>Inventory</button>
+      <button data-view="jobs"><span class="bi bi-activity" aria-hidden="true"></span>Activity</button>
+    </div>
+    <div class="nav-section" role="group" aria-label="Provisioning"><span class="nav-section-label" aria-hidden="true">Provisioning</span>
+      <button data-view="create"><span class="bi bi-plus-square" aria-hidden="true"></span>Create machine</button>
+      <button data-view="labs"><span class="bi bi-diagram-3" aria-hidden="true"></span>Labs</button>
+    </div>
+    <div class="nav-section" role="group" aria-label="Automation"><span class="nav-section-label" aria-hidden="true">Automation</span>
+      <button data-view="scripts"><span class="bi bi-collection" aria-hidden="true"></span>Script library</button>
+      <button data-view="run-scripts"><span class="bi bi-play-circle" aria-hidden="true"></span>Run scripts</button>
+    </div>
+    <div class="nav-section" role="group" aria-label="Resources"><span class="nav-section-label" aria-hidden="true">Resources</span>
+      <button data-view="media"><span class="bi bi-disc" aria-hidden="true"></span>ISO library</button>
+      <button data-view="credentials"><span class="bi bi-key" aria-hidden="true"></span>Credentials</button>
+      <button data-view="server"><span class="bi bi-sliders" aria-hidden="true"></span>Server settings</button>
+    </div>
+    <details class="advanced-nav"><summary><span class="bi bi-grid" aria-hidden="true"></span>More tools</summary>
+      <button data-view="overview">Cluster overview</button>
+      <button data-view="tasks">Task catalog</button>
+      <button data-view="ansible">Full Ansible playbooks</button>
+      <button data-view="groups">VM groups</button>
+      <button data-view="recipes">Advanced recipes</button>
+      <button data-view="backups">Backups</button>
+      <button data-view="schedules">Schedules</button>
+      <button data-view="versions">Template versions</button>
+      <button data-view="recovery">Backup recovery</button>
+    </details>
+  </nav>
+  <div class="aside-bottom"><a href="/api/docs" target="_blank" rel="noopener"><span class="bi bi-book" aria-hidden="true"></span>API documentation</a><button id="logout"><span class="bi bi-box-arrow-right" aria-hidden="true"></span>Sign out</button></div>
+</aside>
+<main>
+<header class="workspace-bar"><div class="workspace-location"><span id="workspace-group">Workspace</span><span aria-hidden="true">/</span><strong id="workspace-location">Inventory</strong></div>
+<div class="workspace-connection"><span class="connection-status"><i id="connection"></i><span id="connection-label">Checking connection</span></span><label class="appearance-control" title="Appearance"><span class="bi appearance-icon" aria-hidden="true"></span><select id="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><span class="bi bi-chevron-down" aria-hidden="true"></span></label><button id="refresh" aria-label="Refresh workspace" title="Refresh workspace"><span class="bi bi-arrow-clockwise" aria-hidden="true"></span><span class="refresh-label">Refresh</span></button></div></header>
+<div id="notice" role="status" hidden></div><section id="content" tabindex="-1"></section></main>
 <dialog id="login"><form id="login-form"><span class="brand-mark" aria-hidden="true"></span><h1>Sign in to Proxmate</h1><label>Administrator password<input name="password" type="password" autocomplete="current-password" required autofocus></label><p id="login-error" role="alert"></p><button class="primary">Sign in</button><small>Use the password in your .env.admin file.</small></form></dialog>
 <dialog id="editor"><form id="action-form"><div class="modal-head"><h2 id="form-title"></h2><button type="button" id="close" aria-label="Close">×</button></div><div id="fields"></div><p id="form-error" role="alert"></p><div class="modal-footer"><span>Runs as a tracked background job</span><button class="primary">Run operation →</button></div></form></dialog>
 <dialog id="wizard" aria-labelledby="wizard-title"><form id="wizard-form"><div class="modal-head"><h2 id="wizard-title">Build a machine</h2><button type="button" id="wizard-close" aria-label="Close wizard">Close</button></div><ol id="wizard-steps" aria-label="Provisioning steps"></ol><div id="wizard-fields"></div><p id="wizard-error" role="alert"></p><div class="modal-footer"><button type="button" id="wizard-back">Back</button><button type="button" id="wizard-download" hidden>Download answer file (contains password)</button><button id="wizard-next" class="primary">Continue</button></div></form></dialog><dialog id="manage-dialog" aria-labelledby="manage-title"><form id="manage-form"><div class="modal-head"><h2 id="manage-title"></h2><button type="button" id="manage-close">Close</button></div><div id="manage-fields"></div><p id="manage-error" role="alert"></p><div class="modal-footer"><button id="manage-submit" class="primary">Save</button></div></form></dialog><dialog id="simple-dialog" aria-labelledby="simple-title"><form id="simple-form"><div class="modal-head"><h2 id="simple-title">Create machines</h2><button type="button" id="simple-close">Close</button></div><ol id="simple-steps" aria-label="Setup steps"></ol><div id="simple-fields"></div><p id="simple-progress" role="status" hidden></p><div class="wizard-feedback"><p id="simple-error" role="alert"></p><button type="button" id="simple-retry-iso" hidden>Retry edition check</button></div><div class="modal-footer"><button type="button" id="simple-back">Back</button><button id="simple-next" class="primary">Continue</button></div></form></dialog><dialog id="lab-dialog" aria-labelledby="lab-title">

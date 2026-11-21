@@ -136,6 +136,11 @@ def editable_source(manager, job_id):
     """Metadata for editing a captured build. Only the server may retrieve each indexed body."""
     machine, originals = editable_build(manager, job_id)
     lab_pack.validate_machine_settings(machine)
+    return dict(machine, tasks=editable_steps(originals), base_job_id=job_id)
+
+
+def editable_steps(originals):
+    tasks = []
     for step in originals:
         item = step['item']
         types = dict(item.get('input_types', {}))
@@ -143,19 +148,48 @@ def editable_source(manager, job_id):
         for key in parameters:
             if lab_pack.SECRET_FIELD.search(key) or types.get(key, {}).get('type') == 'password':
                 types[key] = {'type': 'password'}
-        machine['tasks'].append(dict(name=item.get('name') or item['id'], parameters=parameters,
+        tasks.append(dict(name=item.get('name') or item['id'], parameters=parameters,
                                      defaults=public_inputs(item, item.get('defaults', {})),
                                      input_types=types, params=public_inputs(item, step['params'])))
-    return dict(machine, base_job_id=job_id)
+    return tasks
+
+
+def local_pack(manager, ident):
+    record = manager.get('lab-packs', management.word(ident, 'pack ID'))
+    if record['server_id'] != operations.connection_provider.current()['id']:
+        raise ValueError('Choose a pack imported on the selected server.')
+    return record
+
+
+def saved_source(manager, ident):
+    record = manager.get('guided-recipes', management.word(ident, 'saved build ID'))
+    if not record.get('pack_snapshot'):
+        raise ValueError(record.get('pack_export_error') or
+                         'This saved build has no portable script snapshot. Export its original job or open the saved build and export a fresh review.')
+    return record['pack_snapshot']
 
 
 def authored_machine(manager, entry):
-    allowed = {'key', 'os', 'source', 'settings', 'after', 'base_job_id', 'tasks'}
+    allowed = {'key', 'os', 'source', 'settings', 'after', 'base_job_id', 'base_recipe_id', 'base_pack_id', 'base_role', 'tasks'}
     if set(entry) - allowed or not {'os', 'source'} <= set(entry):
         raise ValueError('Supply the operating system, portable source and supported machine settings.')
-    originals = []
+    bases = {'base_job_id', 'base_recipe_id', 'base_pack_id'}.intersection(entry)
+    if len(bases) > 1 or ('base_pack_id' in entry) != ('base_role' in entry):
+        raise ValueError('Choose one original source. A lab pack also needs its machine key.')
+    originals, frozen = [], None
     if 'base_job_id' in entry:
         _, originals = editable_build(manager, entry['base_job_id'])
+    if 'base_recipe_id' in entry:
+        frozen = saved_source(manager, entry['base_recipe_id'])
+    if 'base_pack_id' in entry:
+        pack = local_pack(manager, entry['base_pack_id'])
+        role = management.word(entry['base_role'], 'original machine key')
+        if role not in pack['manifest']['machines']:
+            raise ValueError('Choose a machine from the original lab pack.')
+        frozen = dict(machine=pack['manifest']['machines'][role], files=pack['scripts'],
+                      metadata=pack['manifest'].get('scripts', {}))
+    if frozen:
+        originals = lab_pack.portable_steps(frozen['machine'], frozen['metadata'], frozen['files'])
     machine = {k: entry[k] for k in ('os', 'source', 'settings') if k in entry}
     metadata, files = {}, {}
     machine['tasks'] = []
@@ -178,7 +212,16 @@ def authored_machine(manager, entry):
             raise ValueError('Supply only the declared task inputs.')
         if set(overrides) != set(public_inputs(item, overrides)):
             raise ValueError('Leave secret inputs out of the lab. Enter fresh values at deployment.')
-        machine['tasks'].append(portable_task(item, {**params, **overrides}, metadata, files))
+        if frozen and 'original' in choice:
+            task = dict(frozen['machine']['tasks'][index])
+            if overrides:
+                task['with'] = {**task.get('with', {}), **overrides}
+            if 'file' in task:
+                path = task['file']
+                add_script(path, frozen['files'][path], frozen['metadata'].get(path, {}), files, metadata)
+        else:
+            task = portable_task(item, {**params, **overrides}, metadata, files)
+        machine['tasks'].append(task)
     return dict(machine=machine, metadata=metadata, files=files)
 
 
@@ -189,11 +232,7 @@ def capture(manager, entry):
     field = next(iter(source_fields))
     ident = management.word(entry[field], 'build source ID')
     if field == 'recipe_id':
-        record = manager.get('guided-recipes', ident)
-        if not record.get('pack_snapshot'):
-            raise ValueError(record.get('pack_export_error') or
-                             'This saved build has no portable script snapshot. Export its original job or open the saved build and export a fresh review.')
-        return record['pack_snapshot']
+        return saved_source(manager, ident)
     if field == 'plan_id':
         plan = manager.load_plan(ident)
         if plan.get('operation') != 'simple-build':
@@ -259,7 +298,9 @@ def inspected(record):
             for input_name, value in task.get('with', {}).items():
                 if isinstance(value, dict) and 'prompt' in value:
                     prompts[value['prompt']] = input_name.replace('_', ' ')
-        machines.append(dict(key=key, **machine, secret_inputs=[dict(key=k, label=v) for k,v in prompts.items()]))
+        steps = lab_pack.portable_steps(machine, manifest.get('scripts', {}), record['scripts'])
+        machines.append(dict(key=key, **machine, editable_tasks=editable_steps(steps),
+                             secret_inputs=[dict(key=k, label=v) for k,v in prompts.items()]))
     return dict(id=record['id'], name=manifest['name'], manifest=manifest, scripts=record['scripts'], machines=machines)
 
 
@@ -279,11 +320,11 @@ def save_pack(manager, manifest, files, raw):
 
 
 def register(app, manager):
-    def local_pack(ident):
-        record = manager.get('lab-packs', management.word(ident, 'pack ID'))
-        if record['server_id'] != operations.connection_provider.current()['id']:
-            raise ValueError('Choose a pack imported on the selected server.')
-        return record
+    @app.get('/api/simple/recipes/<ident>/lab-source')
+    def recipe_lab_source(ident):
+        frozen = saved_source(manager, ident)
+        originals = lab_pack.portable_steps(frozen['machine'], frozen['metadata'], frozen['files'])
+        return jsonify(dict(frozen['machine'], tasks=editable_steps(originals), base_recipe_id=ident))
 
     @app.get('/api/simple/labs/packs')
     def lab_packs():
@@ -301,11 +342,11 @@ def register(app, manager):
 
     @app.get('/api/simple/labs/packs/<ident>')
     def lab_inspection(ident):
-        return jsonify(inspected(local_pack(ident)))
+        return jsonify(inspected(local_pack(manager, ident)))
 
     @app.get('/api/simple/labs/packs/<ident>/export')
     def lab_download(ident):
-        record = local_pack(ident)
+        record = local_pack(manager, ident)
         return archive_response(base64.b64decode(record['archive']), record['manifest']['name'])
 
     @app.get('/api/simple/labs/example')

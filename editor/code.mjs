@@ -1,7 +1,8 @@
 import {basicSetup} from 'codemirror';
 import {Compartment} from '@codemirror/state';
 import {EditorView, keymap} from '@codemirror/view';
-import {StreamLanguage, indentUnit} from '@codemirror/language';
+import {StreamLanguage, indentUnit, syntaxHighlighting} from '@codemirror/language';
+import {classHighlighter} from '@lezer/highlight';
 import {indentWithTab} from '@codemirror/commands';
 import {openSearchPanel} from '@codemirror/search';
 import {yaml} from '@codemirror/lang-yaml';
@@ -16,7 +17,7 @@ export function mount(host, field, kind, update) {
     parent: host, doc: field.value,
     extensions: [
       EditorView.cspNonce.of(host.ownerDocument.querySelector('link[rel="stylesheet"][nonce]')?.nonce || ''),
-      basicSetup, language.of(languages[kind]), indentUnit.of('  '),
+      basicSetup, syntaxHighlighting(classHighlighter), language.of(languages[kind]), indentUnit.of('  '),
       keymap.of([indentWithTab]), EditorView.lineWrapping,
       EditorView.contentAttributes.of({'aria-label':'Script source', spellcheck:'false'}),
       EditorView.updateListener.of(change => {
