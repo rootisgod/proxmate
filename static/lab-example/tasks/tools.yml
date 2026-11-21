@@ -1,0 +1,5 @@
+- name: Create the tools directory
+  ansible.builtin.file:
+    path: "/opt/{{ proxmate_inputs.name }}"
+    state: directory
+    mode: '0755'

@@ -115,7 +115,13 @@ function simpleRender(){
     $('#content').innerHTML=title('Create','Choose what to build.')+'<div class="build-choices">'+choices.map(([purpose,name,description])=>
       '<section class="panel"><h2>'+name+'</h2><p>'+description+'</p><div class="row-actions">'+
       '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button><button data-simple="debian" data-purpose="'+purpose+'">Debian</button><button data-simple="rocky" data-purpose="'+purpose+'">Rocky Linux</button></div></section>').join('')+'</div>'+
+      '<section class="panel lab-tools"><h2>Lab packs</h2><p>Define machines, choose their setup scripts, and save the lab for deployment.</p><div class="row-actions"><button class="primary" id="lab-create">Create lab</button><button id="lab-import">Import ZIP</button><button id="lab-export">Export saved builds</button></div><div id="lab-packs"></div><div id="lab-runs"></div></section>'+
       '<section id="saved-builds" aria-label="Saved builds"></section><h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
+    $('#lab-create').onclick=openLabDesigner;
+    $('#lab-import').onclick=importLab;
+    $('#lab-export').onclick=selectLabBuilds;
+    loadLabList('packs');
+    loadLabList('runs');
     loadGuidedRecipes($('#saved-builds'));
   }else{
     if(!mg){$('#content').innerHTML=title('Script library','Loading your saved scripts…');if(!mgLoading){mgLoading=true;loadManagement().then(render).catch(e=>notice(e.message)).finally(()=>mgLoading=false)}return true}
@@ -357,7 +363,7 @@ function selectedSoftware(d){
   return tasks;
 }
 
-function buildReview(p,windows){
+function buildReview(p,windows,withConfirmation=true){
   const first=p.machines[0];
   const machine=m=>esc(m.name)+' · VM '+esc(m.vmid);
   const tasks=p.tasks.map(t=>'<li>'+esc(t.name)+' '+esc(Object.values(t.params).join(', '))+'</li>').join('');
@@ -382,8 +388,8 @@ function buildReview(p,windows){
     (p.ssh_key_fingerprints?.length?'<li>Workstation SSH keys'+(p.github_username?' · GitHub account '+esc(p.github_username):'')+
       '<ul>'+p.ssh_key_fingerprints.map(key=>'<li><code>'+esc(key)+'</code></li>').join('')+'</ul></li>':'')+
     p.notes.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul></details>'+
-    wc('confirmed',windows?'Create these machines with the reviewed settings. I am authorised to use this Windows image and accept its licence.':'Create these machines with the reviewed settings.')+
-    (p.dangerous?wc('risk_confirmed','I approve '+(risks.length?esc(risks.join(', ')):'the sensitive settings and custom scripts')+'.'):'')+'</div>';
+    (withConfirmation?wc('confirmed',windows?'Create these machines with the reviewed settings. I am authorised to use this Windows image and accept its licence.':'Create these machines with the reviewed settings.')+
+      (p.dangerous?wc('risk_confirmed','I approve '+(risks.length?esc(risks.join(', ')):'the sensitive settings and custom scripts')+'.'):''):'')+'</div>';
 }
 
 function focusSimpleStep(){
@@ -466,7 +472,7 @@ function drawSimple(){
     for(const input of $('#simple-fields').querySelectorAll('[type=checkbox]'))input.required=true;
     const save=document.createElement('button');save.type='button';save.textContent='Save this build';
     save.onclick=()=>saveGuidedRecipe({plan_id:simplePlan.id},d.name);
-    $('#simple-fields .build-review').append(save);
+    $('#simple-fields .build-review').append(save,reviewedLabExport(simplePlan));
   }
   if(simpleStep===0){
     const fields=$('#simple-form').elements;

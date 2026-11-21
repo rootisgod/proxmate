@@ -1,0 +1,20 @@
+version: 1
+name: Ubuntu tools lab
+machines:
+  tools01:
+    os: ubuntu
+    source: {kind: cloud}
+    settings: {cores: 2, memory: 4096, disk: 32}
+    tasks:
+      - run: linux-package
+        version: 1
+        with: {package: curl}
+      - file: tasks/tools.yml
+        with: {name: LabTools}
+scripts:
+  tasks/tools.yml:
+    name: Create a tools directory
+    platform: linux
+    kind: ansible
+    parameters: {name: Directory name}
+    defaults: {name: LabTools}

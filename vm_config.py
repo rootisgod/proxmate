@@ -3,6 +3,7 @@ from collections.abc import Mapping
 import hashlib
 import json
 import re
+import uuid
 
 
 def vm_path(target: Mapping[str, object]) -> str:
@@ -29,6 +30,25 @@ def stable_identity(config: Mapping[str, object]) -> str | None:
     if config.get('smbios1') or config.get('vmgenid'):
         return machine_identity(config)
     return None
+
+
+def lab_machine_identity(config: Mapping[str, object]) -> str | None:
+    """Require a concrete VM UUID before importing provenance or targeting an existing guest."""
+    smbios = re.search(r'(?:^|,)uuid=([^,]+)', str(config.get('smbios1', '')), re.I)
+    for value in (config.get('vmgenid'), smbios[1] if smbios else None):
+        try:
+            if uuid.UUID(str(value)).int:
+                return machine_identity(config)
+        except ValueError:
+            continue
+    return None
+
+
+def configured_platform(config: Mapping[str, object]) -> str | None:
+    ostype = str(config.get('ostype', ''))
+    if ostype.startswith(('win','w2k')) or ostype in ('wvista','wxp'):
+        return 'windows'
+    return 'linux' if ostype in ('l24','l26') else None
 
 
 def reviewed_target_identity(config: Mapping[str, object]) -> str:

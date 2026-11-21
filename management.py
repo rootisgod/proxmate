@@ -16,7 +16,7 @@ import operations
 from guest_tasks import BUILTINS, DOMAIN_CONTROLLER, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters, public_params
 from script_library import check_script, ScriptDiagnostic
 from task_recovery import TaskProgress
-from vm_config import machine_identity, reviewed_target_identity
+from vm_config import configured_platform, lab_machine_identity, machine_identity, reviewed_target_identity
 
 KINDS = {'credentials', 'connections', 'tasks', 'groups', 'recipes', 'schedules'}
 OPS = {'tasks', 'readiness', 'start', 'shutdown', 'stop', 'resize', 'backup', 'snapshot', 'restore'}
@@ -141,7 +141,7 @@ def check_saved_trust(previous, trust, identity):
             raise TrustChanged('Guest transport identity changed. Verify its identity in the console and update the saved trust.')
 
 
-def verify_guest_access(client, guest, binding, credential, log, *, recovering=False):
+def verify_guest_access(client, guest, binding, credential, log, *, recovering=False, lab_existing=False):
     label = target_id(guest)
     resolved = endpoint_addresses(binding)
     reported = set()
@@ -152,13 +152,26 @@ def verify_guest_access(client, guest, binding, credential, log, *, recovering=F
         log(label+' guest agent available; reported IPs: '+(', '.join(sorted(map(str,reported))) or 'none'))
     except Exception:
         log(label+' guest agent unavailable; checking configured address instead.')
+    insecure_winrm = binding['platform']=='windows' and not binding['verify_tls']
+    if lab_existing and (not binding.get('machine_identity') or insecure_winrm):
+        if len(resolved)!=1 or not resolved.issubset(reported):
+            raise ValueError('The guest agent must report the single resolved address for this lab target. Refresh its connection.')
+        if insecure_winrm:
+            # Keep both readiness and task connections on the verified IP even if DNS changes.
+            binding=dict(binding,host=str(next(iter(resolved))))
     if recovering and binding['platform']=='windows' and not binding['verify_tls'] and not reported:
         raise ValueError('Restore guest-agent address discovery or verify the WinRM certificate before recovering tasks.')
     if reported and not resolved & reported:
         raise ValueError(ADDRESS_MISMATCH + '. Choose Refresh connection, then test and save the current address.')
+    if lab_existing:
+        # Address discovery can take a transport timeout; confirm the target still owns that report.
+        current=client.call('GET',f"nodes/{guest['node']}/qemu/{guest['vmid']}/config")
+        if current.get('template') or reviewed_target_identity(current)!=guest['identity'] or not lab_machine_identity(current):
+            raise ValueError('The selected machine changed during connection discovery. Review the lab target again.')
     with socket.create_connection((binding['host'],binding['port']),timeout=10): pass
     log(label+' configured transport port reachable.')
     run_guest(binding,credential,[],log,readiness=True)
+    return binding
 
 
 class Manager:
@@ -338,6 +351,20 @@ class Manager:
         with self.db() as con: con.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, ident))
 
     def create_plan(self, d, *, selections=None, discovered=None, recovery=None):
+        plan = self.review_operation(d,selections=selections,discovered=discovered,recovery=recovery)
+        ident = uuid.uuid4().hex
+        with self.db() as con:
+            self.save_discoveries(con,[(kind,r) for (kind,_),r in (discovered or {}).items()])
+            con.execute('DELETE FROM plans WHERE created < ?', (time.time()-86400,))
+            con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
+        return dict(id=ident, **self.summary(plan))
+
+    def save_discoveries(self,con,records):
+        for kind,record in records:
+            inserted=con.execute('INSERT OR IGNORE INTO records VALUES (?,?,?)', (kind,record['id'],self.encode(record)))
+            if not inserted.rowcount: raise ValueError('Guest connection changed during discovery. Review the run again.')
+
+    def review_operation(self, d, *, selections=None, discovered=None, recovery=None, lab_existing=False):
         if not isinstance(d, dict): raise ValueError('Plan must be a JSON object')
         op = d.get('operation')
         if op not in OPS: raise ValueError('Unknown management operation')
@@ -363,6 +390,8 @@ class Manager:
         resources = p.resources()
         plan = {'operation': op, 'targets': [], 'tasks': selections, 'snapshot_before': boolean(d.get('snapshot_before', False)),
                 'dangerous': op in ('stop', 'restore') or any(t['item'].get('dangerous') for t in selections)}
+        lab_existing=bool(lab_existing or recovery and recovery.get('lab_existing'))
+        if lab_existing: plan['lab_existing']=True
         if recovery:
             plan.update(recovery=recovery, template_build=recovery['template_build'])
             plan['dangerous'] |= bool(recovery['started'] or recovery['template_build'] or
@@ -375,7 +404,10 @@ class Manager:
             guest = next((r for r in resources if r.get('vmid')==t['vmid'] and r.get('node')==t['node'] and r.get('type')=='qemu' and not r.get('template')), None)
             if not guest: raise ValueError('Choose existing QEMU VMs, not templates or containers: ' + target_id(t))
             cfg = p.call('GET', f'nodes/{t["node"]}/qemu/{t["vmid"]}/config')
+            if lab_existing and (guest.get('status')!='running' or cfg.get('template') or not lab_machine_identity(cfg)):
+                raise ValueError('Choose a running non-template QEMU VM with a stable UUID.')
             t.update(name=guest.get('name',''), identity=self.identity(cfg))
+            if lab_existing: t['name']=cfg.get('name') or t['name']
             if recovery:
                 if not (cfg.get('smbios1') or cfg.get('vmgenid')) or t['identity'] != recovery['identity']:
                     raise ValueError('The original VM identity or attached disks changed. Inspect the machine before running new tasks.')
@@ -392,7 +424,9 @@ class Manager:
                 credential = discovered.get(('credentials', binding['credential_id'])) or self.get('credentials', binding['credential_id'])
                 if credential['platform'] != binding['platform']: raise ValueError('Group credential does not match guest platform')
                 if any(s['item']['platform'] != binding['platform'] for s in selections): raise ValueError('All selected tasks must match each guest platform')
-                if recovery: verify_guest_access(p,t,binding,credential,lambda message: None,recovering=True)
+                if lab_existing and configured_platform(cfg) not in (None,binding['platform']):
+                    raise ValueError('The selected login and tasks do not match the configured guest operating system.')
+                if recovery: verify_guest_access(p,t,binding,credential,lambda message: None,recovering=True,lab_existing=lab_existing)
                 if drive_letters:
                     from winrm_setup import check_letters, used_drive_letters
                     check_letters(drive_letters,used_drive_letters(p,t,cfg))
@@ -400,14 +434,7 @@ class Manager:
                 t['credential_name'] = credential['name']
                 t['credential_revision'] = credential['updated']
             plan['targets'].append(t)
-        ident = uuid.uuid4().hex
-        with self.db() as con:
-            for (kind, key), record in discovered.items():
-                inserted = con.execute('INSERT OR IGNORE INTO records VALUES (?,?,?)', (kind, key, self.encode(record)))
-                if not inserted.rowcount: raise ValueError('Guest connection changed during discovery. Review the run again.')
-            con.execute('DELETE FROM plans WHERE created < ?', (time.time()-86400,))
-            con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
-        return dict(id=ident, **self.summary(plan))
+        return plan
 
     identity = staticmethod(reviewed_target_identity)
 
@@ -437,15 +464,30 @@ class Manager:
         return self.decode(row['value'])
 
     def enqueue(self, plan, job_id):
-        if plan.get('operation') not in OPS: raise ValueError('Choose a management operation plan')
         server_id = operations.connection_provider.current()['id']
-        payload = {'action': 'manage', 'plan': plan, 'server_id':server_id}
         with self.db() as con:
             con.execute('BEGIN IMMEDIATE')
-            inserted=con.execute('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,?)', (job_id,'manage','queued',time.time(),time.time(),self.encode(payload),'Queued reviewed '+plan['operation']+' operation.'))
-            if inserted.rowcount and plan['operation']=='tasks':
-                if plan.get('recovery'): self.progress.claim(con,job_id,plan,server_id)
-                self.progress.initialize(con,job_id,plan,server_id)
+            return self.queue_operation(con,plan,job_id,server_id)
+
+    def queue_operation(self, con, plan, job_id, server_id, *, lab_run_id=None):
+        if plan.get('operation') not in OPS: raise ValueError('Choose a management operation plan')
+        payload = {'action': 'manage', 'plan': plan, 'server_id':server_id}
+        if lab_run_id:
+            payload['lab_run_id']=lab_run_id
+        if plan.get('lab_existing'):
+            if not lab_run_id and not plan.get('recovery'):
+                raise ValueError('Confirm this existing target through its reviewed lab.')
+            for target in plan['targets']:
+                binding=target['connection']
+                for kind,ident,revision in [('connections',binding['id'],binding['updated']),
+                                            ('credentials',binding['credential_id'],target['credential_revision'])]:
+                    row=con.execute('SELECT value FROM records WHERE kind=? AND id=?',(kind,ident)).fetchone()
+                    if not row or self.decode(row['value'])['updated']!=revision:
+                        raise ValueError('The guest login or connection changed after review. Review the lab again.')
+        inserted=con.execute('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,?)', (job_id,'manage','queued',time.time(),time.time(),self.encode(payload),'Queued reviewed '+plan['operation']+' operation.'))
+        if inserted.rowcount and plan['operation']=='tasks':
+            if plan.get('recovery'): self.progress.claim(con,job_id,plan,server_id)
+            self.progress.initialize(con,job_id,plan,server_id)
         return {'id': job_id, 'url': '/api/jobs/'+job_id}
 
     def tick(self, now=None):
@@ -489,15 +531,17 @@ class Manager:
                 if not resource: raise ValueError('Target missing, migrated or converted to template; review again')
                 cfg = p.call('GET',prefix+'/config')
                 if self.identity(cfg) != t['identity']: raise ValueError('VM identity or disks changed since review; review again')
+                if plan.get('lab_existing') and (cfg.get('template') or not lab_machine_identity(cfg)):
+                    raise ValueError('The existing machine no longer has its reviewed VM identity.')
                 op = plan['operation']
                 def task(path, **args): p.wait(t['node'],p.call('POST',prefix+path,**args),log)
                 if op in ('tasks','readiness'):
                     b = t['connection']; cred = self.get('credentials',b['credential_id'])
-                    if plan.get('recovery') and self.get('connections',label)['updated'] != b['updated']:
-                        raise ValueError('Guest connection changed since recovery review. Review the remaining tasks again.')
+                    if (plan.get('recovery') or plan.get('lab_existing')) and self.get('connections',label)['updated'] != b['updated']:
+                        raise ValueError('Guest connection changed since review. Review the remaining tasks again.')
                     if cred['updated'] != t['credential_revision']: raise ValueError('Credential changed since review; review again')
                     if resource.get('status')!='running': raise ValueError('Guest is not running')
-                    verify_guest_access(p,t,b,cred,log,recovering=bool(plan.get('recovery')))
+                    b=verify_guest_access(p,t,b,cred,log,recovering=bool(plan.get('recovery')),lab_existing=bool(plan.get('lab_existing')))
                     if op=='tasks':
                         if plan['snapshot_before']:
                             snap = 'proxmate-'+uuid.uuid4().hex[:16]

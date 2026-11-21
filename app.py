@@ -99,6 +99,8 @@ def start_trace():
 def protect():
     if request.path in ('/', '/api/health', '/api/openapi.json', '/api/docs') or request.path.startswith('/static/'):
         return
+    if request.method=='POST' and request.path=='/api/simple/labs/import':
+        request.max_content_length=3*1024*1024
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         if request.headers.get('Origin') and request.headers['Origin'] != request.host_url.rstrip('/'):
             return jsonify(error='Cross-origin requests are not allowed'), 403
@@ -393,6 +395,9 @@ def run_next_job():
     recording=answer_recorder.set(lambda xml,helper:windows_artifacts.save(db,encode_payload,row['id'],xml,helper))
     try:
         payload=decode_payload(row['payload'])
+        lab_task=payload.get('action')=='manage' and payload['plan'].get('lab_existing')
+        if (payload.get('lab_run_id') or lab_task) and payload.get('server_id')!=server.current()['id']:
+            raise ValueError('The selected server changed after this lab was approved.')
         config=job_queue.job_config(payload)
         if not wait: diagnostics.event('job.started',action=row['action'],vmid=config.get('vmid'),queued_ms=round((time.time()-row['created'])*1000))
         password=config.get('windows',{}).get('admin_password','')
@@ -428,8 +433,7 @@ def run_next_job():
         answer_recorder.reset(recording)
         diagnostics.job.reset(job_token)
     with db() as con:
-        con.execute('DELETE FROM job_waits WHERE job_id=?',(row['id'],))
-        con.execute('UPDATE jobs SET status=?,updated=? WHERE id=?',(status,time.time(),row['id']))
+        job_queue.finish(con,row['id'],status,time.time())
     diagnostics.event('job.finished',job_id=row['id'],status=status,total_ms=round((time.time()-row['created'])*1000),
                       step_ms=round((time.monotonic()-started)*1000))
     return True
@@ -495,6 +499,12 @@ from lifecycle import register as register_lifecycle
 lifecycle = register_lifecycle(app,manager)
 from simple_flow import register as register_simple
 simple = register_simple(app,manager,lifecycle)
+from lab_exchange import register as register_lab_exchange
+from lab_runs import register as register_lab_runs
+from lab_sources import register as register_lab_sources
+register_lab_exchange(app,manager)
+register_lab_runs(app,manager,simple)
+register_lab_sources(app,manager,lifecycle)
 
 from server_connection import ServerConnection
 import operations
@@ -511,7 +521,7 @@ def connection_boundary():
         return
     # These authenticated local reads are valid across server replacements.
     # Host-bound plans, inventory and writes still serialize with connection changes.
-    if request.endpoint in ('job_answer','job_autoinstall','check_guest_script') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
+    if request.endpoint in ('job_answer','job_autoinstall','check_guest_script','lab_example') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
         return
     started=time.monotonic()
     server.lock.acquire()
@@ -529,7 +539,7 @@ def connection_boundary():
 
     # A guided login may take a transport timeout. Keep the selected server pinned
     # while allowing unrelated inventory, job and record requests to proceed.
-    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
+    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan','lab_plan','lab_import','lab_export','lab_create_pack','lab_machine_source') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
         server.machine_requests += 1
         g.machine_request = True
         g.connection_locked = False

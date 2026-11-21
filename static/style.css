@@ -369,3 +369,50 @@ nav :focus-visible { outline-offset: -3px; }
 .saved-build>span{flex:1 1 14rem;font-weight:600}
 .saved-build small{display:block;font-weight:400;color:var(--muted)}
 .job-followups{margin:.7rem 0}
+
+.lab-tools { padding:18px 22px }
+.lab-tools h2,.lab-tools>p { margin:0 0 8px }
+.lab-tools .row-actions { flex-wrap:wrap }
+#lab-runs h3 { margin-top:18px }
+#lab-dialog { width:min(710px,95vw);padding:0;color:var(--ink) }
+#lab-form { display:flex;flex-direction:column;max-height:88dvh }
+#lab-form .modal-head,#lab-form .modal-footer { flex:none;padding:14px 20px;margin:0 }
+#lab-form .modal-head { border-bottom:1px solid var(--line) }
+#lab-fields { min-height:0;overflow:auto;padding:12px 20px 16px;overscroll-behavior:contain }
+#lab-fields fieldset { min-inline-size:0;margin:12px 0 16px;border:1px solid var(--line);border-radius:8px;padding:10px 14px 14px }
+#lab-fields legend { padding:0 6px;font-weight:700 }
+#lab-fields p { margin:6px 0 }
+#lab-fields label { min-width:0;margin:7px 0 }
+#lab-fields input,#lab-fields select { max-width:100% }
+#lab-fields details>summary { cursor:pointer;padding:5px 0;color:var(--teal) }
+#lab-fields .lab-access { border-top:1px solid var(--line);margin-top:8px;padding-top:6px }
+.lab-params { display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:4px 0 }
+.lab-params dd { margin:0 }
+.lab-tasks pre { white-space:pre-wrap;overflow-wrap:anywhere }
+.lab-job { display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding:12px 0 }
+.lab-job>div { flex:1 1 12rem }.lab-job h3 { margin:0 }
+#lab-error { color:#a02929;overflow-wrap:anywhere;margin:0 20px }
+#lab-error:not(:empty) { padding:8px 0 }
+#lab-status { color:var(--muted) }
+@media(max-width:600px) {
+  #lab-fields .form-grid { grid-template-columns:1fr }
+  #lab-fields,#lab-form .modal-head,#lab-form .modal-footer { padding-inline:12px }
+}
+
+#lab-dialog:has(.design-add) { width:min(760px,95vw) }
+.design-add,.design-add>div,.design-machine-head,.design-script-picker { display:flex;align-items:end;flex-wrap:wrap;gap:8px 12px }
+.design-add { margin:14px 0 5px }.design-add>div { border-inline-start:1px solid var(--line);padding-inline-start:14px }
+#lab-fields .design-add label,#lab-fields .design-script-picker label { margin:0;min-width:0;flex:1 }
+.design-machine-head { align-items:center;justify-content:space-between;color:var(--muted) }
+.design-machine-head button { margin-inline-start:auto }
+.design-resources { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px }
+.design-source,.design-guest,.design-hardware,.design-dependencies,.design-scripts { margin-top:8px }
+.design-scripts { padding:12px 0 4px;border-top:1px solid var(--line) }
+.design-scripts h3 { margin-bottom:8px }.design-task-list { margin:0;padding-left:22px }.design-task-list li { padding:4px 0 12px }
+.design-task-list .row-actions { margin-top:5px;flex-wrap:wrap }.design-task-list pre { white-space:pre-wrap;overflow-wrap:anywhere }
+@media(max-width:600px) {
+  .design-add,.design-add>div { display:grid;grid-template-columns:minmax(0,1fr);width:100% }
+  .design-add>div { border:0;padding:0 }
+  .design-resources { grid-template-columns:1fr }
+  #lab-fields .design-script-picker label { min-width:min(12rem,100%) }
+}

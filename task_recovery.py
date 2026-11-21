@@ -22,6 +22,7 @@ class TaskProgress:
             return
         settings=dict(tasks=plan['tasks'], snapshot_before=plan['snapshot_before'],
                       template_build=plan.get('template_build'))
+        if plan.get('lab_existing'): settings['lab_existing']=True
         con.execute('INSERT INTO task_runs VALUES (?,?,?,?)',
                     (job_id,server_id,len(plan['tasks']),self.manager.encode(settings)))
         for t in plan['targets']:
@@ -66,6 +67,7 @@ class TaskProgress:
         settings = self.manager.decode(row['settings'])
         origin = dict(job_id=job_id, target=target, completed=row['completed'], identity=detail['identity'],
                       started=bool(row['started']), template_build=settings['template_build'])
+        if settings.get('lab_existing'): origin['lab_existing']=True
         plan=self.manager.create_plan(dict(operation='tasks', targets=[detail], snapshot_before=settings['snapshot_before']),
                                       selections=settings['tasks'][row['completed']:], recovery=origin)
         diagnostics.event('tasks.recovery_reviewed',job_id=job_id,plan_id=plan['id'],vmid=detail['vmid'],

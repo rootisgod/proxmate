@@ -22,6 +22,20 @@ Upgrade from environment-based configuration: retain the existing `.env` and `.e
 
 ## Build machines
 
+### Create and share a lab
+
+Open **Create → Lab packs → Create lab**. Name the lab and add a machine for each role. Choose Windows, Ubuntu, Debian or Rocky, pick an installation source, and add scripts from the library in the order they should run. For example, give a Windows machine the domain-controller task, then configure a second machine to start after it. **Save lab** puts the definition on the dashboard. You can return later to supply credentials, review the proposed VMs and deploy.
+
+For an existing VM, choose how to use it. **Copy VM settings** seeds a fresh guest's definition from the recorded installation choices and setup tasks when the identity matches a Proxmate build. Other guests supply the hardware Proxmate can identify. Changes made inside the source guest since installation are outside the blueprint.
+
+**Run scripts on an existing VM** adds a guest task list to the lab. For example, a lab can create an Ubuntu server and then run a selected script on an existing Windows management VM. At deployment, select the running target and review its node, VM ID, login and tasks. Proxmate uses the VM's saved login or asks for one when missing. Running tasks on existing guests requires explicit confirmation.
+
+Choose **Download ZIP** to share the saved lab. Each pack includes a readable `lab.yaml` with machine definitions, dependencies and ordered tasks. Custom Ansible, PowerShell and shell scripts travel inside the pack. ZIP import and export from a guided build review or job log are also available.
+
+On another dashboard, import the pack, inspect the scripts, choose local media or templates and enter fresh guest credentials. Review the destination names, VM IDs and software together before you deploy. Open the lab run to follow each machine. Saved imports can be downloaded again or reviewed for another deployment. The [lab pack specification and example](static/lab-packs.md) cover the file format, supported guest tasks and execution rules.
+
+### Saved builds and recovery
+
 Choose **Save this build** at the review step to give a Windows, Ubuntu, Debian or Rocky configuration a name. Find it under **Create → Saved builds → Use build**. In **Activity**, a guided build's job log also offers **Create another like this** and **Save this build** when its settings are available. Enter a new machine name and any required guest password. Review the newly allocated VM ID, installation source, current library tasks and inputs before creating it. Removing a saved build only removes that shortcut.
 
 If guest software fails during a build or an Operations run, open its job in **Activity** and choose **Review remaining tasks** beside the affected VM. The review shows the saved login, the original task versions and inputs, and any snapshot or template preparation the run will perform. Inspect a task marked as already started before approving it again, especially after a timeout. Each recovery gets its own job linked to the earlier run. Recovery requires a recorded task checkpoint and the original VM and disks. Installation and template-generalization failures still need inspection.

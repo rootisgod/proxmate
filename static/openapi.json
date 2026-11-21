@@ -27,6 +27,63 @@
       }
     },
     "schemas": {
+      "LabAuthorMachine": {
+        "type": "object", "required": ["key","os","source"], "additionalProperties": false,
+        "properties": {
+          "key": {"type":"string","maxLength":15},
+          "os": {"type":"string","enum":["windows","ubuntu","debian","rocky","linux"],"description":"For existing roles use windows or linux."},
+          "source": {"type":"object","required":["kind"],"additionalProperties":false,
+            "properties":{"kind":{"type":"string","enum":["iso","template","cloud","existing"]},"hint":{"type":"string"},"edition":{"type":"string"}}},
+          "settings": {"type":"object","description":"Portable settings from the version 1 specification. Memory in MiB and disks in GiB."},
+          "after": {"type":"array","items":{"type":"string"}},
+          "base_job_id": {"type":"string","description":"Guided job supplying any referenced original task definitions."},
+          "tasks": {"type":"array","maxItems":50,"items":{"type":"object","additionalProperties":false,
+            "oneOf":[{"required":["id"]},{"required":["original"]}],
+            "properties":{"id":{"type":"string"},"original":{"type":"integer","minimum":0},
+              "params":{"type":"object","description":"Public task inputs only. Password inputs are prompted at deployment."}}}}
+        }
+      },
+      "LabMachineSource": {
+        "type":"object","required":["name","basis","os","source","settings","tasks"],
+        "properties":{
+          "name":{"type":"string"},"basis":{"type":"string","enum":["guided","hardware"]},
+          "os":{"type":"string","nullable":true},"source":{"type":"object","nullable":true},
+          "settings":{"type":"object"},"base_job_id":{"type":"string"},
+          "tasks":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},
+            "parameters":{"type":"object"},"defaults":{"type":"object"},"input_types":{"type":"object"},"params":{"type":"object"}}}}
+        }
+      },
+      "LabPackSummary": {
+        "type": "object",
+        "required": ["id","name","machine_count"],
+        "properties": {"id":{"type":"string"},"name":{"type":"string"},"server_id":{"type":"string"},"created":{"type":"number"},"machine_count":{"type":"integer"}}
+      },
+      "LabInspection": {
+        "type": "object",
+        "required": ["id","name","manifest","scripts","machines"],
+        "properties": {"id":{"type":"string"},"name":{"type":"string"},"manifest":{"type":"object","description":"Portable lab.yaml v1 or v2. See the format specification."},"scripts":{"type":"object","additionalProperties":{"type":"string"}},"machines":{"type":"array","items":{"type":"object","required":["key","os","source","secret_inputs"],"properties":{"key":{"type":"string"},"os":{"type":"string"},"source":{"type":"object"},"after":{"type":"array","items":{"type":"string"}},"settings":{"type":"object"},"tasks":{"type":"array","items":{"type":"object"}},"secret_inputs":{"type":"array","items":{"type":"object","required":["key","label"],"properties":{"key":{"type":"string"},"label":{"type":"string"}}}}}}}}
+      },
+      "LabBinding": {
+        "type": "object",
+        "properties": {"name":{"type":"string","maxLength":12},"node":{"type":"string"},"storage":{"type":"string"},"iso_storage":{"type":"string"},"bridge":{"type":"string"},"source":{"type":"string"},"edition":{"oneOf":[{"type":"string"},{"type":"integer"}]},"edition_identity":{"type":"string"},"template_id":{"oneOf":[{"type":"string"},{"type":"integer"}]},"generalized":{"type":"boolean"},"agent_iso":{"type":"string"},"management_cidr":{"type":"string"},"vmid":{"type":"integer","description":"Existing-role target only. Also supply node."}},
+        "additionalProperties": false,
+        "description": "For an existing role supply exactly node and vmid. For a new role map applicable source and placement fields."
+      },
+      "LabSecrets": {
+        "type": "object",
+        "properties": {"password":{"type":"string","writeOnly":true,"format":"password"},"linux_password":{"type":"string","writeOnly":true,"format":"password"},"ssh_public_key":{"type":"string"},"github_username":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":"string","writeOnly":true,"format":"password"}},"credential_id":{"type":"string","description":"Select a compatible saved login only for an unbound existing VM."},"credential":{"type":"object","writeOnly":true,"description":"Inline guest login only for an unbound existing VM. Supply username, platform and the applicable password or private key.","properties":{"platform":{"type":"string"},"username":{"type":"string"},"password":{"type":"string","format":"password","writeOnly":true},"private_key":{"type":"string","format":"password","writeOnly":true},"become_password":{"type":"string","format":"password","writeOnly":true},"ca_pem":{"type":"string"}}}},
+        "additionalProperties": false
+      },
+      "LabReview": {
+        "type": "object",
+        "required": ["id","name","machines","dangerous"],
+        "properties": {"id":{"type":"string"},"name":{"type":"string"},"machines":{"type":"array","items":{"type":"object","required":["key","after","plan"],"properties":{"key":{"type":"string"},"after":{"type":"array","items":{"type":"string"}},"plan":{"type":"object","description":"Guided creation review for mode=create, or Operations target, login and ordered task summary for mode=existing."},"mode":{"type":"string","enum":["create","existing"]}}}},"dangerous":{"type":"boolean"},"existing":{"type":"boolean","description":"Contains one or more in-place Operations jobs."}}
+      },
+      "LabRun": {
+        "type": "object",
+        "required": ["id","name","pack_id","machines","status"],
+        "properties": {"id":{"type":"string"},"name":{"type":"string"},"pack_id":{"type":"string"},"server_id":{"type":"string"},"created":{"type":"number"},"status":{"type":"string"},"machines":{"type":"array","items":{"type":"object","required":["key","after","name","node","vmid","job_id","url","status","owned"],"properties":{"key":{"type":"string"},"after":{"type":"array","items":{"type":"string"}},"name":{"type":"string"},"node":{"type":"string"},"vmid":{"type":"integer"},"job_id":{"type":"string"},"url":{"type":"string"},"status":{"type":"string","description":"Per-machine guided job status, including pending while awaiting a prerequisite and blocked when a prerequisite failed."},"owned":{"type":"boolean","description":"Creation has been recorded for a provisioned machine. Existing targets always report false."},"mode":{"type":"string","enum":["create","existing"]}}}},"existing":{"type":"boolean","description":"Contains one or more in-place Operations jobs."}}
+      },
       "linux-template": {
         "type": "object",
         "required": [
@@ -1419,6 +1476,7 @@
               "succeeded",
               "failed",
               "interrupted",
+              "blocked",
               "cancelled"
             ]
           },
@@ -1533,6 +1591,65 @@
     }
   },
   "paths": {
+    "/api/simple/labs/example": {
+      "get": {"summary":"Download the example lab ZIP","description":"An Ubuntu cloud machine with curl and a bundled guest task list.","responses":{"200":{"description":"Download the example lab ZIP","content":{"application/zip":{"schema":{"type":"string","format":"binary"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"}}}
+    },
+    "/api/simple/labs/export": {
+      "post": {"summary":"Export guided builds to a ZIP","description":"Select one reviewed source for each pack machine. Supply machine_name to select a member of a reviewed batch. Task content comes from the frozen source.","parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["name","machines"],"properties":{"name":{"type":"string"},"machines":{"type":"array","items":{"type":"object","required":["key"],"properties":{"key":{"type":"string"},"after":{"type":"array","items":{"type":"string"}},"plan_id":{"type":"string"},"job_id":{"type":"string"},"recipe_id":{"type":"string"},"machine_name":{"type":"string"}},"oneOf":[{"required":["plan_id"]},{"required":["job_id"]},{"required":["recipe_id"]}],"additionalProperties":false},"minItems":1,"maxItems":20}},"additionalProperties":false}}}},"responses":{"200":{"description":"Export guided builds to a ZIP","content":{"application/zip":{"schema":{"type":"string","format":"binary"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}}
+    },
+    "/api/simple/labs/import": {
+      "post": {"summary":"Inspect and save a portable lab ZIP","description":"No guest jobs are created. Imports are scoped to the selected server. Repeating identical ZIP bytes returns the existing pack.","parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["archive"],"properties":{"archive":{"type":"string","format":"byte","description":"Base64-encoded ZIP. Maximum decoded size 2 MiB."}},"additionalProperties":false}}}},"responses":{"200":{"description":"Inspect and save a portable lab ZIP","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabInspection"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}}
+    },
+    "/api/simple/labs/packs": {
+      "get": {"summary":"List saved lab packs","description":"Newest first on the selected server.","responses":{"200":{"description":"Locally authored and imported packs","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/LabPackSummary"}}}}},"400":{"description":"Resource unavailable"},"401":{"description":"Administrator authentication required"}}},
+      "post": {
+        "summary":"Save a lab from machine definitions and library scripts",
+        "description":"Captures ordered custom scripts, validates the complete portable pack and returns its inspection view. Use source.kind existing to add an in-place task role in version 2. No credentials, VM creation or jobs are needed to author a lab.",
+        "parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["name","machines"],
+          "additionalProperties":false,"properties":{"name":{"type":"string","maxLength":100},
+            "machines":{"type":"array","minItems":1,"maxItems":20,"items":{"$ref":"#/components/schemas/LabAuthorMachine"}}}}}}},
+        "responses":{"201":{"description":"Saved pack","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabInspection"}}}},
+          "400":{"description":"Invalid machine definition, task selection or portable field"},"401":{"description":"Administrator authentication required"},
+          "409":{"description":"Disconnected or stale server selection"}}
+      }
+    },
+    "/api/simple/labs/machine-source": {
+      "post": {
+        "summary":"Inspect an existing VM for use as a new machine blueprint",
+        "description":"Reads QEMU configuration and matches stable guest identity against guided build records for this server. Returns portable settings, safe inputs and original task indexes in list order, or hardware alone where build provenance is unavailable.",
+        "parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,
+          "required":["node","vmid"],"properties":{"node":{"type":"string"},"vmid":{"type":"integer"}}}}}},
+        "responses":{"200":{"description":"Blueprint suggestions","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabMachineSource"}}}},
+          "400":{"description":"Invalid target"},"401":{"description":"Administrator authentication required"},
+          "409":{"description":"Disconnected or stale server selection"},"502":{"description":"Proxmox configuration unavailable"}}
+      }
+    },
+    "/api/simple/labs/packs/{id}": {
+      "get": {"summary":"Reopen an imported pack","description":"Review the portable manifest, script source and required task prompts.","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Reopen an imported pack","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabInspection"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"}}}
+    },
+    "/api/simple/labs/packs/{id}/export": {
+      "get": {"summary":"Download an imported pack","description":"Returns its original ZIP bytes.","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Download an imported pack","content":{"application/zip":{"schema":{"type":"string","format":"binary"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"}}}
+    },
+    "/api/simple/labs/plan": {
+      "post": {"summary":"Review a lab deployment","description":"Use discovered local source IDs and fresh credentials. Cloud and placement settings use guided defaults. Match any named Windows edition. Review lasts 30 minutes.","parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["pack_id"],"properties":{"pack_id":{"type":"string"},"bindings":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/LabBinding"}},"secrets":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/LabSecrets"}}},"additionalProperties":false}}}},"responses":{"200":{"description":"Review a lab deployment","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabReview"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}}
+    },
+    "/api/simple/labs/run": {
+      "post": {
+        "summary": "Confirm a reviewed lab deployment",
+        "description": "Supply existing_confirmed=true for existing roles and risk_confirmed=true when dangerous. Jobs and dependencies are committed atomically. Reconfirming the same review returns the same run.",
+        "parameters": [{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","required":["plan_id","confirmed"],"properties":{"plan_id":{"type":"string"},"confirmed":{"type":"boolean"},"risk_confirmed":{"type":"boolean"},"existing_confirmed":{"type":"boolean"}},"additionalProperties":false}}}},
+        "responses": {"202":{"description":"Confirm a reviewed lab deployment","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabRun"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}
+      }
+    },
+    "/api/simple/labs/runs": {
+      "get": {"summary":"List lab deployments","description":"Returns runs on the selected server with individual machine status.","responses":{"200":{"description":"List lab deployments","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/LabRun"}}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"}}}
+    },
+    "/api/simple/labs/runs/{id}": {
+      "get": {"summary":"Read lab deployment status","description":"Follow each job URL for installation and guest task results.","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Read lab deployment status","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabRun"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"404":{"description":"Deployment unavailable on this server"}}}
+    },
     "/api/state": {
       "get": {
         "summary": "Live node, guest, storage, bridge and ISO inventory",

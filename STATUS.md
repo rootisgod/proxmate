@@ -2,6 +2,22 @@
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
+## Portable lab packs
+
+**Create → Lab packs → Create lab** is live. It supports new machines, blueprints based on existing VMs, and ordered scripts on an explicitly mapped existing guest. The `Tools rollout` example is saved on the dashboard. Its live review proposed a new Ubuntu VM on `nuc` followed by a curl package task on the existing `ubuntu-pm` VM. Reading `win-dctst` as a blueprint recovered its guided installation settings and a fresh DSRM password prompt. These checks stopped at review and the job and run histories stayed unchanged.
+
+Version 1 packs continue to create new machines. Version 2 adds in-place task roles with separate deployment approval. Mixed-lab worker tests cover atomic confirmation, stale target identities, changed disks and credentials, guest readiness and failed prerequisites. The browser check saved all three choices in one pack and exercised mapping and review on isolated inventory.
+
+The saved **Ubuntu tools lab** example was imported, downloaded byte-for-byte and reviewed against `nuc`. It proposed one Ubuntu cloud VM with curl and an embedded Ansible directory task.
+
+An isolated two-dashboard test transferred a Windows build across different databases and storage catalogs after its source script was edited. A browser test exercised ZIP upload, review, confirmation and saved-pack reuse. Queue tests cover repeated confirmation, partial failure, independent branches and restart during guest readiness. The Ubuntu example's directory task ran twice in a disposable container and reported a change only on the first pass. The [pack specification](static/lab-packs.md) describes both versions.
+
+## Windows domain controller verification
+
+On `nuc`, build `d3c270f4409dc81b57cd000211fd6630` completed promotion and the next customization before its final firewall task failed. Authenticated WinRM checks on the original guest verified the forest root, domain controller role, running AD DS, DNS and Netlogon services, SYSVOL and NETLOGON shares, and both public desktop shortcuts. The NetSecurity cmdlet rejected PowerShell Boolean arguments for its `Enabled` enum. Both corrected enum names passed a live `-WhatIf` check. The job checkpoint retained all 11 completed tasks.
+
+The operator chose to leave all three firewall profiles enabled. The failed final step was not retried.
+
 ## Ubuntu Server LTS installer qualification
 
 The amd64 live-server ISOs on `nuc` matched Canonical’s published SHA-256 checksums for [22.04.5](https://releases.ubuntu.com/22.04.5/SHA256SUMS), [24.04.5](https://releases.ubuntu.com/24.04.5/SHA256SUMS) and [26.04.1](https://releases.ubuntu.com/26.04.1/SHA256SUMS). The wizard reads the release and installation sources from each selected ISO. Standard and Minimized use the same vendor disc.

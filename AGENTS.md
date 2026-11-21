@@ -14,6 +14,8 @@ Keep the guide aligned with the API handlers and [OpenAPI specification](static/
 
 When a documented example changes, update its assertions and verify it against the test lab. The Windows example is exercised by `python -m pytest -q tests/test_simple_flow.py::test_agent_guide_example_reviews_without_creating_a_job`, which submits the guide's request for review and checks that the job queue stays empty.
 
+Treat published lab packs and versioned built-in task references as compatibility contracts. Version 1 creates new guests. In-place task roles require version 2, an explicit local target, and separate approval. Keep authoring free of infrastructure changes and login secrets. When changing portable settings, script resolution or deployment behavior, update [the pack specification](static/lab-packs.md) and run `python -m pytest -q tests -k lab`. Verify that an archive still works on a second dashboard with an empty script library and fresh credentials.
+
 ## Keep changes easy to reason about
 
 - Before coding, trace one real caller through validation, storage and execution. Identify the owning module, the contract it promises and a focused test. Use the [codebase-quality skill](.agents/skills/codebase-quality/SKILL.md) in Continuous mode for routine work, Audit for assessment and Improve for selected refactors.

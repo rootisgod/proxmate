@@ -27,7 +27,7 @@ import windows_build
 import windows_setup
 from provisioning import PROFILES,LOCALES,windows_setup_key,windows_options
 from guest_tasks import DOMAIN_CONTROLLER, public_params, selected_drive_letters
-from vm_config import machine_identity, vm_path
+from vm_config import lab_machine_identity, machine_identity, vm_path
 
 LINUX_INSTALLERS = {'ubuntu': ubuntu_build, 'debian': debian_build, 'rocky': rocky_build}
 ISO_PROFILES = {'ubuntu': 'ubuntu-24.04', 'debian': 'debian-13', 'rocky': 'rocky-10'}
@@ -150,8 +150,15 @@ class SimpleFlow:
             selections=[self.m.select_task(item,draft.get('params',{}))]
         else:
             selections=self.m.task_selection(d.get('tasks'))
+        discovered=self.discover_connections(targets,selections,d)
+        return self.m.create_plan(dict(operation='tasks',targets=targets),selections=selections,discovered=discovered)
+
+    def discover_connections(self,targets,selections,d,*,lab=False):
+        """Prepare missing guest logins without publishing them before the caller commits."""
         bindings={r['id']:r for r in self.m.all('connections')}
         missing=[t for t in targets if management.target_id(t) not in bindings]
+        if lab and not missing and ('credential_id' in d or 'credential' in d):
+            raise ValueError('This machine already has a saved guest connection. Use its configured login.')
         discovered={}
         if missing:
             if d.get('credential_id'): credential=self.m.get('credentials',d['credential_id'])
@@ -162,9 +169,16 @@ class SimpleFlow:
             else: raise ValueError('Choose a saved login or enter a username and password for these machines')
             p=operations.Proxmox();resources=p.resources()
             for t in missing:
-                if not any(r.get('node')==t['node'] and r.get('vmid')==t['vmid'] and r.get('type')=='qemu' and not r.get('template') for r in resources): raise ValueError('Choose existing virtual machines')
+                guest=next((r for r in resources if r.get('node')==t['node'] and r.get('vmid')==t['vmid']
+                            and r.get('type')=='qemu' and not r.get('template')),None)
+                if not guest: raise ValueError('Choose existing virtual machines')
                 if any(s['item']['platform']!=credential['platform'] for s in selections): raise ValueError('The login and scripts must use the same operating system')
                 path=f'nodes/{t["node"]}/qemu/{t["vmid"]}/agent/'
+                if lab:
+                    if guest.get('status')!='running': raise ValueError('Choose a running guest for existing-machine tasks.')
+                    config=p.call('GET',vm_path(t)+'/config')
+                    identity=lab_machine_identity(config)
+                    if config.get('template') or not identity: raise ValueError('Choose a non-template QEMU VM with a stable UUID.')
                 try:
                     interfaces=p.call('GET',path+'network-get-interfaces')
                     hosts={a['ip-address'] for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]) if a.get('ip-address-type')=='ipv4' and not ipaddress.ip_address(a['ip-address']).is_loopback and not ipaddress.ip_address(a['ip-address']).is_link_local}
@@ -176,12 +190,23 @@ class SimpleFlow:
                             if credential['platform']=='linux': raise
                             # Existing Windows listeners may chain to a system-trusted CA.
                     record=self.m.prepare('connections',binding,credential)
+                    if lab: record['machine_identity']=identity
                     discovered['connections',record['id']]=record
                 except Exception as exc:
                     raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Operations > Refresh connection to verify its address and login.') from exc
-        return self.m.create_plan(dict(operation='tasks',targets=targets),selections=selections,discovered=discovered)
+        return discovered
 
     def plan(self,d,progress=lambda stage:None):
+        plan,summary=self.review_build(d,progress)
+        ident=uuid.uuid4().hex
+        with self.m.db() as con: con.execute('INSERT INTO plans VALUES (?,?,?)',(ident,time.time(),self.m.encode(plan)))
+        cfg=plan['configs'][0]
+        diagnostics.event('plan.ready',plan_id=ident,platform=plan['recipe']['settings']['os'],
+                          source_kind=cfg.get('source_kind'),machine_count=len(plan['configs']))
+        return dict(id=ident,**summary)
+
+    def review_build(self,d,progress=lambda stage:None,*,selections=None,inventory=None,other_configs=()):
+        """Review one guided build. A lab can reserve earlier choices within its own review."""
         if not isinstance(d,dict): raise ValueError('Supply wizard settings')
         reused=None
         if 'reuse' in d:
@@ -199,7 +224,7 @@ class SimpleFlow:
             windows_build.check_iso_disk_letters(d.get('data_disks', []))
         progress('inventory')
         with diagnostics.stage('inventory'):
-            inv=operations.inventory(include_backups=False,only_node=d.get('node'))
+            inv=inventory if inventory is not None else operations.inventory(include_backups=False,only_node=d.get('node'))
             options=discovery(inv) if d.get('node') else self.options(inv,include_templates=False)
         dest=next((n for n in options['destinations'] if n['node']==d.get('node',options['destinations'][0]['node'])),None)
         if not dest: raise ValueError('The chosen server is no longer available')
@@ -223,7 +248,7 @@ class SimpleFlow:
             raise ValueError('Finish SSH setup on the Server page so Proxmate can read media and prepare images')
         requests=d.get('tasks',[])
         if not isinstance(requests,list): raise ValueError('Choose software or saved scripts')
-        selections=self.m.task_selection(requests) if requests else []
+        if selections is None: selections=self.m.task_selection(requests) if requests else []
         if any(s['item']['id']==DOMAIN_CONTROLLER for s in selections) and (count!=1 or purpose!='vm'):
             raise ValueError('Create one working Windows VM for the first domain controller.')
         requested_tasks=[dict(id=s['item']['id'],params=public_params(s)) for s in selections]
@@ -332,6 +357,8 @@ class SimpleFlow:
                         raise ValueError('Windows Terminal requires Desktop Experience and Windows build 19041 or later')
         used={r['vmid'] for r in inv['resources'] if r.get('vmid')}
         names={r.get('name','').lower() for r in inv['resources']}
+        used.update(c['vmid'] for c in other_configs)
+        names.update(c['name'].lower() for c in other_configs)
         with self.m.db() as con:
             # Proxmox can release a VM ID while its guest connection is still pinned here.
             saved_connections={row['id'] for row in con.execute("SELECT id FROM records WHERE kind='connections'")}
@@ -399,8 +426,13 @@ class SimpleFlow:
                 cfg.update(kind=os+'-clone',source_kind='template',iso_storage=dest['iso_storage'],
                            disk=template['disk_gib'],template=template)
             configs.append(cfg);used.add(vmid);vmid+=1
-        available=next(s for s in inv['details'][dest['node']]['storage'] if s['storage']==dest['storage']).get('avail')
-        if available is not None and sum((0 if (cloning or linux_clone) and template['mode']=='linked' else c['disk'])+sum(disk['size'] for disk in c.get('data_disks',[])) for c in configs)*1073741824>available:
+        store=next(s for s in inv['details'][dest['node']]['storage'] if s['storage']==dest['storage'])
+        available=store.get('avail')
+        placement=[*configs,*(c for c in other_configs if c['storage']==dest['storage']
+                              and (c['node']==dest['node'] or store.get('shared')))]
+        needed=sum((0 if c.get('template',{}).get('mode')=='linked' else c['disk'])
+                   +sum(disk['size'] for disk in c.get('data_disks',[])) for c in placement)
+        if available is not None and needed*1073741824>available:
             raise ValueError('Not enough free disk space for this batch. Reduce the quantity or choose a storage with more space under Placement and hardware.')
         plan=dict(operation='simple-build',configs=configs,credential=credential,tasks=selections,purpose=purpose,
             source=source if linux_iso else d.get('source','') if os=='windows' else profile,media_identity=inspected['identity'] if inspected else None,
@@ -411,10 +443,7 @@ class SimpleFlow:
         if reused and any(reused[k]!=recipe[k] for k in ('media_identity','template_identity')):
             raise ValueError('The saved installation source changed. Review the new source in the Create wizard.')
         plan['recipe']=recipe
-        ident=uuid.uuid4().hex
-        with self.m.db() as con: con.execute('INSERT INTO plans VALUES (?,?,?)',(ident,time.time(),self.m.encode(plan)))
-        diagnostics.event('plan.ready',plan_id=ident,platform=os,source_kind=configs[0].get('source_kind'),machine_count=count)
-        return dict(id=ident,machines=[{k:c[k] for k in ('vmid','name','node','memory','cores','disk','storage','bridge')} for c in configs],
+        return plan,dict(machines=[{k:c[k] for k in ('vmid','name','node','memory','cores','disk','storage','bridge')} for c in configs],
             edition=plan['edition'],purpose=purpose,tasks=[{'name':t['item']['name'],'params':public_params(t),'dangerous':bool(t['item'].get('dangerous'))} for t in selections],dangerous=plan['dangerous'],
             rdp=bool(configs[0].get('windows',{}).get('rdp')),clone_mode=template['mode'] if cloning or linux_clone else None,data_disks=[{k:v for k,v in disk.items() if k in ('size','label','letter')} for disk in configs[0].get('data_disks',[])],
             remote_access='HTTPS WinRM' if os=='windows' else ('SSH with workstation keys' if personal_keys else 'SSH'),
@@ -438,31 +467,38 @@ class SimpleFlow:
         if plan.get('operation')!='simple-build': raise ValueError('Choose a build plan')
         if d.get('confirmed') is not True: raise ValueError('Confirm the listed new machines, software and Windows licensing before creating')
         if plan['dangerous'] and d.get('risk_confirmed') is not True: raise ValueError('Confirm the selected sensitive settings or custom scripts')
-        credential=plan['credential']
-        jobs=[]
         with self.m.db() as con:
             con.execute('BEGIN IMMEDIATE')
-            reserved_ids,reserved_names=reserved_targets(con,self.m.decode)
-            for i,cfg in enumerate(plan['configs']):
-                ident=hashlib.sha256((d['plan_id']+':'+str(i)).encode()).hexdigest()[:32]
-                jobs.append({'id':ident,'name':cfg['name'],'url':'/api/jobs/'+ident})
-                if con.execute('SELECT 1 FROM jobs WHERE id=?', (ident,)).fetchone():
-                    continue
-                if cfg['vmid'] in reserved_ids or cfg['name'].lower() in reserved_names:
-                    raise ValueError('Another job reserved this machine name or VM ID. Review the build again.')
-                require_unbound_target(con,cfg)
-                # A still-open review may have been generated before the ISO letter reservation.
-                if cfg['kind'] == 'windows' and cfg.get('source_kind') != 'template':
-                    windows_build.check_iso_disk_letters(cfg.get('data_disks', []))
-                execution={k:plan[k] for k in ('tasks','purpose','source','media_identity')};execution.update(operation='build '+cfg['name'],config=cfg,edition=plan.get('edition'))
-                if plan.get('recipe'): execution['recipe']=plan['recipe']
-                payload=dict(action='simple',server_id=operations.connection_provider.current()['id'],plan=execution,name=cfg['name'],node=cfg['node'],vmid=cfg['vmid'])
-                con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',(ident,'simple','queued',time.time(),time.time(),self.m.encode(payload),'Queued: create, prepare remote access, install software.'))
-            if not con.execute('SELECT 1 FROM records WHERE kind=? AND id=?', ('credentials', credential['id'])).fetchone():
-                saved = self.m.prepare('credentials', credential)
-                con.execute('INSERT INTO records VALUES (?,?,?)', ('credentials', saved['id'], self.m.encode(saved)))
+            jobs=self.queue_build(con,plan,d['plan_id'],operations.connection_provider.current()['id'])
         for j in jobs: diagnostics.event('job.queued',job_id=j['id'],plan_id=d['plan_id'],action='simple')
         return dict(jobs=jobs)
+
+    def queue_build(self,con,plan,plan_key,server_id,*,lab_run_id=None):
+        """Insert the reviewed build and login within the caller's write transaction."""
+        credential=plan['credential']
+        jobs=[]
+        reserved_ids,reserved_names=reserved_targets(con,self.m.decode)
+        for i,cfg in enumerate(plan['configs']):
+            ident=hashlib.sha256((plan_key+':'+str(i)).encode()).hexdigest()[:32]
+            jobs.append({'id':ident,'name':cfg['name'],'url':'/api/jobs/'+ident})
+            if con.execute('SELECT 1 FROM jobs WHERE id=?', (ident,)).fetchone():
+                continue
+            if cfg['vmid'] in reserved_ids or cfg['name'].lower() in reserved_names:
+                raise ValueError('Another job reserved this machine name or VM ID. Review the build again.')
+            require_unbound_target(con,cfg)
+            # A still-open review may have been generated before the ISO letter reservation.
+            if cfg['kind'] == 'windows' and cfg.get('source_kind') != 'template':
+                windows_build.check_iso_disk_letters(cfg.get('data_disks', []))
+            execution={k:plan[k] for k in ('tasks','purpose','source','media_identity')}
+            execution.update(operation='build '+cfg['name'],config=cfg,edition=plan.get('edition'))
+            if plan.get('recipe'): execution['recipe']=plan['recipe']
+            payload=dict(action='simple',server_id=server_id,plan=execution,name=cfg['name'],node=cfg['node'],vmid=cfg['vmid'])
+            if lab_run_id: payload['lab_run_id']=lab_run_id
+            con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',(ident,'simple','queued',time.time(),time.time(),self.m.encode(payload),'Queued: create, prepare remote access, install software.'))
+        if not con.execute('SELECT 1 FROM records WHERE kind=? AND id=?', ('credentials', credential['id'])).fetchone():
+            saved = self.m.prepare('credentials', credential)
+            con.execute('INSERT INTO records VALUES (?,?,?)', ('credentials', saved['id'], self.m.encode(saved)))
+        return jobs
 
     def execute(self,plan,log,job_id):
         cfg=copy.deepcopy(plan['config'])

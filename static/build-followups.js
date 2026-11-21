@@ -63,6 +63,7 @@ function repeatGuidedBuild(recipe,reuse){
       submittedBuilds(result.jobs);
       $('#manage-dialog').close();await refresh();
     },'Create '+(recipe.purpose==='template'?'template':'VM'));
+    $('#manage-fields .build-review').append(reviewedLabExport(plan));
   },'Review build');
 }
 
@@ -95,7 +96,8 @@ function jobFollowupActions(job,log){
   if(job.reusable_build&&job.server_id===serverInfo?.id){
     const actions=document.createElement('div');actions.className='row-actions';
     actions.append(buildButton('Create another like this',()=>repeatGuidedBuild(job.reusable_build,{job_id:job.id})),
-      buildButton('Save this build',()=>saveGuidedRecipe({job_id:job.id},job.target.name)));
+      buildButton('Save this build',()=>saveGuidedRecipe({job_id:job.id},job.target.name)),
+      buildButton('Export lab',()=>composeLab([{name:job.target.name,source:{job_id:job.id}}])));
     section.append(actions);
   }
   if(job.task_recovery?.server_id===serverInfo?.id){

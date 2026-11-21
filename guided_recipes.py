@@ -5,6 +5,7 @@ import uuid
 from flask import jsonify, request
 
 import management
+import lab_exchange
 import operations
 import linux_access
 import linux_install
@@ -85,7 +86,7 @@ def restore_historical_tasks(settings, selections):
 
 
 def from_job(payload):
-    if payload.get('action') != 'simple':
+    if payload.get('action') != 'simple' or payload.get('lab_run_id'):
         return None
     plan = payload['plan']
     if 'recipe' in plan:
@@ -164,9 +165,21 @@ class GuidedRecipes:
                     raise ValueError('Choose a reviewed guided build.')
                 recipe = plan['recipe']
             else:
-                recipe = self.lookup({'job_id': data.get('job_id')})
+                payload = lab_exchange.job_payload(self.manager, data.get('job_id'))
+                recipe = from_job(payload)
+                if not recipe:
+                    raise ValueError('Reusable settings are unavailable for this build.')
+                plan = payload['plan']
             ident = uuid.uuid4().hex
-            self.manager.put('guided-recipes', dict(id=ident, name=name, recipe=recipe))
+            saved = dict(id=ident, name=name, recipe=recipe)
+            if plan.get('recipe'):
+                # Reusing a saved build follows the current library. A portable export must
+                # keep the reviewed script even after the library entry is edited or removed.
+                try:
+                    saved['pack_snapshot'] = lab_exchange.snapshot(plan, recipe)
+                except ValueError as exc:
+                    saved['pack_export_error'] = str(exc)
+            self.manager.put('guided-recipes', saved)
             return jsonify(id=ident, name=name, **description(recipe)), 201
 
         @app.post('/api/simple/recipes/<ident>/delete')

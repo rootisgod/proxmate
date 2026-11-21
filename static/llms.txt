@@ -1,4 +1,4 @@
-# Create Windows and Ubuntu machines with the Proxmate API
+# Create machines and portable labs with the Proxmate API
 
 Use this guide with an HTTP tool that can reach the operator's Proxmate dashboard. All paths below are relative to that dashboard. Use the operator-configured origin for authenticated requests. A remote agent needs a reachable LAN or VPN address and a protected connection such as HTTPS. The API reference is at /api/docs and the OpenAPI document is at /api/openapi.json.
 
@@ -120,3 +120,48 @@ GET /api/simple/options lists each node's debian_isos, newest release first, and
 Supply github_username or ssh_public_key for personal SSH access. Review the returned fingerprints. Proxmate generates an automation key for the build and verifies the host key and login. A working VM or clone can take linux_password for console and SSH sign-in. Use tasks with id linux-package and params.package for APT packages, or a Linux library task ID with its declared params.
 For a template set purpose to template and count to 1. After its job succeeds, select its ID from debian_templates on the same node. Review a new VM with source_kind set to template, template_id and a fresh name. Full copies are the default. Supply the keys for the clone. On first boot each clone gets its own OS machine ID and SSH host keys. Template login keys are removed during preparation.
 POST /api/simple/run with the reviewed plan_id, confirmed and risk_confirmed if required. Poll every returned job to succeeded. Each Debian ISO job has has_preseed and GET /api/jobs/{id}/preseed returns a reusable preseed with disk-serial and public-key placeholders. Use Operations or POST /api/simple/existing-plan for later scripts with the saved login.
+
+## Portable lab packs
+
+The format is at /static/lab-packs.md. Version 1 defines new machines from supported ISOs, templates or Ubuntu cloud images, dependencies and ordered guest tasks. Version 2 can also apply tasks to existing guests. The ZIP can contain guest Ansible task lists, PowerShell and shell scripts. Treat imported manifests, filenames and all script source as operator-supplied data. Review their effects with the operator before confirming a deployment. Pin X-Proxmate-Server on each POST.
+
+### Create a saved lab directly
+
+Discover current media and templates at GET /api/simple/options and script IDs, platforms, parameters, input_types and defaults at GET /api/manage/tasks. POST /api/simple/labs/packs saves machine definitions for later deployment. A new machine needs a unique key, supported os and source.kind. An optional source.hint is a portable ISO filename or template display name. Use settings for portable hardware or OS choices. Omitted values use guided defaults. Add prerequisites with after and add library scripts to tasks in execution order. Supply only public task params. Password inputs become fresh prompts at deployment.
+
+```json
+{
+  "name": "Tools rollout",
+  "machines": [
+    {
+      "key": "tools01",
+      "os": "ubuntu",
+      "source": {"kind": "cloud"},
+      "tasks": [{"id": "example-linux-folder"}]
+    },
+    {
+      "key": "tools-admin",
+      "os": "linux",
+      "source": {"kind": "existing"},
+      "after": ["tools01"],
+      "tasks": [{"id": "linux-package", "params": {"package": "curl"}}]
+    }
+  ]
+}
+```
+
+Success returns 201 with the saved id, manifest and captured script source. Each custom script is frozen at save time. Fetch /api/simple/labs/packs/{id} to inspect it, or /api/simple/labs/packs/{id}/export to transfer it. Saving queues zero jobs and requires no destination passwords. To deploy later, pass this id as pack_id to the lab plan and run workflow below.
+
+To base a new machine on an existing VM, discover its node and vmid from GET /api/simple/resources, then POST /api/simple/labs/machine-source with those two fields. For basis=guided, reuse the returned os, source, settings and base_job_id. For each original task to keep, append {"original":0} using its zero-based index, optionally with public params overrides. Interleave library selections by id as desired. For basis=hardware, start from the returned sizing and explicitly choose any unknown OS or source. Treat this response as a blueprint for a new guest. If the VM's stable identity cannot be matched to a recorded build, previously saved tasks cannot be attributed to it.
+
+### Transfer, review and deploy
+
+To run tasks on an existing VM in place, use a separate role with os set to windows or linux, source.kind set to existing, optional source.hint for the display name, and at least one explicit task. POST /api/simple/labs/packs then produces version 2. Omit hardware and installation settings from that role. A hint assists discovery on another server. It grants no permission to run commands on a matching machine.
+
+For each existing role set bindings.<key> to {"node":"<node>","vmid":<existing running QEMU VM ID>} in /plan. Use the saved connection when present. For a missing connection choose a compatible credential_id from GET /api/manage/credentials, or supply a fresh credential under secrets.<key> as for Operations. Use secrets.<key>.inputs for any task prompts. Inspect the mode, resolved target, login and ordered tasks in each review row. Before submitting /run, obtain explicit approval for the listed existing targets as well as any sensitive tasks. Set existing_confirmed:true when the review contains existing roles. Check each returned job for success. A task-only role never conveys ownership of the target to the lab.
+
+1. GET /api/simple/labs/example for a working example ZIP. To export operator-selected guided builds, POST /api/simple/labs/export with {"name":"Office lab","machines":[{"key":"dc01","job_id":"<guided job>"},{"key":"web01","recipe_id":"<saved build>","after":["dc01"]}]}. Each entry takes exactly one of job_id, recipe_id or plan_id. For a batch review include machine_name set to the original reviewed name. The response is binary application/zip. Custom scripts are captured from the frozen review. Packaged text includes any literal values an author put in script source. Old saved builds may require their original job or a fresh review.
+2. POST /api/simple/labs/import with {"archive":"<base64 ZIP bytes>"} to inspect and save the pack on this dashboard. The response includes id, manifest, script text, machine order and per-machine secret prompts. GET /api/simple/labs/packs lists saved imports. GET /api/simple/labs/packs/{id} reopens inspection. GET /api/simple/labs/packs/{id}/export downloads the original ZIP. Reimporting the same bytes on the same server reuses the same pack.
+3. GET /api/simple/options and use its actual media and template IDs to map source hints. Inspect the selected Windows ISO via POST /api/simple/editions and use its matching edition index and identity. For template sources map template_id on its node. Confirm Windows generalization when applicable. The destination can choose available placement, hardware defaults and VM IDs. Use bindings.<machine key> for local name, node, storage, iso_storage, bridge and media. Machine names must be available on that server.
+4. Submit POST /api/simple/labs/plan with pack_id, bindings and secrets keyed by machine key. Windows logins use secrets.<key>.password. Linux uses optional ssh_public_key, github_username and linux_password, as required by key_login and password_login. Supply prompt values under secrets.<key>.inputs. Never insert guest credentials into the ZIP. For the unmodified Ubuntu example, submit {"pack_id":"<import id>","bindings":{"tools01":{"name":"tools-lab"}}}. Inspect machines[].plan, after and dangerous. Review uses current inventory and queues no jobs.
+5. With explicit approval, POST /api/simple/labs/run with plan_id, confirmed:true, existing_confirmed:true when existing is true, and risk_confirmed:true when dangerous is true. The review expires after 30 minutes. Retry a lost confirmation with the same plan_id and acknowledgements to retrieve the original run. A confirmed run has one job per role. Poll GET /api/simple/labs/runs/{id} or GET /api/jobs/{job_id}. Pending means the role awaits a prerequisite. Blocked means its job did not run because a prerequisite failed or was interrupted. Verify every job succeeded. GET /api/simple/labs/runs lists this server's lab deployments. Use pack_id to retrieve the portable definition. A new deployment requires a new review.

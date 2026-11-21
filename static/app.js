@@ -4,13 +4,13 @@ function requestId(){
   const bytes=crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 }
-async function api(path,body,extraHeaders={}){
+async function api(path,body,extraHeaders={},responseType='json'){
   const selectedId=typeof serverInfo!=='undefined'?(serverInfo?.id??null):null;
   const headers=body?{'Content-Type':'application/json','X-CSRF-Token':csrf,'X-Proxmate-Server':selectedId||'','X-Request-ID':requestId(),...extraHeaders}:{...extraHeaders};
   let r,data;
   try{
     r=await fetch('/api/'+path,{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined});
-    data=await r.json();
+    data=r.ok&&responseType==='blob'?await r.blob():await r.json();
   }catch{
     const id=r?.headers?.get('X-Request-ID')||headers['X-Request-ID'];
     const error=Error('The dashboard could not reach the server. Check the connection and retry.'+(id?' Request '+id:''));
@@ -157,6 +157,9 @@ async function pollDashboard(){
     const selected=await api('server');
     if(revision!==refreshVersion)return;
     if(selected.id!==serverInfo?.id||selected.connected!==serverInfo?.connected){await refresh();return}
+    const labRun=$('#lab-run');
+    if(labRun&&['queued','running','waiting'].includes(labRun.dataset.status))await updateLabRun(labRun);
+    if(revision!==refreshVersion)return;
     const previous=jobs.map(j=>j.id+':'+j.status).join(',');
     const nextJobs=await api('jobs?summary=1');
     if(revision!==refreshVersion)return;
