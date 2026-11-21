@@ -360,6 +360,7 @@ class Lifecycle:
                 raise BootstrapTargetChanged('Created VM identity changed; setup wait stopped before guest access.')
             waiting='Waiting for QEMU guest agent discovery; remote access has not yet been verified'
             p.call('GET',path+'/agent/get-osinfo')
+            waiting='Guest agent is running; waiting for completed remote-access setup'
             if platform=='windows':
                 try:
                     progress=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-status.json')
@@ -369,11 +370,12 @@ class Lifecycle:
                 stages={'configuring-winrm':'Configuring HTTPS WinRM', 'waiting-windows-setup':'Waiting for Windows Setup to finish; no login is required',
                         'installing-guest-tools':'Installing verified guest tools', 'retry-guest-tools':'WinRM configured; retrying guest-tool installation',
                         'retry-winrm':'Guest tools running; retrying HTTPS WinRM setup', 'retry-winrm-and-guest-tools':'Retrying HTTPS WinRM and guest-tool setup'}
-                if stage in stages: raise ValueError(stages[stage])
-            waiting='Guest agent is running; waiting for completed remote-access setup'
+                # The agent may hold the progress file open while the guest finishes.
+                # The completion markers below are written after setup and guest tools succeed.
+                waiting=stages.get(stage,waiting)
             if d['kind']!='ubuntu-clone':
                 marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
-                if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
+                if marker.get('content','').strip()!='ready': raise ValueError(waiting)
             if d['kind'] in ('ubuntu-iso','ubuntu-clone'):
                 hostinfo=p.call('GET',path+'/agent/get-host-name').get('result',{})
                 if hostinfo.get('host-name','').split('.')[0].casefold()!=d['name'].casefold():

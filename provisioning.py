@@ -145,6 +145,8 @@ def answer_xml(settings, preview=False, bootstrap=None, *, clone=False):
         # A template may have a different installed display language from the ISO defaults.
         if tag!='UILanguage' or not clone: add(intl,tag,d[field])
     shell = component(oobe,'Microsoft-Windows-Shell-Setup')
+    if clone and d['accept_eula']:
+        add(add(shell, 'OOBE'), 'HideEULAPage', True)
     if d.get('admin_password'):
         password = add(add(shell,'UserAccounts'),'AdministratorPassword')
         add(password,'Value','[REDACTED]' if preview else d['admin_password']); add(password,'PlainText',True)

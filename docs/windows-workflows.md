@@ -70,6 +70,8 @@ The guided Windows wizard implements both source paths. **Full copy** is the def
 
 Each clone gets setup media for the specialize and OOBE passes, a fresh bootstrap identity and the requested computer name. Proxmate waits for the new guest to report that name and its per-clone marker, verifies its HTTPS login, then prepares up to three newly allocated data disks and applies software. The job log links to the console and the archived answer files. A failed or interrupted mutation leaves the VM available for inspection.
 
+When sealing a guided Windows template, Proxmate points Windows Setup at the answer on the clone's single DVD using its device path. This continues to work when Windows changes the DVD drive letter after Sysprep. It removes the cached source answer, including the Windows Panther backup. The clone honors the licensing confirmation made during review and clears the temporary DVD path after setup. For templates built with earlier versions, check for an inherited `C:\Windows\Panther\unattend-original.xml` before sharing a clone. If it contains a source login that was shared, rotate that login. [Windows Setup answer-file search order](https://learn.microsoft.com/windows-hardware/manufacture/desktop/windows-setup-automation-overview#implicit-answer-file-search-order) · [Windows Welcome license page setting](https://learn.microsoft.com/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-oobe-hideeulapage)
+
 ISO names are grouped for discovery. The edition list comes from the selected image. Each generated answer is saved encrypted with the job. The reusable ZIP contains placeholders for the password and product key. An explicit original download includes credentials. Archives begin with builds performed on this version.
 
 The script library supports named inputs and defaults on saved Ansible task lists. Scripts and input values are frozen during build review. The machine page supports targeted WinRM inspection, a reviewed firewall scope and console commands. A successful login supplies the verification time shown in inventory. GitHub synchronization is deferred.
@@ -97,6 +99,24 @@ Get-Content -Raw tests/live_windows_build.py | docker compose exec -T proxmate p
 ~~~
 
 ### Disposable-guest acceptance
+
+#### Run the template and clone test
+
+The opt-in runner creates a Windows template from the edition and placement of an earlier accepted Windows ISO job, installs 7-Zip and waits for Sysprep and shutdown. It creates two full clones with separate logins. One receives a 2 GiB NTFS disk on R: and the example Ansible folder task with a new folder name. The other inherits just the base configuration. Allow storage for three system disks and the extra volume.
+
+Run from the repository in PowerShell with the dashboard connected to the intended node. The test reads saved logins inside the container and prints job IDs for the dashboard. It leaves the test machines available for inspection.
+
+~~~powershell
+$qaPath = (docker compose exec -T proxmate mktemp -d /tmp/proxmate-win-test-XXXXXXXX).Trim()
+docker compose cp tests/live_windows_build.py "proxmate:$qaPath/live_windows_build.py"
+docker compose cp tests/live_windows_template.py "proxmate:$qaPath/live_windows_template.py"
+$sourceJob = Read-Host 'Earlier Windows Desktop Experience ISO job ID'
+docker compose exec -T -e PYTHONPATH=/app -w $qaPath proxmate python -u live_windows_template.py --source-job $sourceJob --node nuc
+~~~
+
+To continue an existing test, use `--template-job <printed template job ID>` in place of `--source-job`. The runner reuses the matching clone jobs from recent dashboard history and checks their source. It verifies hostname, edition, disk layout, 7-Zip, the folder override and the HTTPS listener through WinRM. It downloads each reusable answer archive and rechecks the original template configuration at the end.
+
+#### Acceptance criteria
 
 1. Create a Server 2022 or 2025 template from a known ISO with one small Chocolatey package. Verify the edition, package, successful Sysprep and powered-off template.
 2. Create two differently named clones. Give one a new data disk and a parameterized task. Compare their Windows names and certificate thumbprints. Check the new volume, task result and answer-file downloads. Confirm that the base template and the second guest kept their original disks.

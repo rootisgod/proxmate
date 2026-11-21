@@ -80,6 +80,53 @@ Describe 'Windows bootstrap without a user login' {
     }
 }
 
+Describe 'Windows bootstrap progress reporting' {
+    It 'continues when the guest agent has the previous status open' {
+        $script:Root = $TestDrive
+        Write-ProxmateStatus 'configuring-winrm'
+        $path = Join-Path $TestDrive 'bootstrap-status.json'
+        $reader = [IO.File]::Open($path, 'Open', 'Read', 'Read')
+        try {
+            Write-ProxmateStatus 'installing-guest-tools'
+            ([IO.File]::ReadAllText($path) | ConvertFrom-Json).stage | Should Be 'configuring-winrm'
+        } finally { $reader.Dispose() }
+        Write-ProxmateStatus 'ready'
+        ([IO.File]::ReadAllText($path) | ConvertFrom-Json).stage | Should Be 'ready'
+    }
+}
+
+Describe 'Windows clone setup handoff' {
+    BeforeEach {
+        $script:Root = $TestDrive
+        $script:CloneToken = 'disposable-test-token'
+        $script:setup = [pscustomobject]@{SystemSetupInProgress=0;OOBEInProgress=1;UnattendFile='D:\Autounattend.xml'}
+        $script:dvd = [pscustomobject]@{VolumeName='PROXMATE_SETUP';Drive='D:'}
+        $script:removed = $false
+        Mock Get-ItemProperty { return $script:setup } -ParameterFilter { $LiteralPath -eq 'HKLM:\SYSTEM\Setup' }
+        Mock Get-CimInstance { return $script:dvd }
+        Mock Remove-ItemProperty {
+            if ($LiteralPath -ne 'HKLM:\SYSTEM\Setup' -or $Name -ne 'UnattendFile') { throw 'Unexpected registry change' }
+            $script:removed = $true
+        }
+    }
+    It 'waits for Windows Welcome to finish on a clone' {
+        Test-ProxmateWindowsSetupComplete | Should Be $false
+        $script:setup.OOBEInProgress = 0
+        Test-ProxmateWindowsSetupComplete | Should Be $true
+    }
+    It 'releases the consumed DVD path before publishing the clone marker' {
+        $script:setup.UnattendFile = '\\?\GLOBALROOT\Device\CdRom0\Autounattend.xml'
+        Set-ProxmateReady
+        $script:removed | Should Be $true
+        [IO.File]::ReadAllText((Join-Path $TestDrive 'clone-ready')) | Should Be ($script:CloneToken+'|'+$env:COMPUTERNAME)
+    }
+    It 'keeps an answer path on other media' {
+        $script:dvd.Drive = 'E:'
+        Set-ProxmateReady
+        $script:removed | Should Be $false
+    }
+}
+
 Describe 'Stable WinRM certificate across retries' {
     BeforeEach {
         $script:CloneToken = ''

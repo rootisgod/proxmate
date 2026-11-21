@@ -145,7 +145,7 @@ The worker saves a checkpoint after VM creation. While verification is pending, 
 
 For interactive Linux ISOs, use **Task library > Guest bootstrap helper** after installation. Downloading never executes it. Inspect the script and run elevated only inside the intended guest. The Windows helper also exports its public certificate to `C:\ProgramData\Proxmate\winrm.pem`, which can be entered in Connection settings. Downloaded answer XML alone does not include the helper: use the generated answer ISO flow or provide its matching script alongside it.
 
-The guided Windows template workflow generalizes the guest and clears cached setup answers and bootstrap certificate material. The guided clone wizard supplies its own first-boot media and provisions a new guest certificate. For manually cloned guests, run the standalone helper after configuring the guest’s name and network, then test the login.
+The guided Windows template workflow generalizes the guest, clears the cached source answers and bootstrap certificate, and points Windows Setup at the next clone’s DVD. The guided clone wizard supplies first-boot media and provisions a new guest certificate. The [Windows workflow guide](docs/windows-workflows.md) includes the live template-and-clone test and guidance for older templates. For manually cloned guests, run the standalone helper after configuring the guest’s name and network, then test the login.
 
 ## Backup recovery and retention
 

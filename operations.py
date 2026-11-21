@@ -328,16 +328,19 @@ def execute(d, log):
     elif a == 'start':
         task(f'{base}/{vmid}/status/start')
     elif a == 'convert-template':
-        if guests[vmid]['status'] != 'stopped' or guests[vmid].get('template'):
+        # The cluster resource list can lag a completed shutdown or a recent start.
+        if p.call('GET', f'{base}/{vmid}/status/current').get('status') != 'stopped':
             raise ValueError('Guest must be stopped and not already a template')
         current=p.call('GET', f'{base}/{vmid}/config')
+        if current.get('template'): raise ValueError('Guest must be stopped and not already a template')
         if 'proxmate-unattend-' in str(current.get('sata1', '')):
             raise ValueError('Use Finish setup to remove answer media before converting')
         if 'proxmate-ubuntu-' in str(current.get('ide2', '')):
             raise ValueError('Detach Ubuntu setup media before converting')
         task(f'{base}/{vmid}/template')
     elif a == 'finish-setup':
-        if guests[vmid]['status'] != 'stopped': raise ValueError('Shut down the VM before removing setup media')
+        if p.call('GET', f'{base}/{vmid}/status/current').get('status') != 'stopped':
+            raise ValueError('Shut down the VM before removing setup media')
         config = p.call('GET', f'{base}/{vmid}/config')
         volume = config.get('sata1', '').split(',')[0]
         if not re.fullmatch(r'[A-Za-z0-9_.-]+:iso/proxmate-unattend-' + str(vmid) + r'-[a-f0-9]{32}\.iso', volume):

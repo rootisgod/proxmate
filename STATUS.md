@@ -2,6 +2,22 @@
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
+## Unattended Windows templates and full clones
+
+The live dashboard completed a Windows Server 2025 Standard (Desktop Experience) ISO-to-template build and two full clones on `nuc`. The [repeatable acceptance test](docs/windows-workflows.md#run-the-template-and-clone-test) submitted all three builds through the dashboard and checked the resulting guests over certificate-verified WinRM. The clean run required no console input.
+
+| VM | Dashboard job | Verified result |
+| --- | --- | --- |
+| 150 · `pwt-a6b62473` | `aa4fa0c83d78ee47688daa5e843580f5` | Installed 7-Zip, completed Sysprep, and remained a stopped template with the same configuration after both clones. |
+| 151 · `pwa-a6b62473` | `15d84c43cff4ec120d734e6986cb6139` | Accepted its own login, inherited 7-Zip, formatted the 2 GiB NTFS volume `PMData` on R:, and created `C:\PmToolsa6b62473` from the example Ansible task's input. |
+| 152 · `pwb-a6b62473` | `a94e4ceae30de734caacbf0dc3bee39b` | Accepted a separate login, inherited 7-Zip, and had only the Windows system disk. The first clone's folder was absent. |
+
+Both clones finished Windows Welcome, reported the requested hostname and edition, used distinct HTTPS listener certificates, and released the setup DVD reference. The source template's cached answer was absent from the checked setup paths. Each job returned a reusable redacted answer archive. The node's storage metadata confirmed independent disk volumes for both clones.
+
+The live tests reproduced stale cluster power status after shutdown, a drive-letter change between installation and cloning, an extra cached Windows answer containing the source password, and a guest-agent lock on the progress file. New template builds check power on the hosting node, clear cached answers around Sysprep and direct Windows Setup to the clone DVD by device path. Progress reporting tolerates a sharing violation while guest completion and authentication remain mandatory. The changes apply to newly sealed templates. Inspect older Windows templates before sharing them.
+
+After the clean pass, diagnostic VMs 143–149, their disks and the remaining generated answer ISO were removed. All seven job histories and the original Windows and VirtIO installer ISOs were retained. The dashboard lists 150 as a stopped template and 151 and 152 as running VMs with verified connections. Validation passed with 282 Python tests, 51 UI tests, 18 Windows bootstrap tests, 11 disk-format cases with mocked storage, and the network-isolated container checks.
+
 ## Guided saved builds and guest task recovery
 
 Create now lists saved Windows and Ubuntu builds. A guided review or job can supply the settings for a named build. The next review checks the source, allocates available IDs and asks for fresh login secrets. Activity offers a reviewed continuation from per-VM guest task checkpoints. Completed tasks stay complete and competing recovery reviews can claim the same remaining work only once.
@@ -98,7 +114,7 @@ Backend tests cover secrets, plan immutability, duplicate submission, stale iden
 
 ## Remaining real-server validation
 
-- On disposable Windows guests, verify Sysprep, two differently named clones, their distinct WinRM identities, and a data disk on just one clone. The [Windows acceptance checklist](docs/windows-workflows.md#disposable-guest-acceptance) gives the steps.
+- Exercise Windows Operations recovery on a disposable guest with a stopped WinRM service and with the guest agent unavailable. The [Windows acceptance checklist](docs/windows-workflows.md#disposable-guest-acceptance) describes the remaining cases.
 - On a fresh guided Ubuntu build, use a workstation public key and sign in with the SSH command from the completion notification. The existing-guest check above verified address selection and the command.
 - Use approved disposable targets and archives for snapshot restore, backup retention, scheduled operations and CPU/RAM changes. Mobile and multi-node checks also remain open.
 - The earlier nested Hyper-V test still has an unresolved DHCP issue. The November 20 guest checks used the homelab Proxmox node.

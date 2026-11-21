@@ -64,6 +64,7 @@ class LiveTest:
         self.cipher = Fernet(base64.urlsafe_b64encode(hashlib.sha256((data / 'session-key').read_text().strip().encode()).digest()))
         self.http = requests.Session()
         self.http.trust_env = False
+        self.base_url = 'http://127.0.0.1:' + os.environ.get('PORT', '8080') + '/api/'
         self.http.headers['Authorization'] = 'Bearer ' + (data / 'api-token').read_text().strip()
         server = self.api('server')
         require(server.get('connected'), 'Connect the dashboard to the source Proxmox server first')
@@ -72,7 +73,7 @@ class LiveTest:
 
     def api(self, path, body=None):
         response = self.http.request('GET' if body is None else 'POST',
-                                     'http://127.0.0.1:' + os.environ.get('PORT', '8080') + '/api/' + path,
+                                     self.base_url + path,
                                      json=body, allow_redirects=False, timeout=(5, 240))
         if not response.ok:
             raise RuntimeError(f'{path}: HTTP {response.status_code}: ' + str(response.json().get('error', 'request failed')))
@@ -138,6 +139,10 @@ class LiveTest:
         cfg = plan['config']
         require(re.fullmatch(r'pmt-[0-9a-f]{8}', cfg['name']) and cfg['kind']=='windows', 'Choose a test VM job')
         print(f'Watching job {ident} on {cfg["node"]}:{cfg["vmid"]}. Resume this check with --verify-job {ident}.', flush=True)
+        self.wait(ident)
+        self.verify(ident, plan)
+
+    def wait(self, ident):
         previous = None
         deadline = time.monotonic() + 3*3600
         while time.monotonic() < deadline:
@@ -155,14 +160,12 @@ class LiveTest:
                 print(state, *last, flush=True)
                 previous = state,last
             if state == 'succeeded':
-                break
+                return job
             require(state in ('queued','waiting','running'), 'Build ended with status '+state)
             time.sleep(10)
-        else:
-            raise TimeoutError('Monitoring timed out; use --verify-job to continue watching the same job')
-        self.verify(ident, plan)
+        raise TimeoutError('Monitoring timed out. Resume the acceptance test using its printed job ID.')
 
-    def verify(self, ident, plan):
+    def verified_guest(self, ident, plan):
         cfg = plan['config']
         target = {'node': cfg['node'], 'vmid': cfg['vmid']}
         machine = self.api('simple/machine',target)
@@ -175,6 +178,11 @@ class LiveTest:
                 and binding['credential_id'] == credential['id'] and binding['credential_revision'] == credential['updated']
                 and binding.get('ca_pem') and binding['verify_tls'] and binding['host'] in {i['host'] for i in machine['addresses']},
                 'Guest identity, address or verified login has changed')
+        return machine, binding, credential
+
+    def verify(self, ident, plan):
+        cfg = plan['config']
+        machine, binding, credential = self.verified_guest(ident, plan)
         def check(label, script, **params):
             task = {'ansible.windows.win_powershell': {'script':script, 'parameters':params}}
             try:

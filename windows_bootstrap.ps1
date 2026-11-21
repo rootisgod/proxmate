@@ -57,7 +57,11 @@ function Get-ProxmateAttempt {
 
 function Write-ProxmateStatus([string]$stage) {
     $data = @{stage=$stage; updated=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Compress
-    [IO.File]::WriteAllText((Join-Path $script:Root 'bootstrap-status.json'), $data)
+    try { [IO.File]::WriteAllText((Join-Path $script:Root 'bootstrap-status.json'), $data) }
+    catch [IO.IOException] {
+        # The guest agent can hold this optional progress file open during a poll.
+        if (($_.Exception.GetBaseException().HResult -band 0xffff) -notin @(32,33)) { throw }
+    }
 }
 
 function Write-ProxmateFailure([string]$stage, $failure) {
@@ -68,7 +72,7 @@ function Write-ProxmateFailure([string]$stage, $failure) {
 
 function Test-ProxmateWindowsSetupComplete {
     $setup = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\Setup'
-    return $setup.SystemSetupInProgress -eq 0
+    return $setup.SystemSetupInProgress -eq 0 -and (!$script:CloneToken -or !$setup.OOBEInProgress)
 }
 
 function Enable-ProxmateWinRM {
@@ -167,7 +171,18 @@ function Install-ProxmateGuestTools {
 }
 
 function Set-ProxmateReady {
-    if ($script:CloneToken) { [IO.File]::WriteAllText((Join-Path $script:Root 'clone-ready'), ($script:CloneToken + '|' + $env:COMPUTERNAME)) }
+    if ($script:CloneToken) {
+        # This DVD will be ejected. Leave other Windows Setup answer paths alone.
+        $key = 'HKLM:\SYSTEM\Setup'
+        $answer = (Get-ItemProperty -LiteralPath $key -Name UnattendFile -ErrorAction SilentlyContinue).UnattendFile
+        if ($answer -eq '\\?\GLOBALROOT\Device\CdRom0\Autounattend.xml') {
+            Remove-ItemProperty -LiteralPath $key -Name UnattendFile
+        } elseif ($answer -match '^[D-Z]:\\Autounattend\.xml$') {
+            $dvd = Get-CimInstance Win32_CDROMDrive | Where-Object { $_.VolumeName -eq 'PROXMATE_SETUP' -and $_.Drive -eq $answer.Substring(0,2) }
+            if ($dvd) { Remove-ItemProperty -LiteralPath $key -Name UnattendFile }
+        }
+        [IO.File]::WriteAllText((Join-Path $script:Root 'clone-ready'), ($script:CloneToken + '|' + $env:COMPUTERNAME))
+    }
     [IO.File]::WriteAllText((Join-Path $script:Root 'bootstrap-ready'), 'ready')
 }
 

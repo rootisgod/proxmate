@@ -124,6 +124,18 @@ def test_linux_versions_and_static_network_validation():
         with pytest.raises(ValueError):operations.validate(dict(d,**update))
 
 
+@pytest.mark.parametrize('accepted', [True, False])
+def test_clone_oobe_honors_the_reviewed_windows_license(accepted):
+    settings = dict(windows(), accept_eula=accepted, wipe_disk=False)
+    if not accepted:
+        with pytest.raises(ValueError, match='Confirm Windows licensing'):
+            answer_xml(settings, clone=True)
+    root = ET.fromstring(answer_xml(settings, clone=True, preview=not accepted))
+    hide = root.find("u:settings[@pass='oobeSystem']/u:component[@name='Microsoft-Windows-Shell-Setup']/u:OOBE/u:HideEULAPage", NS)
+    assert (hide is not None and hide.text == 'true') == accepted
+    assert root.find("u:settings[@pass='windowsPE']", NS) is None
+
+
 def test_checksums_exact_filename():
     digest='a'*64
     assert checksum_for(f'{digest} *image.qcow2','image.qcow2')==digest
@@ -194,13 +206,39 @@ def test_changed_guest_agent_msi_stops_before_upload_or_vm_creation(monkeypatch)
     assert not any(method!='GET' for method,_,_ in p.calls)
 
 
+@pytest.mark.parametrize('action', ['finish-setup', 'convert-template'])
+@pytest.mark.parametrize('local_status,cluster_status', [('stopped','running'),('running','stopped')])
+def test_template_preparation_uses_node_status_at_the_time_of_action(monkeypatch, action, local_status, cluster_status):
+    host = FakeProxmox()
+    host.resources = lambda: [{'type':'node','node':'pve','status':'online'},
+                              {'type':'qemu','node':'pve','vmid':9123,'status':cluster_status}]
+    generated = 'local:iso/proxmate-unattend-9123-' + 'a'*32 + '.iso'
+    def call(method, path, **args):
+        host.calls.append((method,path,args))
+        if path.endswith('/status/current'): return {'status':local_status}
+        if path.endswith('/config') and method == 'GET':
+            return {'sata1':generated+',media=cdrom'} if action == 'finish-setup' else {}
+        return 'UPID:test'
+    host.call = call
+    monkeypatch.setattr(operations,'Proxmox',lambda:host)
+    job = dict(action=action,node='pve',vmid=9123,prepared=True)
+    if local_status == 'running':
+        with pytest.raises(ValueError,match='Shut down|must be stopped'):
+            operations.execute(job,lambda _:None)
+        assert all(method == 'GET' for method,_,_ in host.calls)
+    else:
+        operations.execute(job,lambda _:None)
+        writes = [method for method,_,_ in host.calls if method != 'GET']
+        assert writes == (['PUT','DELETE'] if action == 'finish-setup' else ['POST'])
+
+
 def test_finish_setup_never_deletes_arbitrary_media(monkeypatch):
     p=FakeProxmox()
     p.resources=lambda:[{'type':'node','node':'pve','status':'online'},{'type':'qemu','node':'pve','vmid':9123,'status':'stopped'}]
-    p.call=Mock(return_value={'sata1':'local:iso/important.iso,media=cdrom'})
+    p.call=Mock(side_effect=[{'status':'stopped'},{'sata1':'local:iso/important.iso,media=cdrom'}])
     monkeypatch.setattr(operations,'Proxmox',lambda:p)
     with pytest.raises(ValueError,match='No Proxmate-generated'):operations.execute({'action':'finish-setup','node':'pve','vmid':9123,'prepared':True},lambda s:None)
-    assert p.call.call_count==1
+    assert all(call.args[0]=='GET' for call in p.call.call_args_list)
 
 
 @pytest.mark.parametrize('reason', ['normal', 'changed-vm', 'changed-media', 'stopped', 'old-boot', 'late-start', 'api-error'])

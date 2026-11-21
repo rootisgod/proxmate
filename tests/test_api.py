@@ -158,7 +158,9 @@ def test_running_guest_cannot_be_converted(monkeypatch):
         def resources(self): return [
             {'type': 'node', 'node': 'pve', 'status': 'online'},
             {'type': 'qemu', 'node': 'pve', 'vmid': 9001, 'status': 'running'}]
-        def call(self, *a, **kw): pytest.fail('Must not convert running guest')
+        def call(self, method, path, **kw):
+            assert (method, path) == ('GET', 'nodes/pve/qemu/9001/status/current')
+            return {'status':'running'}
     monkeypatch.setattr(operations, 'Proxmox', Fake)
     with pytest.raises(ValueError, match='must be stopped'):
         operations.execute({'action': 'convert-template', 'node': 'pve', 'vmid': 9001, 'prepared': True}, lambda x: None)

@@ -13,6 +13,8 @@ WINDOWS_GENERALIZE=r'''
 $ErrorActionPreference='Stop'
 $root='C:\ProgramData\Proxmate'
 if (-not (Test-Path "$root\Bootstrap.ps1")) { throw 'Bootstrap helper missing; refusing template conversion' }
+# A guided clone boots with one DVD. Windows can reassign drive letters after Sysprep.
+$cloneAnswer = '\\?\GLOBALROOT\Device\CdRom0\Autounattend.xml'
 # A clone must generate its own WinRM certificate and readiness marker.
 $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\Proxmate\Bootstrap.ps1'
 $trigger=New-ScheduledTaskTrigger -AtStartup
@@ -25,7 +27,7 @@ Get-ChildItem WSMan:\localhost\Listener | Where-Object { $_.Keys -contains 'Tran
 Unregister-ScheduledTask -TaskName 'Proxmate-Bootstrap' -Confirm:$false -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath "$root\winrm.pem","$root\bootstrap-ready","$root\winrm-ready","$root\winrm-state.json","$root\bootstrap-attempt","$root\bootstrap-status.json" -Force -ErrorAction SilentlyContinue
 function Remove-ProxmateCachedAnswer {
-  foreach ($file in @('C:\Windows\Panther\unattend.xml','C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml')) {
+  foreach ($file in @('C:\Windows\Panther\unattend.xml','C:\Windows\Panther\unattend-original.xml','C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml')) {
     if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force -ErrorAction Stop }
   }
 }
@@ -34,6 +36,8 @@ $process=Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" 
 if ($process.ExitCode -ne 0) { throw 'Sysprep failed; VM retained for inspection' }
 # Generalization can cache the still-attached installer answer again.
 Remove-ProxmateCachedAnswer
+# Generalized Windows can skip implicit DVD discovery during specialize.
+New-ItemProperty -LiteralPath 'HKLM:\SYSTEM\Setup' -Name UnattendFile -Value $cloneAnswer -PropertyType String -Force | Out-Null
 '''
 
 

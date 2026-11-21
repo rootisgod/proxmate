@@ -34,6 +34,7 @@ def recovery(service,monkeypatch):
                 if path.endswith('/storage/local/content'):return copy.deepcopy(self.archives)
                 if path.endswith('/vzdump/extractconfig'):return '\n'.join(k+': '+str(v) for k,v in self.configs[201].items() if k!='digest')
                 if path.endswith('/config'):return copy.deepcopy(self.configs[vmid])
+                if path.endswith('/status/current'):return dict(self.guests[vmid])
                 if path.endswith('/agent/get-osinfo'):
                     if self.fail_agent:raise RuntimeError('Agent unavailable')
                     return {'result':{'id':'linux','name':'Test OS'}}
@@ -329,6 +330,8 @@ def test_windows_bootstrap_reports_safe_stage_and_blocks_tasks(recovery,monkeypa
     def call(method,path,**kw):
         if kw.get('file','').endswith('bootstrap-status.json'):
             return {'content':json.dumps({'stage':stage,'error':'private diagnostic must not be shown'})}
+        if kw.get('file','').endswith('bootstrap-ready'):
+            raise RuntimeError('Guest has not written its completion marker')
         return original(method,path,**kw)
     fake.call=call
     def forbidden(*a,**kw):pytest.fail('No authentication/tasks before guest setup completes')
@@ -338,6 +341,24 @@ def test_windows_bootstrap_reports_safe_stage_and_blocks_tasks(recovery,monkeypa
     with pytest.raises((lifecycle.BootstrapPending,lifecycle.BootstrapFailed),match=expected):probe(app,d)
     assert app.manager.all('connections')==[]
     assert 'private diagnostic' not in '\n'.join(logs)
+
+
+def test_completed_windows_bootstrap_with_locked_progress_still_checks_guest_login(recovery,monkeypatch):
+    app,_,_,fake=recovery
+    c=app.manager.save('credentials',dict(name='Guest',platform='windows',username='Administrator',password='test-password'))
+    original=fake.call
+    def call(method,path,**kw):
+        if kw.get('file','').endswith('bootstrap-status.json'):
+            return {'content':json.dumps({'stage':'configuring-winrm'})}
+        return original(method,path,**kw)
+    fake.call=call
+    def reject_login(*args,**kwargs):
+        raise RuntimeError('Test guest refused login')
+    monkeypatch.setattr(lifecycle,'run_guest',reject_login)
+    d=dict(node='pve',vmid=201,kind='windows',bootstrap={'verify':True,'credential_id':c['id'],'timeout':60})
+    with pytest.raises(lifecycle.BootstrapPending,match='Authenticated HTTPS WinRM'):
+        probe(app,d)
+    assert app.manager.all('connections')==[]
 
 
 def test_missing_agent_is_distinct_from_winrm_authentication_failure(recovery,monkeypatch):
