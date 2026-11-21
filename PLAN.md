@@ -2,7 +2,9 @@
 
 The [everyday Windows workflows](docs/windows-workflows.md) describe the intended template, clone and ISO experience, acceptance criteria and disposable-guest validation.
 
-## Proposed next release — Rocky Linux 10
+## Rocky Linux 10 DVD provisioning
+
+Completed on 2026-11-21. A working ISO VM, reusable template, two independent full clones and a parameterized Operations run passed on `nuc`. The implementation uses verified SSH to prepare the template and preserves Rocky's SELinux policy. [Live release checks](STATUS.md#rocky-linux-10-guided-builds)
 
 Start with **Rocky Linux 10 x86_64 DVD** and the same two entry points as Debian. **Create** builds a working VM or a reusable template. **Operations** runs library or one-off Ansible tasks later using the saved SSH login and the playbook's declared inputs.
 
@@ -16,9 +18,11 @@ Start with **Rocky Linux 10 x86_64 DVD** and the same two entry points as Debian
 
 **Release checks.** Validate generated answers with a Rocky 10–compatible Kickstart parser. Cover wrong media, media changes, CPU incompatibility, disk mismatch, missing keys on a clone and secret-free downloads. Run `python -m pytest -q`, `node --test tests/ui.test.cjs` and the isolated container checks. Then deploy with the queue idle and adapt the Debian acceptance test to create one working VM, a fresh template and two full clones on `nuc`. Verify independent disks, hostnames, machine IDs and SSH host keys, absence of template login keys, inherited `jq`, and a parameterized Operations task applied to only one clone. Retain job histories and any failed guests for diagnosis. If the release fails, restore the previous application image with the queue idle.
 
-**After the DVD passes.** Qualify Rocky 9 minimal for older hosts, including how it obtains any missing bootstrap packages. Test the network repositories and failure messages separately before offering boot ISOs.
+**Rocky 10 network media.** Exercise the 10.3 Boot and Minimal ISOs independently on `nuc`. Boot supplies Anaconda and downloads the OS. Minimal supplies its package set locally, with Rocky's matching HTTPS repositories providing cloud-init and the QEMU guest agent. For each image, verify an unattended VM, a sealed template, independent full clones, and a targeted Operations run. Keep the DVD as the first choice within the same release. Rocky 9 qualification for older hosts remains separate.
 
 ## Ubuntu Server 24.04 ISO provisioning
+
+The original 24.04 milestone below also underpins guided 22.04 and 26.04 installations. Standard VMs, Minimized templates, two full clones per release and targeted Ansible runs have passed on all three amd64 LTS series. [Ubuntu Server LTS installer qualification](STATUS.md#ubuntu-server-lts-installer-qualification)
 
 1. Discover Ubuntu Server 24.04 amd64 ISOs in Proxmox and the local library. Verify the selected media before review and again before boot. Keep the existing cloud image path available and focus this milestone on Ubuntu 24.04. Debian 13 subsequently passed its [live release checks](STATUS.md#debian-13-guided-builds).
 2. Generate a small NoCloud boot ISO for Subiquity autoinstall. Allocate one new VM and system disk, put the system disk first in the boot order, and use the selected Ubuntu ISO for the installer. Install OpenSSH and the guest agent. Freeze validated GitHub public keys and any pasted public key into the review alongside Proxmate's automation key. Archive a reusable installer configuration with the build.

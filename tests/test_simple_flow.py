@@ -54,7 +54,7 @@ def test_ubuntu_iso_review_freezes_keys_and_downloads_reusable_config(simple_lab
     options = client.get('/api/simple/options',headers=headers).json
     assert [item['id'] for item in options['destinations'][0]['ubuntu_isos']] == [source]
     assert options['ubuntu']['firewall']['default'] == 'Ubuntu default'
-    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:dict(release='Ubuntu 24.04',identity='ubuntu-v1'))
+    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:dict(release='Ubuntu 24.04',identity='ubuntu-v1',profile='ubuntu-24.04',install_sources={'ubuntu-server':(200,2048)}))
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
     key = Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.OpenSSH,PublicFormat.OpenSSH).decode()
@@ -88,13 +88,47 @@ def test_ubuntu_iso_review_freezes_keys_and_downloads_reusable_config(simple_lab
     assert yaml.safe_load(download.text)['autoinstall']['ssh']['authorized-keys']==[]
 
 
+@pytest.mark.parametrize('series,point,catalog_version',[('22.04','5',1),('24.04','5',1),('26.04','1',2)])
+def test_ubuntu_installer_uses_verified_release_and_catalog(simple_lab,monkeypatch,series,point,catalog_version):
+    from contextlib import nullcontext
+    app,client,headers,inv=simple_lab
+    source=f'local:iso/ubuntu-{series}.{point}-live-server-amd64.iso'
+    inv['details']['lab']['isos'].append({'volid':source})
+    entries=[dict(id=key,path=key+'.squashfs') for key in ubuntu_build.INSTALL_SOURCES]
+    catalog=entries if catalog_version==1 else dict(version=2,sources=entries)
+    info=f'Ubuntu-Server {series}.{point} LTS "Server" - Release amd64'
+    blobs={'/.disk/info':info.encode(),'/casper/install-sources.yaml':yaml.safe_dump(catalog).encode()}
+    files={'/casper/vmlinuz','/casper/initrd',*('/casper/'+e['path'] for e in entries)}
+    monkeypatch.setattr(media,'open_iso',lambda *args:nullcontext(object()))
+    def entry(iso,path,*,open_file=False):
+        if open_file:return io.BytesIO(blobs[path]) if path in blobs else None
+        if path in files:return SimpleNamespace(extent_location=lambda:31,get_data_length=lambda:512)
+    monkeypatch.setattr(media,'image_entry',entry)
+    draft=dict(os='ubuntu',name='ubuntu-lab',source_kind='iso',source=source)
+    for choice in ubuntu_build.INSTALL_SOURCES:
+        review=client.post('/api/simple/plan',json=dict(draft,ubuntu_install_source=choice),headers=headers)
+        assert review.status_code==200,review.json
+        plan=app.manager.load_plan(review.json['id'])
+        cfg=plan['configs'][0]
+        assert cfg['profile']==plan['recipe']['settings']['profile']=='ubuntu-'+series
+        assert plan['recipe']['settings']['ubuntu_install_source']==choice
+        assert review.json['edition'].endswith(ubuntu_build.INSTALL_SOURCES[choice])
+        assert yaml.safe_load(cfg['reusable_autoinstall'])['autoinstall']['source']=={'id':choice}
+    files.remove('/casper/ubuntu-server-minimal.squashfs')
+    for changes in ({'ubuntu_install_source':'ubuntu-server-minimal'}, {'profile':'ubuntu-99.04'}):
+        assert client.post('/api/simple/plan',json=dict(draft,**changes),headers=headers).status_code==400
+    blobs['/.disk/info']=info.replace(series,'20.04').encode()
+    assert client.post('/api/simple/plan',json=draft,headers=headers).status_code==400
+    assert client.get('/api/jobs',headers=headers).json==[]
+
+
 def test_ubuntu_password_is_optional_and_kept_out_of_review_and_installer(simple_lab,monkeypatch):
     app,client,headers,inv = simple_lab
     from passlib.hash import sha512_crypt
 
     source='local:iso/ubuntu-24.04-live-server-amd64.iso'
     inv['details']['lab']['isos'].append({'volid':source})
-    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:dict(release='Ubuntu 24.04',identity='ubuntu-v1'))
+    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:dict(release='Ubuntu 24.04',identity='ubuntu-v1',profile='ubuntu-24.04',install_sources={'ubuntu-server':(200,2048)}))
     draft=dict(os='ubuntu',source_kind='iso',source=source,name='noble',username='labadmin')
     none=client.post('/api/simple/plan',json=draft,headers=headers).json
     assert none['password_login'] is False and none['tasks']==[]
@@ -116,17 +150,20 @@ def test_ubuntu_password_is_optional_and_kept_out_of_review_and_installer(simple
     assert client.post('/api/simple/plan',json=dict(draft,ubuntu_password='short'),headers=headers).status_code==400
 
 
-@pytest.mark.parametrize('distro',['ubuntu','debian'])
+@pytest.mark.parametrize('distro',['ubuntu','debian','rocky'])
 def test_linux_clone_requires_the_recorded_os_and_machine_identity(simple_lab,monkeypatch,distro):
     app,client,headers,inv=simple_lab
     source=dict(type='qemu',node='lab',vmid=201,name='ubuntu-base',status='stopped',template=1,maxdisk=32*2**30)
     inv['resources'][1]=source
-    config=dict(name='ubuntu-base',template=1,ostype='l26',net0='virtio=02:00:00:00:00:01,bridge=vmbr0',
+    config=dict(name='ubuntu-base',template=1,ostype='l26',cpu='host',net0='virtio=02:00:00:00:00:01,bridge=vmbr0',
                 scsi0='disks:base-201-disk-0',ide2='disks:vm-201-cloudinit,media=cdrom',vmgenid='base-id')
 
     class Host:
         def resources(self): return inv['resources']
         def call(self,method,path):
+            if method=='GET' and path=='nodes/lab/status':
+                from rocky_build import V3_FLAGS
+                return {'cpuinfo':{'flags':' '.join(V3_FLAGS)}}
             assert method=='GET' and path=='nodes/lab/qemu/201/config'
             return config
 
@@ -174,9 +211,13 @@ def test_ubuntu_iso_uses_proxmox_firmware_and_display_defaults(monkeypatch):
     monkeypatch.setattr(ubuntu_build,'boot_iso',lambda *a:None)
     monkeypatch.setattr(operations,'upload_generated',lambda *a:boot)
     assert linux_install.install(cfg,source,'iso','job',lambda line:None,installer_module=ubuntu_build)['boot_volume']==boot
+    cfg.update(ubuntu_install_source='ubuntu-server-minimal',ubuntu_source_record=[31,512])
+    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:{'identity':'iso','install_sources':{'ubuntu-server-minimal':(33,512)}})
+    with pytest.raises(ValueError,match='media changed'):
+        linux_install.install(cfg,source,'iso','job',lambda line:None,installer_module=ubuntu_build)
 
 
-@pytest.mark.parametrize('distro',['ubuntu','debian'])
+@pytest.mark.parametrize('distro',['ubuntu','debian','rocky'])
 def test_installer_template_writes_cloud_init_with_post_shutdown_digest(simple_lab,monkeypatch,distro):
     from lifecycle import machine_identity
 
@@ -192,9 +233,10 @@ def test_installer_template_writes_cloud_init_with_post_shutdown_digest(simple_l
             if endpoint=='exec':
                 script=args['command'][-1]
                 assert 'cloud-init clean --logs --machine-id --seed' in script
-                if distro=='debian':
+                if distro in ('rocky','debian'):
                     assert script.index('test "$(cat /etc/machine-id)" = uninitialized') > script.index('cloud-init clean')
                     assert 'ln -sfT /etc/machine-id /var/lib/dbus/machine-id' in script
+                if distro=='rocky': assert '/root/anaconda-ks.cfg' in script and '/etc/network/interfaces' not in script
                 return {'pid':1}
             if endpoint=='exec-status':
                 return {'exited':True,'exitcode':0}
@@ -212,9 +254,22 @@ def test_installer_template_writes_cloud_init_with_post_shutdown_digest(simple_l
 
     monkeypatch.setattr(operations,'Proxmox',Host)
     monkeypatch.setattr(operations,'execute',lambda cfg,log: state.update(converted=cfg['action']=='convert-template'))
-    template_finish.finish(dict(kind=distro+'-iso',node='lab',vmid=202,username=distro,storage='disks'),
+    if distro=='rocky':
+        identity=machine_identity(configuration)
+        binding=dict(machine_identity=identity,credential_id='login',credential_revision=1,verified_at=1,become=True,fingerprint='test')
+        monkeypatch.setattr(app.manager,'get',lambda kind,ident:binding if kind=='connections' else {'updated':1})
+        monkeypatch.setattr(template_finish.management,'agent_trust',lambda *a,**kw:{'fingerprint':'test'})
+        monkeypatch.setattr(template_finish.management,'verify_guest_access',lambda *a:None)
+        def run(binding,credential,tasks,log):
+            script=tasks[0]['ansible.builtin.shell']['cmd']
+            assert 'cloud-init clean --logs --machine-id --seed' in script and '/etc/proxmate/ssh-host.pub' in script
+            assert '/root/anaconda-ks.cfg' in script and '/etc/network/interfaces' not in script
+            state['sealed_with_ssh']=True
+        monkeypatch.setattr(template_finish,'run_guest',run)
+    template_finish.finish(dict(kind=distro+'-iso',node='lab',vmid=202,username=distro,storage='disks',bootstrap={'credential_id':'login'}),
                            app.manager,lambda message:None,machine_identity(configuration))
     assert state['cloud_init'] and state['converted']
+    if distro=='rocky': assert state['sealed_with_ssh']
 
 
 def test_agent_guide_example_reviews_without_creating_a_job(simple_lab):

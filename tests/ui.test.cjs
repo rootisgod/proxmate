@@ -479,30 +479,60 @@ test('failed ISO inspection can be retried after a redraw without losing the for
   }finally{f.close()}
 });
 
-test('Debian Create discovers its own ISO, offers SSH and reviews Linux packages',async()=>{
+for(const [os,filename] of [['debian','debian-13.7.0-amd64-DVD-1.iso'],['rocky','Rocky-10.3-x86_64-dvd1.iso']])
+  test(os+' Create discovers its own ISO, offers SSH and reviews Linux packages',async()=>{
   const f=await fixture({},true),{w}=f,fetch=w.fetch;
   w.fetch=async(url,opts)=>{
     const response=await fetch(url,opts);
     if(url==='/api/simple/options'){
       const data=await response.json();
-      data.destinations[0].debian_isos=[{id:'ssd:iso/debian-13.7.0-amd64-DVD-1.iso',label:'Debian 13.7 DVD'}];
-      data.debian={packages:[{id:'jq',name:'jq'}]};
+      data.destinations[0][os+'_isos']=[{id:'ssd:iso/'+filename,label:filename}];
+      data[os]={packages:[{id:'jq',name:'jq'}]};
     }
     return response;
   };
   try{
-    await f.build('debian');
+    await f.build(os);
     const form=w.document.querySelector('#simple-form');
-    assert.equal(form.elements.username.value,'debian');
-    assert.match(form.elements.source.value,/13.7.0/);
+    assert.equal(form.elements.username.value,os);
+    assert.equal(form.elements.source.value,'ssd:iso/'+filename);
     assert.deepEqual(Array.from(form.elements.source_kind.options,o=>o.value),['iso']);
     const next=async()=>{form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle()};
     await next();
     form.querySelector('[name=common_program][value=jq]').click();
     await next();
     const plan=f.calls.find(c=>c[0]==='/api/simple/plan')[1];
-    assert.equal(plan.os,'debian');
+    assert.equal(plan.os,os);
     assert.deepEqual(plan.tasks,[{id:'linux-package',params:{package:'jq'}}]);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('Ubuntu ISO review sends the selected Minimized image and derives its release from media',async()=>{
+  const f=await fixture({},true),{w}=f,fetch=w.fetch;
+  const source='ssd:iso/ubuntu-26.04.1-live-server-amd64.iso';
+  w.fetch=async(url,opts)=>{
+    const response=await fetch(url,opts);
+    if(url==='/api/simple/options'){
+      const options=await response.json();
+      options.destinations[0].ubuntu_isos=[{id:source,label:'Ubuntu Server 26.04.1'}];
+      options.ubuntu={release:'Ubuntu Server LTS',install_sources:{'ubuntu-server':'Standard','ubuntu-server-minimal':'Minimized'},
+        packages:[],firewall:{default:'Ubuntu default'},updates:{default:'Ubuntu default'}};
+    }
+    return response;
+  };
+  try{
+    await f.build('ubuntu');
+    const form=w.document.querySelector('#simple-form');
+    assert.equal(form.elements.ubuntu_install_source.value,'ubuntu-server');
+    form.elements.ubuntu_install_source.value='ubuntu-server-minimal';
+    for(let step=0;step<2;step++){
+      form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
+    }
+    const plan=f.calls.find(c=>c[0]==='/api/simple/plan')[1];
+    assert.equal(plan.source,source);
+    assert.equal(plan.ubuntu_install_source,'ubuntu-server-minimal');
+    assert.equal(plan.profile,undefined);
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });

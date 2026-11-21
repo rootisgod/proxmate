@@ -19,6 +19,7 @@ import windows_artifacts
 import winrm_setup
 from provisioning import answer_recorder
 import debian_build
+import rocky_build
 import linux_install
 import ubuntu_build
 from lifecycle import BootstrapPending, WaitForGuest
@@ -193,6 +194,7 @@ def state():
     result=inventory()
     for image in result.get('local_isos',[]):
         if debian_build.ISO_NAME.fullmatch(image['name']): image['guided_os']='debian'
+        elif rocky_build.ISO_NAME.fullmatch(image['name']): image['guided_os']='rocky'
         elif ubuntu_build.ISO_NAME.fullmatch(image['name']): image['guided_os']='ubuntu'
     return jsonify(result)
 
@@ -232,6 +234,8 @@ def job_view(row, detail_db=None):
             result['has_autoinstall']=True
         if payload['action']=='simple' and target.get('kind')=='debian-iso':
             result['has_preseed']=True
+        if payload['action']=='simple' and target.get('kind')=='rocky-iso':
+            result['has_kickstart']=True
         if payload['action']=='simple' and result['status']=='succeeded' and plan.get('purpose')=='vm':
             if target.get('kind') in ('linux-cloud', *linux_install.ISO_KINDS, *linux_install.CLONE_KINDS): result['remote_kind']='ssh'
             elif target.get('windows',{}).get('rdp') or any(t.get('item',{}).get('id')=='enable-rdp' for t in plan.get('tasks',[])):
@@ -297,16 +301,18 @@ def job_autoinstall(job_id):
         'Content-Disposition':'attachment; filename="ubuntu-'+job_id+'-user-data.yaml"'})
 
 
-@app.get('/api/jobs/<job_id>/preseed')
-def job_preseed(job_id):
+@app.get('/api/jobs/<job_id>/preseed', defaults={'artifact':'preseed'})
+@app.get('/api/jobs/<job_id>/kickstart', defaults={'artifact':'kickstart'})
+def job_installer_answer(job_id,artifact):
     with db() as con:
         row=con.execute('SELECT payload FROM jobs WHERE id=?',(job_id,)).fetchone()
     payload=decode_payload(row['payload']) if row else {}
     cfg=payload.get('plan',{}).get('config',{})
-    if payload.get('action')!='simple' or cfg.get('kind')!='debian-iso':
-        return jsonify(error='No Debian preseed file for this job.'),404
-    return Response(cfg['reusable_preseed'],mimetype='text/plain',headers={
-        'Content-Disposition':'attachment; filename="debian-'+job_id+'-preseed.cfg"'})
+    distro='rocky' if artifact=='kickstart' else 'debian'
+    if payload.get('action')!='simple' or cfg.get('kind')!=distro+'-iso':
+        return jsonify(error=f'No {distro.capitalize()} {artifact} file for this job.'),404
+    return Response(cfg['reusable_'+artifact],mimetype='text/plain',headers={
+        'Content-Disposition':f'attachment; filename="{distro}-{job_id}-{artifact}.cfg"'})
 
 
 

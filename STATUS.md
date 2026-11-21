@@ -2,6 +2,66 @@
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
+## Ubuntu Server LTS installer qualification
+
+The amd64 live-server ISOs on `nuc` matched Canonical’s published SHA-256 checksums for [22.04.5](https://releases.ubuntu.com/22.04.5/SHA256SUMS), [24.04.5](https://releases.ubuntu.com/24.04.5/SHA256SUMS) and [26.04.1](https://releases.ubuntu.com/26.04.1/SHA256SUMS). The wizard reads the release and installation sources from each selected ISO. Standard and Minimized use the same vendor disc.
+
+| Ubuntu Server | Standard VM job | Minimized template job | Full clone jobs | Ansible Operations job |
+| --- | --- | --- | --- | --- |
+| 22.04.5 | `7f7ee7c23f553a1bada732b9ce61a5e3` | `e916aefcca93e4a663cd36a1af5e08b5` | `72668f3bc18eb6aebd741d10a7e559cb`, `12f3b4f07a192597234f22bff16e0af8` | `564ccf5dd52f4877a512e6c63e491005` |
+| 24.04.5 | `4f59572c709d2fc1dd3bce4495c0f44d` | `a3bc28194c6e7a2eca31df5458c93b7d` | `c171137c561039d90195fe916bbba37d`, `60f9e51279317a60f95ff8081228de27` | `216d3da16b6f42ca919bea7bc9d13a68` |
+| 26.04.1 | `a40520e9694da7169f8b647069c34891` | `23aae56454623675da3ffbcfc96966bc` | `c3ebeaeed057fe4b2171d71f35637943`, `bda5eef81be953359c34f98f50f28879` | `b8ca456fc8344c51aff77e23a8b8c7a7` |
+
+Each row records a completed unattended install of both editions and a targeted Operations run through the dashboard. Independent SSH checks read the release, installer source, hostname and machine ID inside the guests. The Standard VM accepted separate key and password logins. The Minimized template stayed stopped while two full clones booted with separate disks, machine IDs, SSH host keys and authorized keys. Both editions ran the QEMU guest agent, `sudo` and `jq`. Ansible created a directory on one clone and a check on the other confirmed its absence. Both ISO jobs have downloadable autoinstall YAML with machine-specific values removed. [Repeat the live test](README.md#ubuntu-server-lts-iso)
+
+All 12 Ubuntu test guests and their 21 disk volumes were removed after verification. One 26.04.1 clone timed out on its first graceful shutdown during cleanup and stopped on retry. The 15 dashboard job histories, six reusable Ubuntu answers, original ISOs and all 50 pre-existing guest identities were verified after cleanup. The dashboard queue was idle. Validation also passed 303 backend tests, 54 UI tests and the network-isolated container checks.
+
+## Debian 13.7 netinst on nuc
+
+Both unattended installs used `SSD:iso/debian-13.7.0-amd64-netinst.iso` on the live dashboard. Neither required console input. Each installation job has a downloadable preseed with placeholders for machine-specific values.
+
+| Guest | Dashboard job | Verified result |
+| --- | --- | --- |
+| VM 160, `dbv-6262f5` | `37c3ca1e82f1e16341458789490a07f9` | Booted from its system disk after installer removal. Independent SSH key and password logins verified the hostname, Debian 13, passwordless sudo and `jq`. |
+| Template 161, `dbt-6262f5` | `73fb3e3c6c2c771fffae2a027d383aca` | Installed `jq`, sealed successfully and remained stopped with the same reviewed configuration after cloning. |
+| Full clones 162 and 163 | `ff7e516c87943f99640ea0574808a1dc`, `228bed56ce4625c656741d530a8c8809` | Both inherited `jq` and had independent disks, hostnames, OS machine IDs and SSH host keys. Their authorized keys excluded the template's login key. Operations job `1f0e9e84b6d3451693e00a385649dc71` created a directory on 162. A separate SSH check confirmed it was absent on 163. |
+
+The initial cleanup removed the two temporary clones and 29 earlier test guests from `nuc` (12 Ubuntu, 7 Debian, 7 Rocky and 3 Windows). Thirteen of the earlier guests had been running. The inventory confirmed removal of their 63 disk volumes and 8 generated installer images.
+
+After Ubuntu qualification, the operator approved removing the retained Debian VM and template. VM 160 shut down gracefully. Both guests and their three disk volumes were removed after checking build identities and storage dependencies. The dashboard still serves both job histories and preseed downloads. The original Debian netinst ISO and all 48 other guest identities were verified after cleanup.
+
+## Rocky Linux 10 guided builds
+
+### Rocky 10.3 Boot and Minimal
+
+The copies on `nuc` matched the publisher's SHA-256 for both [Boot](https://download.rockylinux.org/pub/rocky/10.3/isos/x86_64/Rocky-10.3-x86_64-boot.iso.CHECKSUM) and [Minimal](https://download.rockylinux.org/pub/rocky/10.3/isos/x86_64/Rocky-10.3-x86_64-minimal.iso.CHECKSUM). Minimal's local repository includes the minimal environment but omits cloud-init and the QEMU guest agent. Its Kickstart uses the disc plus version-matched Rocky HTTPS mirrors. Boot carries Anaconda and requires an online installation tree. All three Rocky ISO variants tested here share the same volume label.
+
+The initial Boot test used Rocky's direct HTTPS repository. VM 116 (`f7b17cbff62e4628b92539e557ee37cd`) and template 117 (`031d8979cfaaa9e2ef91d106854acb81`) completed without console input. Full clones 120 and 123 had independent guest identities, inherited `jq`, and passed the scoped Ansible check (`27fa45ba723a46e3a36f3937eafef8e1`). Throughput varied substantially on the first install. The current Kickstart uses Rocky's regional mirror list.
+
+| Installer | Working VM job | Template job | Full clone jobs | Operations job |
+| --- | --- | --- | --- | --- |
+| Minimal | 126 · `a0ab15a250029303a539d8a2c7033664` | 127 · `02907e1689449544d997517fe028a8b0` | 128 · `53caeab35a9a21876ba4b19fd1a4112d` and 130 · `05c81524de50ebd5dbf8ffd0508e7bf1` | `5a8ac3d290f34df3b3f090d505cef4f0` |
+| Boot | 134 · `cb8e7ea6c53b1f993127d4a7838fcae2` | 140 · `84793d5c75b8a2848bf095e35fb05ee4` | 141 · `01fd8e96b6990e211b7a08b873b2fb6d` and 142 · `200fe274d0210b50625ffbec28b9451e` | `9f25af2b040e4462b828668d51959615` |
+
+The regional-mirror runs completed unattended. The Minimal VM and template jobs took 5 min 51 s and 5 min 55 s. The Boot jobs took 7 min 21 s and 7 min 37 s. SSH checks verified Rocky 10.3, key and password logins on the working VMs, sudo, `jq`, the guest agent, SELinux enforcing and SSH through firewalld. Each pair of full clones had independent disks, machine IDs and SSH host keys. An Ansible task created its directory only on the selected clone. Both ISO jobs for each variant retained their reusable Kickstart files.
+
+After verification, all 12 Rocky test guests, including the templates and comparison guests, and their 21 disk volumes were removed at the operator's request. The dashboard histories and original Rocky ISOs were retained. VM IDs may be reused. All 50 pre-existing guest identities were accounted for at the end of Rocky qualification. Validation included 300 backend tests, 53 UI tests, RHEL 10 Kickstart parsing for all three ISO variants and network-isolated container checks.
+
+### Rocky 10.3 DVD
+
+The live dashboard completed an unattended Rocky Linux 10.3 DVD install, template preparation and two full clones on `nuc` using `SSD:iso/Rocky-10.3-x86_64-dvd1.iso`. In **Create**, select **Rocky Linux** for a working VM or reusable template. ISO jobs offer a downloadable Kickstart with public-key and disk-serial placeholders. [Acceptance test instructions](README.md#rocky-linux-10)
+
+| VM | Dashboard job | Verified result |
+| --- | --- | --- |
+| 156 · `rkv-e12460` | `f96b9057e0f94d82c85f3a48524b3c5b` | Installed unattended, ran the DNF package task for `jq` and accepted independent SSH key and password logins. |
+| 157 · `rkt-e12460` | `b17a1b86b2342644477d16304f2239d8` | Sealed through verified SSH and remained a stopped template with its reviewed configuration after cloning. |
+| 158 · `rka-e12460` | `04ac50b97295f23d74c6f3de38f58d00` | Inherited `jq`. Parameterized Operations job `c0f3746fad0942cfaed164ab8f998595` created `/var/tmp/pm-e12460` using the saved login. |
+| 159 · `rkb-e12460` | `93f06aa6f5c6407fac8870818168439e` | Booted with its own login keys and inherited `jq`. The directory created on 158 was absent. |
+
+The test verified distinct hostnames, OS machine IDs, SSH host keys and independent storage volumes. Both clones had SELinux enforcing, SSH allowed by firewalld, and the source template's Anaconda answer files removed. Each guest published its public SSH key for the confined QEMU agent to read. The hypervisor-reported key matched the dashboard pin. Guest-agent command execution and file writes remained disabled.
+
+Earlier attempts exposed Anaconda's RAM-backed zram swap and Rocky's guest-agent and SELinux file-access restrictions. Diagnostic VMs 143, 144 and 155 were stopped and retained at the time, then removed during the Debian netinst cleanup. The final DVD run required no console intervention. Verification passed 298 Python tests, 53 UI tests, RHEL 10 Kickstart parsing and isolated container checks. Rocky 9 remains outside this Rocky 10 qualification.
+
 ## Debian 13 guided builds
 
 The live dashboard on `nuc` completed a working VM, a template and two full clones using `SSD:iso/debian-13.7.0-amd64-DVD-1.iso`. In **Create**, choose **Debian** for a virtual machine or reusable template. Each ISO job includes a downloadable preseed with placeholders for the public keys and disk serial. See the [acceptance-test instructions](README.md#debian-13).
@@ -13,9 +73,9 @@ The live dashboard on `nuc` completed a working VM, a template and two full clon
 | 153 · `dba-e00474` | `be516c93ddb0910c89e1188e371033ef` | Inherited `jq`. Operations job `7081c885e222432b90e8506ba0350f02` used the saved login and a caller-supplied Ansible input to create `/var/tmp/pm-e00474`. |
 | 154 · `dbb-e00474` | `fa792e17ecd62da2c9f57dbadbd78ecb` | Inherited `jq`, accepted its own login keys and had no directory from the task on 153. |
 
-Both clones had distinct hostnames, SSH host keys and OS machine IDs. The D-Bus ID matched the OS ID within each guest. Node storage metadata confirmed independent disk volumes. The test exposed two installer issues with generated boot media and public-key handling, plus a separate D-Bus machine ID that had survived template preparation. All three fixes passed unattended on the real DVD. Discovery covers netinst, which was not exercised on this node.
+Both clones had distinct hostnames, SSH host keys and OS machine IDs. The D-Bus ID matched the OS ID within each guest. Node storage metadata confirmed independent disk volumes. The test exposed two installer issues with generated boot media and public-key handling, plus a separate D-Bus machine ID that had survived template preparation. All three fixes passed unattended on the real DVD. The subsequent [netinst test](#debian-137-netinst-on-nuc) exercised the same workflows.
 
-Diagnostic guests 143 and 144 and their disks were removed after verification. Their dashboard histories and the original Debian ISO were retained. Clones 147 and 148 inherited the same OS machine ID from the earlier template 146. Use template **149** for new clones. The verification suite passed 289 Python tests, 52 UI tests and the network-isolated container checks.
+Diagnostic guests 143 and 144 and their disks were removed after verification. Their dashboard histories and the original Debian ISO were retained. Clones 147 and 148 inherited the same OS machine ID from the earlier template 146. Template 149 verified the correction. The verification suite passed 289 Python tests, 52 UI tests and the network-isolated container checks.
 
 ## Unattended Windows templates and full clones
 

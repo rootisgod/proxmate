@@ -110,13 +110,24 @@ class TrustChanged(ValueError):
     pass
 
 
-def agent_trust(p, path, platform):
+def agent_trust(p, path, platform, *, rocky=False):
     if platform == 'windows':
         cert = p.call('GET', path+'/agent/file-read', file=r'C:\ProgramData\Proxmate\winrm.pem').get('content', '')
         if len(cert) > 20000 or '-----BEGIN CERTIFICATE-----' not in cert:
             raise ValueError('Guest HTTPS certificate unavailable')
         return {'ca_pem': cert}
-    key = p.call('GET', path+'/agent/file-read', file='/etc/ssh/ssh_host_ed25519_key.pub').get('content','').split()
+    def read_key(file):
+        return p.call('GET',path+'/agent/file-read',file=file).get('content','').split()
+    published='/etc/proxmate/ssh-host.pub'
+    if rocky:
+        key=read_key(published)
+    else:
+        try:
+            key=read_key('/etc/ssh/ssh_host_ed25519_key.pub')
+        except RuntimeError as exc:
+            if 'permission denied' not in str(exc).lower() or p.call('GET',path+'/agent/get-osinfo').get('result',{}).get('id')!='rocky':
+                raise
+            key=read_key(published)
     if len(key)<2 or key[0]!='ssh-ed25519': raise ValueError('Guest public SSH key unavailable')
     fingerprint = hashlib.sha256(base64.b64decode(key[1], validate=True)).digest()
     return {'fingerprint': 'SHA256:'+base64.b64encode(fingerprint).decode().rstrip('=')}

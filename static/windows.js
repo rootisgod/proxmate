@@ -54,7 +54,7 @@ function openWinRMSetup(page){
 function jobWindowsActions(job,log){
   let bar=log.parentElement.querySelector('.job-downloads');
   if(bar)bar.remove();
-  if(!job.has_answer&&!job.has_autoinstall&&!job.has_preseed&&!job.server_id)return;
+  if(!job.has_answer&&!job.has_autoinstall&&!job.has_preseed&&!job.has_kickstart&&!job.server_id)return;
   bar=document.createElement('div');bar.className='row-actions job-downloads';
   if(job.server_id&&job.server_id===serverInfo?.id&&state?.resources.some(r=>r.type==='qemu'&&!r.template&&r.node===job.target.node&&r.vmid===job.target.vmid&&r.name===job.target.name)){
     const link=document.createElement('a');
@@ -74,10 +74,10 @@ function jobWindowsActions(job,log){
     };
     bar.append(original);
   }
-  if(job.has_autoinstall||job.has_preseed){
+  if(job.has_autoinstall||job.has_preseed||job.has_kickstart){
     const link=document.createElement('a');
-    link.href='/api/jobs/'+encodeURIComponent(job.id)+(job.has_preseed?'/preseed':'/autoinstall');
-    link.download='';link.textContent=job.has_preseed?'Download Debian preseed':'Download Ubuntu autoinstall YAML';bar.append(link);
+    link.href='/api/jobs/'+encodeURIComponent(job.id)+(job.has_kickstart?'/kickstart':job.has_preseed?'/preseed':'/autoinstall');
+    link.download='';link.textContent=job.has_kickstart?'Download Rocky Kickstart':job.has_preseed?'Download Debian preseed':'Download Ubuntu autoinstall YAML';bar.append(link);
   }
   log.before(bar);
 }

@@ -31,17 +31,18 @@ const guidedFieldHelp = {
   disk_letter: 'Choose a free drive letter or let Windows assign one. Windows ISO builds reserve D:, E: and F: for the setup DVDs.',
   ubuntu_firewall: 'Keep Ubuntu’s default, enable UFW with SSH allowed on TCP 22, or disable UFW for this VM.',
   ubuntu_updates: 'Controls automatic updates after the VM is installed. The ISO installer can still apply its own security updates during setup.',
+  ubuntu_install_source: 'Standard includes tools for interactive administration. Minimized starts with fewer packages. Both can use SSH, packages and Operations.',
   rdp: 'Allows Remote Desktop sign-in with Network Level Authentication. Connect using Open desktop on the finished VM.',
   manual_updates: 'Disables automatic Windows updates for this build so you can apply them on your own schedule.',
   chocolatey: 'Installs the Chocolatey package manager. Tick this to enter your own package IDs.',
-  packages: 'Enter package IDs from Chocolatey on Windows or the APT repositories on Linux.',
+  packages: 'Enter package IDs from Chocolatey on Windows, DNF on Rocky Linux, or APT on Debian and Ubuntu.',
   confirmed: 'Approves the listed VMs, resource choices and software. Proxmox creates and starts the new guests when you submit.',
   risk_confirmed: 'Approves the sensitive settings or trusted custom scripts listed in the review.',
 };
 
 const setupMediaHelp = {
   windows: 'Stores the Windows answer ISO that Proxmate generates.',
-  iso: 'Stores a temporary ISO that Proxmate generates with Ubuntu’s unattended setup and SSH key settings. Proxmate removes it after it verifies SSH.',
+  iso: 'Stores a temporary ISO that Proxmate generates with the Linux installer answers and SSH key settings. Proxmate removes it after it verifies SSH.',
   cloud: 'Stores the generated cloud-init ISO that sets up the Ubuntu login, SSH keys and guest tools on the first boot.',
   template: 'A Linux clone gets its cloud-init drive on the VM disk storage. This choice applies to ISO and cloud image installs.',
 };
@@ -53,6 +54,8 @@ function wizardHelpText(control, draft) {
     return setupMediaHelp[kind] + ((kind === 'windows' && draft.source_kind !== 'template') || kind === 'iso'
       ? ' An installer already on Proxmox stays where it is. An installer from the local ISO library is copied here.' : '');
   }
+  if (name === 'source_kind' && draft.os === 'rocky') return 'Install Rocky Linux 10 from an ISO or copy a prepared Rocky template.';
+  if (name === 'source' && draft.os === 'rocky') return 'DVD includes the installation packages. Minimal uses local packages and downloads extra guest tools. Boot downloads the operating system packages. Minimal and Boot need access to Rocky’s HTTPS mirrors.';
   if (name === 'source_kind' && draft.os === 'debian') return 'Install Debian from the selected DVD or create a copy of a prepared Debian template.';
   if (name === 'source_kind' && draft.os === 'windows')
     return 'An ISO installs Windows from scratch. A template copies Windows and any software already on the prepared machine.';
@@ -75,7 +78,7 @@ function wizardHelpText(control, draft) {
     };
     return details[value];
   }
-  if (name === 'common_program') return `Installs ${value} using ${draft.os === 'windows' ? 'Chocolatey' : 'Ubuntu’s APT repositories'} after the guest is ready.`;
+  if (name === 'common_program') return `Installs ${value} using ${draft.os === 'windows' ? 'Chocolatey' : draft.os === 'rocky' ? 'DNF' : 'APT'} after the guest is ready.`;
   if (name === 'saved_script') return mg?.tasks.find(task => task.id === value)?.description || 'Runs this library script after the guest login is verified.';
   if (control.hasAttribute('data-script-param')) return 'This value is passed to the selected Ansible script. The review shows what will be used.';
   return guidedFieldHelp[name.replace(/_\d+$/, '')];

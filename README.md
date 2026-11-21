@@ -22,11 +22,17 @@ Upgrade from environment-based configuration: retain the existing `.env` and `.e
 
 ## Build machines
 
-Choose **Save this build** at the review step to give a Windows, Ubuntu or Debian configuration a name. Find it under **Create → Saved builds → Use build**. In **Activity**, a guided build's job log also offers **Create another like this** and **Save this build** when its settings are available. Enter a new machine name and any required guest password. Review the newly allocated VM ID, installation source, current library tasks and inputs before creating it. Removing a saved build only removes that shortcut.
+Choose **Save this build** at the review step to give a Windows, Ubuntu, Debian or Rocky configuration a name. Find it under **Create → Saved builds → Use build**. In **Activity**, a guided build's job log also offers **Create another like this** and **Save this build** when its settings are available. Enter a new machine name and any required guest password. Review the newly allocated VM ID, installation source, current library tasks and inputs before creating it. Removing a saved build only removes that shortcut.
 
 If guest software fails during a build or an Operations run, open its job in **Activity** and choose **Review remaining tasks** beside the affected VM. The review shows the saved login, the original task versions and inputs, and any snapshot or template preparation the run will perform. Inspect a task marked as already started before approving it again, especially after a timeout. Each recovery gets its own job linked to the earlier run. Recovery requires a recorded task checkpoint and the original VM and disks. Installation and template-generalization failures still need inspection.
 
-For a guided Ubuntu or Debian VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Linux in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
+For a guided Ubuntu, Debian or Rocky VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Linux in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
+
+### Rocky Linux 10
+
+In **Create**, choose **Rocky Linux** for a working VM or a reusable template. Proxmate discovers Rocky 10 x86_64 DVD, Minimal and Boot ISOs and checks the node's CPU. Boot installs from the matching online Rocky BaseOS and AppStream repositories. Minimal uses its local packages and supplements them from those repositories for guest tools. Both need guest DNS and HTTPS access to Rocky’s mirror list and its regional mirrors during installation. Enter a name, add optional SSH keys or password sign-in, and choose packages or scripts. Rocky starts with SELinux enforcing and SSH allowed through firewalld. Download the reusable Kickstart file from the ISO job. For another machine, choose the prepared template and review a full copy with fresh login keys. Run later scripts under **Operations**.
+
+To repeat the four-guest acceptance test on a lab node, use the command in the Debian section with the exact Rocky ISO ID and append `--os rocky`.
 
 ### Debian 13
 
@@ -43,9 +49,9 @@ Get-Content -Raw tests/live_debian_build.py | docker compose exec -T proxmate py
 
 Append `--templates-only` to repeat the template and two-clone checks when the ordinary VM build has already passed.
 
-### Ubuntu Server 24.04 ISO
+### Ubuntu Server LTS ISO
 
-Choose **Create → Virtual machine → Ubuntu** for a working VM, or **Create → Reusable template → Ubuntu**. Proxmate discovers Ubuntu Server 24.04 amd64 live-server ISOs on the selected node and in the local library. **Install from** also offers the official cloud image. Verify the Proxmox SSH connection under **Server** to make the ISO available for inspection. ISO builds use Proxmox's default firmware (SeaBIOS), machine type and display. They default to DHCP, 2 vCPUs, 4 GiB RAM and a 32 GiB system disk.
+Choose **Create → Virtual machine → Ubuntu** for a working VM, or **Create → Reusable template → Ubuntu**. Proxmate discovers Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 live-server ISOs on the selected node and in the local library, newest point release first. Select the ISO and choose Standard or Minimized. The ISO determines the release and templates preserve it when cloned. **Install from** also offers the official cloud image. Verify the Proxmox SSH connection under **Server** to make the ISO available for inspection. ISO builds use Proxmox's default firmware (SeaBIOS), machine type and display. They default to DHCP, 2 vCPUs, 4 GiB RAM and a 32 GiB system disk.
 
 Enter a GitHub username to import that account's public SSH keys, paste one public key, or leave both fields empty for dashboard-managed access. Check the key fingerprints under **Installation details** in the review. The installer uses Ubuntu's virtual kernel, enables key-only OpenSSH and installs Python and the QEMU Guest Agent. The verified Proxmate SSH login makes the machine available to Operations.
 
@@ -56,6 +62,8 @@ Under **Software**, choose common Ubuntu packages, enter additional APT package 
 Follow install and SSH verification in the job log. Use **Open console** for Subiquity progress or **Download Ubuntu autoinstall YAML** for a reusable copy of the installer configuration. The copy has an empty key list and a placeholder for the system disk serial. Check the disk path in both the early validation command and the storage layout when adapting the YAML.
 
 A template runs its selected software, clears the build's SSH keys and guest identity, and shuts down with a Proxmox cloud-init drive. Select **Clone** under **Create → Available templates**, or choose **Ubuntu template** under **Install from**. Choose a full copy or a linked copy. Clones keep the template's boot firmware. Copies of older UEFI templates with the default display use VirtIO-GPU for a readable console. On the first boot Proxmate verifies the new hostname and SSH login before applying selected software.
+
+To repeat the Ubuntu acceptance test, use the PowerShell command in the Debian section above. Replace `--source` with the exact Ubuntu ISO ID and append `--os ubuntu --ubuntu-series <series>`, where `<series>` is `22.04`, `24.04` or `26.04`. The test creates a Standard VM, a Minimized template and two full clones. It checks the installed release and edition, SSH access, guest agent, package installation and a targeted Ansible run.
 
 After connecting, **Operations** lists the discovered VMs across the cluster. Search by name, node or VM ID, or filter by power state. While the inventory is open, Proxmate refreshes cluster resources about once a minute. **Create** offers Windows Server and Ubuntu wizards for working VMs and reusable templates. On a multi-node cluster, the wizard prefers the node reached through the verified SSH connection.
 

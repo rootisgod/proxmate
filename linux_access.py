@@ -75,7 +75,7 @@ def password_login(username, password, distro):
             'block': f'Match User {username}\n    PasswordAuthentication yes',
             'validate': '/usr/sbin/sshd -t -f %s',
         }},
-        {'ansible.builtin.service': {'name': 'ssh', 'state': 'reloaded'}},
+        {'ansible.builtin.service': {'name': 'sshd' if distro=='rocky' else 'ssh', 'state': 'reloaded'}},
     ]
     return {'item': {'id': distro+'-password', 'name': 'Enable console and SSH password sign-in',
                      'platform': 'linux', 'kind': 'linux-setup', 'steps': steps, 'dangerous': False}, 'params': {}}

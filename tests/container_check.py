@@ -12,6 +12,24 @@ from guest_tasks import BUILTINS, compile_task
 
 with tempfile.TemporaryDirectory() as tmp:
     root=Path(tmp)
+    # Execute the real Kickstart disk-selection script against synthetic block-device reports.
+    import rocky_build
+    answer=rocky_build.kickstart(dict(username='rocky',name='rk-test',disk_serial='pm1234',ssh_key='example'))
+    include=root/'storage.ks'
+    guard=answer.split('%pre --interpreter=/bin/bash --erroronfail\n')[1].split('%end',1)[0].replace('/tmp/proxmate-storage.ks',str(include))
+    for tool,body in {'lsblk':'echo "$DISKS"','blockdev':'echo "$READ_ONLY"',
+                      'readlink':'echo "/sys/devices/virtual/block/zram0"',
+                      'udevadm':'if test "$1" = info; then echo "ID_SCSI_SERIAL=$SERIAL"; fi'}.items():
+        binary=root/tool
+        binary.write_text('#!/bin/sh\n'+body+'\n')
+        binary.chmod(0o755)
+    for disks,serial,readonly,accept in [('sda disk','other','0',False),('sda disk\nsdb disk','pm1234','0',False),
+                                       ('sda disk','pm1234','1',False),('sda disk\nzram1 disk','pm1234','0',False),
+                                       ('sda disk\nzram0 disk','pm1234','0',True)]:
+        env=dict(os.environ,DISKS=disks,SERIAL=serial,READ_ONLY=readonly,PATH=str(root)+':'+os.environ['PATH'])
+        result=subprocess.run(['bash','-c',guard],env=env)
+        assert (result.returncode==0)==accept and include.exists()==accept
+    assert 'ignoredisk --only-use=sda' in include.read_text()
     os.environ['DATA_DIR']=str(root/'data')
     (root/'password').write_text('isolated-test-only')
     os.environ['APP_PASSWORD_FILE']=str(root/'password')

@@ -339,7 +339,7 @@ def execute(d, log):
         if current.get('template'): raise ValueError('Guest must be stopped and not already a template')
         if 'proxmate-unattend-' in str(current.get('sata1', '')):
             raise ValueError('Use Finish setup to remove answer media before converting')
-        if any(prefix in str(current.get('ide2', '')) for prefix in ('proxmate-ubuntu-', 'proxmate-debian-')):
+        if any(prefix in str(current.get('ide2', '')) for prefix in ('proxmate-ubuntu-', 'proxmate-debian-', 'proxmate-rocky-')):
             raise ValueError('Detach Linux setup media before converting')
         task(f'{base}/{vmid}/template')
     elif a == 'finish-setup':

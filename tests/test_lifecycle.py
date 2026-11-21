@@ -361,6 +361,23 @@ def test_completed_windows_bootstrap_with_locked_progress_still_checks_guest_log
     assert app.manager.all('connections')==[]
 
 
+def test_rocky_agent_rpc_policy_stops_readiness_before_authentication(recovery,monkeypatch):
+    app,_,_,fake=recovery
+    credential=app.manager.save('credentials',dict(name='Rocky',platform='linux',username='rocky',password='test-password'))
+    original=fake.call
+    def call(method,path,**kwargs):
+        if path.endswith('/agent/get-host-name'):
+            return {'result':{'host-name':'rocky'}}
+        if path.endswith('/agent/file-read'):
+            raise RuntimeError('Command guest-file-open has been disabled: the command is not allowed')
+        return original(method,path,**kwargs)
+    monkeypatch.setattr(fake,'call',call)
+    cfg=dict(node='pve',vmid=201,name='rocky',kind='rocky-iso',bootstrap={'credential_id':credential['id']})
+    with pytest.raises(lifecycle.BootstrapFailed,match='Rocky guest agent blocks file reads'):
+        probe(app,cfg)
+    assert app.manager.all('connections')==[]
+
+
 def test_missing_agent_is_distinct_from_winrm_authentication_failure(recovery,monkeypatch):
     app,_,_,fake=recovery;fake.fail_agent=True
     c=app.manager.save('credentials',dict(name='Guest',platform='windows',username='Administrator',password='test-password'))

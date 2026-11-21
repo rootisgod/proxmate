@@ -1,4 +1,4 @@
-"""Ubuntu Server 24.04 media, autoinstall and first-boot handoff."""
+"""Ubuntu Server LTS media, autoinstall and first-boot handoff."""
 import hashlib
 import json
 import re
@@ -12,9 +12,11 @@ import media
 import linux_install
 
 
-LABEL = 'Ubuntu Server 24.04 LTS'
-ISO_NAME = re.compile(r'ubuntu-24\.04(?:\.\d+)?-live-server-amd64\.iso', re.I)
-ISO_INFO = re.compile(r'Ubuntu-Server 24\.04(?:\.\d+)? LTS .*\bamd64\b', re.I)
+LABEL = 'Ubuntu Server LTS'
+LTS_SERIES = ('22.04', '24.04', '26.04')
+INSTALL_SOURCES = {'ubuntu-server': 'Standard', 'ubuntu-server-minimal': 'Minimized'}
+ISO_NAME = re.compile(r'ubuntu-(\d{2}\.\d{2})(?:\.(\d+))?-live-server-amd64\.iso', re.I)
+ISO_INFO = re.compile(r'Ubuntu-Server (\d{2}\.\d{2})(?:\.(\d+))?(?: LTS)? "[^"]+" - Release amd64\b', re.I)
 PACKAGES = [('curl', 'curl'), ('git', 'Git'), ('htop', 'htop'), ('jq', 'jq'),
             ('vim', 'Vim'), ('tmux', 'tmux'), ('rsync', 'rsync'), ('unzip', 'Unzip'),
             ('dnsutils', 'DNS tools'), ('build-essential', 'Build tools')]
@@ -31,7 +33,40 @@ menuentry 'Install Ubuntu Server automatically' {
 
 
 def candidates(items):
-    return [item for item in items if ISO_NAME.fullmatch(item['id'].split('/')[-1].removeprefix('library:'))]
+    ranked = []
+    for item in items:
+        match = ISO_NAME.fullmatch(item['id'].split('/')[-1].removeprefix('library:'))
+        if match and match[1] in LTS_SERIES:
+            ranked.append((match[1], int(match[2] or 0), not item['id'].startswith('library:'), item))
+    ranked.sort(key=lambda row: row[:3], reverse=True)
+    return [row[3] for row in ranked]
+
+
+def install_sources(iso):
+    entry = media.image_entry(iso, '/casper/install-sources.yaml', open_file=True)
+    if not entry:
+        raise ValueError('Ubuntu installer source catalog is missing.')
+    with entry:
+        raw = entry.read(65537)
+    if len(raw) > 65536:
+        raise ValueError('Ubuntu installer source catalog is too large.')
+    catalog = yaml.safe_load(raw)
+    # Jammy and Noble use a list. Resolute puts it under sources in a versioned mapping.
+    entries = catalog.get('sources') if isinstance(catalog, dict) else catalog
+    sources = {}
+    if isinstance(entries, list):
+        for row in entries:
+            if not isinstance(row, dict) or not isinstance(row.get('id'), str) or row['id'] not in INSTALL_SOURCES:
+                continue
+            path = row.get('path')
+            if not isinstance(path, str) or not re.fullmatch(r'[\w.-]+\.squashfs', path):
+                continue
+            record = media.image_entry(iso, '/casper/'+path)
+            if record and record.get_data_length():
+                sources[row['id']] = (record.extent_location(), record.get_data_length())
+    if not sources:
+        raise ValueError('Ubuntu ISO has no supported Server installation image.')
+    return sources
 
 
 def inspect(source, node):
@@ -43,14 +78,19 @@ def inspect(source, node):
             with info:
                 release = info.read(1024).decode('utf-8', errors='replace').strip()
             records = [media.image_entry(iso, name) for name in ('/casper/vmlinuz', '/casper/initrd')]
-            if not ISO_INFO.match(release) or not all(records):
-                raise ValueError('Choose an Ubuntu Server 24.04 LTS amd64 live installer ISO.')
+            found = ISO_INFO.match(release)
+            name = ISO_NAME.fullmatch(source.split('/')[-1].removeprefix('library:'))
+            if (not found or not name or found.groups() != name.groups() or found[1] not in LTS_SERIES
+                    or not all(r and r.get_data_length() for r in records)):
+                raise ValueError('Choose matching Ubuntu Server 22.04, 24.04 or 26.04 LTS amd64 live installer media.')
+            sources = install_sources(iso)
             # Bind review to the release and boot records without transferring a multi-GB ISO.
             identity = hashlib.sha256(json.dumps([release, *[(r.extent_location(), r.get_data_length()) for r in records]]).encode()).hexdigest()
-            return {'release': release, 'identity': identity}
+            return {'release': release, 'identity': identity, 'profile': 'ubuntu-'+found[1],
+                    'install_sources': sources}
     except paramiko.SSHException as exc:
         raise ValueError(media.ssh_error(exc)) from None
-    except (OSError, pycdlib.pycdlibexception.PyCdlibException):
+    except (OSError, yaml.YAMLError, pycdlib.pycdlibexception.PyCdlibException):
         raise ValueError('The selected Ubuntu ISO could not be read. Check the media and Server connection.') from None
 
 
@@ -103,6 +143,8 @@ def user_data(cfg, *, reusable=False):
                      f'echo "{username} ALL=(ALL:ALL) NOPASSWD:ALL" >/target/etc/sudoers.d/90-proxmate; '
                      'chmod 0440 /target/etc/sudoers.d/90-proxmate; '
                      'install -d /target/var/lib/proxmate; echo ready >/target/var/lib/proxmate/bootstrap-ready']]})
+    if cfg.get('ubuntu_install_source'):
+        setup['source'] = {'id': cfg['ubuntu_install_source']}
     return '#cloud-config\n'+yaml.safe_dump({'autoinstall': setup}, sort_keys=False)
 
 

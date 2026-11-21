@@ -19,6 +19,7 @@ from guided_recipes import GuidedRecipes, specification
 from reviews import Reviews
 import operations
 import debian_build
+import rocky_build
 import linux_access
 import linux_install
 import ubuntu_build
@@ -27,6 +28,9 @@ import windows_setup
 from provisioning import PROFILES,LOCALES,windows_setup_key,windows_options
 from guest_tasks import selected_drive_letters
 from vm_config import machine_identity, vm_path
+
+LINUX_INSTALLERS = {'ubuntu': ubuntu_build, 'debian': debian_build, 'rocky': rocky_build}
+ISO_PROFILES = {'ubuntu': 'ubuntu-24.04', 'debian': 'debian-13', 'rocky': 'rocky-10'}
 
 
 FEATURES=[('Web-Server','Web server (IIS)'),('NET-Framework-45-Features','.NET Framework 4.x'),
@@ -81,11 +85,12 @@ def discovery(inv):
     if not candidates: raise ValueError('No online server has disk storage, ISO storage and a network bridge available')
     local=[{'id':'library:'+i['name'],'label':i['name']+' (ISO library)','revision':str(i['mtime'])+'-'+str(i['bytes']) if i.get('mtime') else None} for i in inv['local_isos']]
     for dest in candidates:
-        dest['debian_isos'] = debian_build.candidates(dest['isos'] + local)
-        dest['ubuntu_isos'] = ubuntu_build.candidates(dest['isos'] + local)
+        for distro, installer in LINUX_INSTALLERS.items():
+            dest[distro+'_isos'] = installer.candidates(dest['isos'] + local)
     return dict(destinations=candidates,local_isos=local,windows_settings=windows_setup.OPTIONS,
+                rocky=dict(release=rocky_build.LABEL,profile=ISO_PROFILES['rocky'],packages=[dict(id=k,name=n) for k,n in rocky_build.PACKAGES]),
                 debian=dict(release=debian_build.LABEL,packages=[dict(id=k,name=n) for k,n in ubuntu_build.PACKAGES]),
-                ubuntu=dict(release=ubuntu_build.LABEL,firewall=ubuntu_build.FIREWALL,updates=ubuntu_build.UPDATES,
+                ubuntu=dict(release=ubuntu_build.LABEL,install_sources=ubuntu_build.INSTALL_SOURCES,firewall=ubuntu_build.FIREWALL,updates=ubuntu_build.UPDATES,
                             packages=[dict(id=key,name=name) for key,name in ubuntu_build.PACKAGES]),
                 iso_setup_letters=windows_build.ISO_SETUP_LETTERS,
                 common_programs=[dict(id=key,name=name) for key,name in windows_setup.PROGRAMS],profiles={k:v['label'] for k,v in PROFILES.items() if k.startswith('ubuntu-')},
@@ -119,12 +124,12 @@ class SimpleFlow:
                 self.media_cache[key]=(revision,time.monotonic()+600,result)
         return result
 
-    def options(self, inv=None):
+    def options(self, inv=None, *, include_templates=True):
         if inv is None: inv=operations.inventory(include_backups=False)
         options=discovery(inv)
-        builds=linux_install.template_builds(self.m)
-        for distro in ('ubuntu','debian'):
-            options[distro+'_templates']=linux_install.templates(builds,inv['resources'],distro)
+        if include_templates:
+            builds=linux_install.template_builds(self.m)
+            options.update(linux_install.templates(builds,inv['resources']))
         destinations=options['destinations']
         if len(destinations)>1 and operations.connection_provider.current().get('ssh_fingerprint'):
             try: connected=media.ssh_node()
@@ -182,7 +187,8 @@ class SimpleFlow:
         if 'reuse' in d:
             d,reused=self.recipes.expand(d)
         os=d.get('os','windows')
-        if os not in ('windows','ubuntu','debian'): raise ValueError('Choose Windows Server, Ubuntu or Debian')
+        if not isinstance(os,str) or (os!='windows' and os not in LINUX_INSTALLERS):
+            raise ValueError('Choose Windows Server, Ubuntu, Debian or Rocky Linux')
         count=management.number(d.get('count',1),1,20);purpose=d.get('purpose','vm')
         if purpose not in ('vm','template'): raise ValueError('Choose machines or a template')
         if purpose=='template' and count!=1: raise ValueError('Create one reusable template at a time')
@@ -194,7 +200,7 @@ class SimpleFlow:
         progress('inventory')
         with diagnostics.stage('inventory'):
             inv=operations.inventory(include_backups=False,only_node=d.get('node'))
-            options=discovery(inv) if d.get('node') else self.options(inv)
+            options=discovery(inv) if d.get('node') else self.options(inv,include_templates=False)
         dest=next((n for n in options['destinations'] if n['node']==d.get('node',options['destinations'][0]['node'])),None)
         if not dest: raise ValueError('The chosen server is no longer available')
         dest=copy.deepcopy(dest)
@@ -203,13 +209,15 @@ class SimpleFlow:
                 if d[key] not in dest[choices]: raise ValueError('Selected '+key+' is no longer available')
                 dest[key]=d[key]
         cloning=os=='windows' and d.get('source_kind')=='template'
-        source_kind=d.get('source_kind','iso' if os=='debian' else None)
+        source_kind=d.get('source_kind','iso' if os in ('debian','rocky') else None)
         linux_iso=os!='windows' and source_kind=='iso'
         linux_clone=os!='windows' and source_kind=='template'
-        if os=='debian' and source_kind not in ('iso','template'):
-            raise ValueError('Choose a Debian installer ISO or prepared Debian template.')
+        if os in ('debian','rocky') and source_kind not in ('iso','template'):
+            raise ValueError('Choose a '+os.capitalize()+' installer ISO or prepared '+os.capitalize()+' template.')
         if os=='ubuntu' and d.get('source_kind') not in (None,'cloud','iso','template'):
             raise ValueError('Choose an Ubuntu ISO, cloud image or template.')
+        if 'ubuntu_install_source' in d and not (os=='ubuntu' and linux_iso):
+            raise ValueError('Ubuntu installation images apply to Ubuntu ISO builds.')
         if (cloning or linux_clone) and purpose!='vm': raise ValueError('Choose a working VM for a template clone')
         if not (cloning or linux_clone) and not operations.connection_provider.current().get('ssh_fingerprint'):
             raise ValueError('Finish SSH setup on the Server page so Proxmate can read media and prepare images')
@@ -253,24 +261,35 @@ class SimpleFlow:
                 dest.update(agent_iso=agent,management_cidr=subnet,agent_sha256=checksum)
         else:
             distro=os.capitalize()
-            installer=debian_build if os=='debian' else ubuntu_build
-            profile=d.get('profile','debian-13' if os=='debian' else 'ubuntu-24.04')
-            if profile not in (('debian-13',) if os=='debian' else options['profiles']):
+            installer=LINUX_INSTALLERS[os]
+            profile=d.get('profile',ISO_PROFILES[os])
+            if profile not in (options['profiles'] if os=='ubuntu' else (ISO_PROFILES[os],)):
                 raise ValueError('Choose a supported '+distro+' release.')
             if not linux_clone: media.verify_ssh_node(dest['node'])
+            if os=='rocky': rocky_build.check_cpu(operations.Proxmox(),dest['node'])
             if linux_clone:
                 template=linux_install.review_template(self.life,dest,d,os)
+                if os=='ubuntu':
+                    profile=template['profile']
+                    if d.get('profile',profile)!=profile:
+                        raise ValueError('The requested Ubuntu release does not match the selected template.')
                 dest['bridge']=template['bridge']
                 if template['mode']=='linked': dest['storage']=template['storage']
             if linux_iso:
-                if os=='ubuntu' and profile!='ubuntu-24.04': raise ValueError('ISO autoinstall requires Ubuntu Server 24.04 LTS.')
                 isos=dest[os+'_isos']
-                source=d.get('source') or (isos[0]['id'] if os=='debian' and isos else None)
+                source=d.get('source') or (isos[0]['id'] if os!='ubuntu' and isos else None)
                 if not any(source==item['id'] for item in isos):
                     raise ValueError('Choose a discovered '+installer.LABEL+' installer ISO.')
                 progress(os+'_media')
                 with diagnostics.stage(os+'_media'):
                     inspected=installer.inspect(source,dest['node'])
+                if os=='ubuntu':
+                    profile=inspected['profile']
+                    if d.get('profile',profile)!=profile:
+                        raise ValueError('The requested Ubuntu release does not match the selected ISO.')
+                    install_source=d.get('ubuntu_install_source','ubuntu-server')
+                    if not isinstance(install_source,str) or install_source not in inspected['install_sources']:
+                        raise ValueError('Choose a Server installation image available on the selected Ubuntu ISO.')
             if not isinstance(d.get('username',os),str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',d.get('username',os)): raise ValueError('Choose a Linux login name using lowercase letters, numbers, underscores or hyphens')
             if d.get('username') in ('root','daemon','bin','sys','sync','games','man','lp','mail','news','uucp','proxy','www-data','backup','list','irc','_apt','nobody','messagebus','systemd-network','systemd-timesync','sshd'):
                 raise ValueError('Choose a Linux login name other than a system account.')
@@ -352,8 +371,7 @@ class SimpleFlow:
                 cfg.update(profile=profile,username=credential['username'],ssh_key=public_key,network_mode='dhcp')
                 b.update(seed_storage=dest['iso_storage'])
             cfg['bootstrap']=b
-            # Debian's installer uses the common VM fields without requiring a cloud image profile.
-            if os=='debian': operations.validate_vm_fields(cfg)
+            if os in ('debian','rocky'): operations.validate_vm_fields(cfg)
             elif not cloning: cfg=operations.validate(cfg)
             if linux_iso:
                 if cfg['memory']<3072 or cfg['disk']<16:
@@ -363,7 +381,14 @@ class SimpleFlow:
                 if os=='debian':
                     cfg['preseed']=debian_build.preseed(cfg)
                     cfg['reusable_preseed']=debian_build.preseed(cfg,reusable=True)
+                elif os=='rocky':
+                    cfg['dvd_label']=inspected['label']
+                    cfg.update(media_kind=inspected['kind'],rocky_version=inspected['version'])
+                    cfg['kickstart']=rocky_build.kickstart(cfg)
+                    cfg['reusable_kickstart']=rocky_build.kickstart(cfg,reusable=True)
                 else:
+                    cfg.update(ubuntu_install_source=install_source,
+                               ubuntu_source_record=list(inspected['install_sources'][install_source]))
                     cfg['autoinstall']=ubuntu_build.user_data(cfg)
                     cfg['reusable_autoinstall']=ubuntu_build.user_data(cfg,reusable=True)
             elif linux_clone:
@@ -376,6 +401,8 @@ class SimpleFlow:
         plan=dict(operation='simple-build',configs=configs,credential=credential,tasks=selections,purpose=purpose,
             source=source if linux_iso else d.get('source','') if os=='windows' else profile,media_identity=inspected['identity'] if inspected else None,
             edition=template['name'] if cloning or linux_clone else edition['label'] if edition else inspected['release'] if linux_iso else PROFILES[profile]['label'],dangerous=any(t['item'].get('dangerous') for t in selections))
+        if os=='ubuntu' and linux_iso:
+            plan['edition']+=' · '+ubuntu_build.INSTALL_SOURCES[install_source]
         recipe=specification(plan,configs[0],dict(d,tasks=requested_tasks))
         if reused and any(reused[k]!=recipe[k] for k in ('media_identity','template_identity')):
             raise ValueError('The saved installation source changed. Review the new source in the Create wizard.')
@@ -393,7 +420,8 @@ class SimpleFlow:
             guest_tools=dest['agent_iso'] if os=='windows' else 'Installed automatically',
             notes=['Windows specializes each new clone and verifies its new name and HTTPS login before software runs.'] if cloning else
                 ['Cloud-init configures a new hostname and SSH key before Proxmate verifies the clone and applies software.'] if linux_clone else ['The new machines start automatically. Each gets its own progress report.',
-                'Guest tools come from your selected VirtIO ISO. The MSI checksum is frozen and verified before installation; Windows enforces driver signatures.' if os=='windows' else 'Guest tools come from the operating system package repositories.',
+                'Guest tools come from your selected VirtIO ISO. The MSI checksum is frozen and verified before installation; Windows enforces driver signatures.' if os=='windows' else
+                'The guest needs DNS and HTTPS access to the Rocky mirror list and its regional mirrors during installation for BaseOS and AppStream packages.' if configs[0].get('media_kind') in ('boot','minimal') else 'Guest tools come from the operating system package repositories.',
                 ('Windows setup uses Microsoft\'s public KMS client key for the selected edition. This is not a licence or retail activation key; use your organisation\'s KMS or your own appropriate activation method afterwards.' if windows_setup_key(edition) else 'No generic setup key is supplied for this Windows image. Evaluation media uses its own evaluation terms; other media may ask for a product key in the console.') if os=='windows' else distro+' does not need a product key.',
                 'Proxmate attempts the Windows DVD boot key automatically. If setup does not start, open the Proxmox console; the job waits for installation.' if os=='windows' else
                 'The selected '+distro+' ISO installs unattended on the new system disk. Proxmate verifies SSH before applying software and login settings.' if linux_iso else
@@ -447,8 +475,9 @@ class SimpleFlow:
                     cfg.update(source_kind='proxmox',iso=volume)
         log('Creating '+cfg['name']+'; preparing '+('WinRM' if cfg['kind']=='windows' else 'SSH')+' automatically.')
         with diagnostics.stage('create_vm',vmid=cfg['vmid']):
+            if cfg['kind'] in ('rocky-iso','rocky-clone'): rocky_build.check_cpu(operations.Proxmox(),cfg['node'])
             if cfg['kind'] in linux_install.ISO_KINDS:
-                installer=debian_build if cfg['kind']=='debian-iso' else ubuntu_build
+                installer=LINUX_INSTALLERS[cfg['kind'].split('-')[0]]
                 result=linux_install.install(cfg,plan['source'],plan['media_identity'],job_id,log,installer_module=installer)
             elif cfg['kind'] in linux_install.CLONE_KINDS:
                 result=linux_install.clone(cfg,log)
@@ -517,12 +546,19 @@ def register(app,manager,lifecycle):
             data=request.get_json()
             targets=management.targets(data.get('targets') if isinstance(data,dict) else None)
             platforms={}
+            recorded=linux_install.template_identities(linux_install.template_builds(manager))
+            for distro in LINUX_INSTALLERS:
+                result[distro+'_templates']=[]
             client=operations.Proxmox()
             try:
                 for guest in targets:
                     path=f'nodes/{guest["node"]}/qemu/{guest["vmid"]}/config'
                     try:
-                        ostype=client.call('GET',path).get('ostype') or ''
+                        config=client.call('GET',path)
+                        ostype=config.get('ostype') or ''
+                        if config.get('template'):
+                            distro=recorded.get((guest['node'],guest['vmid'],machine_identity(config)))
+                            if distro: result[distro+'_templates'].append(management.target_id(guest))
                     except (RuntimeError, RequestException):
                         ostype=''
                     platforms[management.target_id(guest)]=('windows' if ostype.startswith(('win','w2k','wvista','wxp'))
@@ -530,10 +566,6 @@ def register(app,manager,lifecycle):
             finally:
                 client.session.close()
             result['platforms']=platforms
-            builds=linux_install.template_builds(manager)
-            for distro in ('ubuntu','debian'):
-                recorded={management.target_id(row) for row in builds if row['config']['kind']==distro+'-iso'}
-                result[distro+'_templates']=[key for key in platforms if platforms[key]=='linux' and key in recorded]
         return jsonify(result)
     @app.get('/api/simple/options')
     def options(): return jsonify(flow.options())

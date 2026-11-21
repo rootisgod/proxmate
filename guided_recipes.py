@@ -39,6 +39,8 @@ def specification(plan, cfg, choices=None):
                             agent_iso=boot['agent_iso'], agent_manual=True)
     else:
         settings.update(profile=cfg['profile'], username=cfg['username'])
+        if cfg.get('ubuntu_install_source'):
+            settings['ubuntu_install_source']=cfg['ubuntu_install_source']
         if choices is None:
             # Old jobs retained resolved keys but lost their source. Ask again so a
             # key later removed from GitHub cannot silently grant a new login.
@@ -66,7 +68,7 @@ def restore_historical_tasks(settings, selections):
     for selection in selections:
         item = selection['item']
         ident = item['id']
-        if ident in ('debian-password','ubuntu-password'):
+        if ident in ('debian-password','ubuntu-password','rocky-password'):
             needs_password = True
         elif item.get('kind') == 'ubuntu-setup':
             policies = {'ubuntu-firewall': ('ubuntu_firewall', ubuntu_build.FIREWALL),

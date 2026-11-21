@@ -5,13 +5,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import quote
+from requests import RequestException
 
 import media
 import operations
 from vm_config import config_identity, machine_identity, safe_guest_config, vm_path
 
-ISO_KINDS = ('ubuntu-iso', 'debian-iso')
-CLONE_KINDS = ('ubuntu-clone', 'debian-clone')
+ISO_KINDS = ('ubuntu-iso', 'debian-iso', 'rocky-iso')
+CLONE_KINDS = ('ubuntu-clone', 'debian-clone', 'rocky-clone')
 
 
 def boot_disc(path, node, source, kernel_initrd, grub_config, files, label):
@@ -59,7 +60,16 @@ def install(cfg, source, identity, job_id, log, *, installer_module):
     client = operations.Proxmox()
     node, vmid = cfg['node'], cfg['vmid']
     preflight(client, cfg)
-    if inspect(source, node)['identity'] != identity:
+    def matches(volume):
+        current = inspect(volume, node)
+        if current['identity'] != identity:
+            return False
+        if 'ubuntu_source_record' in cfg:
+            record = current['install_sources'].get(cfg['ubuntu_install_source'])
+            return record is not None and list(record) == cfg['ubuntu_source_record']
+        return True
+
+    if not matches(source):
         raise ValueError('Linux installer media changed since review.')
     installer = source
     if source.startswith('library:'):
@@ -69,7 +79,7 @@ def install(cfg, source, identity, job_id, log, *, installer_module):
         volumes = client.call('GET', f'nodes/{node}/storage/{storage}/content', content='iso')
         if not any(v['volid'] == installer for v in volumes):
             operations.execute(dict(action='upload-iso', node=node, storage=storage, filename=filename), log)
-        if inspect(installer, node)['identity'] != identity:
+        if not matches(installer):
             raise ValueError('The ISO on Proxmox differs from the reviewed media.')
     log('Preparing '+distro.capitalize()+' boot media from the selected installer and unattended settings.')
     with tempfile.TemporaryDirectory(prefix='proxmate-installer-') as temp:
@@ -85,6 +95,8 @@ def install(cfg, source, identity, job_id, log, *, installer_module):
         # SeaBIOS initializes the devices listed in the Proxmox boot order.
         boot='order=scsi0;ide2;sata1'), log)
     current = client.call('GET', f'{base}/{vmid}/config')
+    if cfg['kind']=='rocky-iso' and current.get('cpu')!='host':
+        raise ValueError('Rocky Linux 10 requires the reviewed host CPU configuration.')
     if (current.get('smbios1') != smbios or current.get('ide2', '').split(',')[0] != boot
             or current.get('sata1', '').split(',')[0] != installer
             or 'serial='+cfg['disk_serial'] not in current.get('scsi0', '').split(',')
@@ -92,6 +104,8 @@ def install(cfg, source, identity, job_id, log, *, installer_module):
         raise ValueError('New Linux VM disk or boot media changed before installation.')
     client.wait(node, client.call('POST', f'{base}/{vmid}/status/start'), log)
     log(distro.capitalize()+' installer started. Installation progress is available in the VM console.')
+    if cfg.get('media_kind') in ('minimal', 'boot') and distro=='rocky':
+        log('Rocky '+cfg['media_kind'].capitalize()+' uses online packages. If package setup stalls, check guest DNS and HTTPS access to the Rocky mirror list and its mirrors in the console.')
     return {'created_smbios': smbios, 'boot_volume': boot, 'installer_volume': installer}
 
 
@@ -129,11 +143,32 @@ def template_builds(manager):
     return builds
 
 
-def templates(builds, resources, distro):
-    recorded = {(b['node'], b['vmid']) for b in builds if b['config']['kind']==distro+'-iso'}
-    return [dict(node=r['node'], vmid=r['vmid'], name=r.get('name') or str(r['vmid']))
-            for r in resources if r.get('type') == 'qemu' and r.get('template') and
-            (r['node'], r['vmid']) in recorded]
+def template_identities(builds):
+    return {(b['node'], b['vmid'], b['machine_identity']):b['config']['kind'].split('-')[0]
+            for b in builds if b.get('machine_identity')}
+
+
+def templates(builds, resources):
+    recorded=template_identities(builds)
+    ids={(node,vmid) for node,vmid,_ in recorded}
+    candidates=[r for r in resources if r.get('type')=='qemu' and r.get('template') and
+                (r['node'],r['vmid']) in ids]
+    result={kind.split('-')[0]+'_templates':[] for kind in ISO_KINDS}
+    if not candidates:
+        return result
+    client=operations.Proxmox()
+    try:
+        for row in candidates:
+            try:
+                current=client.call('GET',vm_path(row)+'/config')
+            except (RequestException, RuntimeError):
+                continue
+            distro=recorded.get((row['node'],row['vmid'],machine_identity(current)))
+            if distro and current.get('template'):
+                result[distro+'_templates'].append(dict(node=row['node'],vmid=row['vmid'],name=current.get('name') or str(row['vmid'])))
+    finally:
+        client.session.close()
+    return result
 
 
 def review_template(life, dest, draft, distro):
@@ -142,12 +177,15 @@ def review_template(life, dest, draft, distro):
     target = dict(node=dest['node'], vmid=number(draft.get('template_id'), 100, 999999999))
     resource, cfg = life.guest(operations.Proxmox(), target, True)
     build_identity = machine_identity(cfg)
+    source_build = next((b for b in template_builds(life.m) if b['config']['kind']==distro+'-iso'
+                         and (b['node'], b['vmid'], b['machine_identity'])==(dest['node'], target['vmid'], build_identity)), None)
     if (resource.get('status') != 'stopped' or cfg.get('ostype') != 'l26'
             or not cfg.get('ide2', '').split(',')[0].endswith('-cloudinit')
-            or not any((b['node'], b['vmid'], b['machine_identity']) == (dest['node'], target['vmid'], build_identity)
-                       for b in template_builds(life.m) if b['config']['kind']==distro+'-iso')):
+            or not source_build):
         raise ValueError('Choose a stopped '+distro.capitalize()+' ISO template prepared by Proxmate.')
     safe_guest_config(cfg)
+    if distro=='rocky' and cfg.get('cpu')!='host':
+        raise ValueError('Choose a Rocky template using the host CPU configuration.')
     match = re.search(r'(?:^|,)bridge=([^,]+)', cfg.get('net0', ''))
     if not match or match[1] not in dest['bridges']:
         raise ValueError('The Linux template needs an available network bridge.')
@@ -158,6 +196,7 @@ def review_template(life, dest, draft, distro):
     if mode == 'linked' and storage not in dest['storage_choices']:
         raise ValueError('The template disk storage is not available for linked copies.')
     return dict(source=target['vmid'], bridge=match[1], name=resource.get('name') or str(target['vmid']),
+                **({'profile': source_build['config'].get('profile','ubuntu-24.04')} if distro=='ubuntu' else {}),
                 identity=config_identity(cfg), mode=mode, storage=storage,
                 disk_gib=max(1, (resource.get('maxdisk', 0)+2**30-1)//2**30))
 

@@ -11,6 +11,7 @@ from urllib.parse import quote
 from flask import jsonify,request
 import operations
 import management
+import linux_install
 from bootstrap import linux_script,windows_script,options as bootstrap_options
 from guest_tasks import run_guest
 from vm_config import config_identity, json_digest as digest, machine_identity, safe_guest_config, vm_path
@@ -373,10 +374,11 @@ class Lifecycle:
                 # The agent may hold the progress file open while the guest finishes.
                 # The completion markers below are written after setup and guest tools succeed.
                 waiting=stages.get(stage,waiting)
-            if d['kind'] not in ('ubuntu-clone','debian-clone'):
+            # On Rocky the public host key is published by the installed OS at boot.
+            if d['kind'] not in (*linux_install.CLONE_KINDS,'rocky-iso'):
                 marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
                 if marker.get('content','').strip()!='ready': raise ValueError(waiting)
-            if d['kind'] in ('ubuntu-iso','ubuntu-clone','debian-iso','debian-clone'):
+            if d['kind'] in linux_install.ISO_KINDS+linux_install.CLONE_KINDS:
                 hostinfo=p.call('GET',path+'/agent/get-host-name').get('result',{})
                 if hostinfo.get('host-name','').split('.')[0].casefold()!=d['name'].casefold():
                     raise ValueError('Waiting for '+d['kind'].split('-')[0].capitalize()+' to report its reviewed hostname')
@@ -397,7 +399,7 @@ class Lifecycle:
             resolved=management.endpoint_addresses(binding)
             if not set(map(str,resolved)).issubset(addresses): raise ValueError('Configured address does not match guest-agent addresses')
             waiting='Waiting for guest transport identity'
-            trust = management.agent_trust(p, path, platform)
+            trust = management.agent_trust(p,path,platform,rocky=True) if d['kind'].startswith('rocky-') else management.agent_trust(p,path,platform)
             management.check_saved_trust(previous, trust, expected_identity)
             binding.update(trust)
             waiting='Authenticated HTTPS WinRM check has not passed' if platform=='windows' else 'Authenticated SSH check has not passed'
@@ -414,6 +416,9 @@ class Lifecycle:
         except management.TrustChanged as exc:
             raise BootstrapFailed(str(exc)) from None
         except Exception as exc:
+            if (d['kind'] in ('rocky-iso','rocky-clone') and 'guest-file-' in str(exc)
+                    and ('has been disabled' in str(exc) or 'is not allowed' in str(exc))):
+                raise BootstrapFailed('The Rocky guest agent blocks file reads needed to verify SSH. Check the RPC allowlist in /etc/sysconfig/qemu-ga.') from None
             pending=BootstrapPending(str(exc) if isinstance(exc,ValueError) else waiting)
             pending.phase=waiting
             raise pending from None

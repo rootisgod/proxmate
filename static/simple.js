@@ -114,7 +114,7 @@ function simpleRender(){
       ['template','Reusable template','Install the OS and your scripts, then prepare the guest for cloning.']];
     $('#content').innerHTML=title('Create','Choose what to build.')+'<div class="build-choices">'+choices.map(([purpose,name,description])=>
       '<section class="panel"><h2>'+name+'</h2><p>'+description+'</p><div class="row-actions">'+
-      '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button><button data-simple="debian" data-purpose="'+purpose+'">Debian</button></div></section>').join('')+'</div>'+
+      '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button><button data-simple="debian" data-purpose="'+purpose+'">Debian</button><button data-simple="rocky" data-purpose="'+purpose+'">Rocky Linux</button></div></section>').join('')+'</div>'+
       '<section id="saved-builds" aria-label="Saved builds"></section><h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
     loadGuidedRecipes($('#saved-builds'));
   }else{
@@ -147,7 +147,7 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
     let name=prefix;
     for(let index=2;used.has(name);index++)name=prefix.slice(0,11-String(index).length)+'-'+index;
     const linuxIso=os!=='windows'&&dest[os+'_isos']?.length;
-    simpleDraft={os,purpose,source_kind:defaultClone?'template':os==='ubuntu'&&!linuxIso?'cloud':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:os==='debian'?'debian-13':'ubuntu-24.04',username:os==='debian'?'debian':'ubuntu',password:'',
+    simpleDraft={os,purpose,source_kind:defaultClone?'template':os==='ubuntu'&&!linuxIso?'cloud':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:linuxProfiles[os]||'ubuntu-24.04',username:os==='windows'?'ubuntu':os,password:'',
       node:dest.node,storage:dest.storage,iso_storage:dest.iso_storage,bridge:dest.bridge,management_cidr:dest.management_cidr,agent_iso:dest.agent_iso,
       cores:2,memory_gb:os==='windows'||linuxIso?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scripts:[],script_params:{}};
     simpleStep=0;simplePlan=null;simpleBusy=false;$('#simple-fields').inert=false;$('#simple-back').disabled=false;
@@ -163,13 +163,15 @@ function simpleSources(){
   return [...dest.isos,...simpleOptions.local_isos].sort((a,b)=>priority(b)-priority(a)||a.label.localeCompare(b.label));
 }
 
+const linuxNames={ubuntu:'Ubuntu',debian:'Debian',rocky:'Rocky Linux'};
+const linuxProfiles={ubuntu:'ubuntu-24.04',debian:'debian-13',rocky:'rocky-10'};
+
 function linuxSourceFields(d,dest){
-  const debian=d.os==='debian';
-  const label=debian?'Debian':'Ubuntu';
+  const label=linuxNames[d.os];
   const isos=dest[d.os+'_isos']||[];
   const templates=simpleOptions[d.os+'_templates']||[];
-  const sources=[['iso',debian?'Debian 13 installer ISO':'Ubuntu Server 24.04 ISO']];
-  if(!debian)sources.push(['cloud','Ubuntu cloud image']);
+  const sources=[['iso',(simpleOptions[d.os]?.release||label)+' installer ISO']];
+  if(d.os==='ubuntu')sources.push(['cloud','Ubuntu cloud image']);
   if(d.purpose==='vm'&&templates.length)sources.push(['template',label+' template']);
   const fields=ws('source_kind','Install from',sources,d.source_kind);
   if(d.source_kind==='template'){
@@ -182,9 +184,12 @@ function linuxSourceFields(d,dest){
   if(d.source_kind==='cloud')
     return fields+ws('profile','Ubuntu version',Object.entries(simpleOptions.profiles),d.profile);
   if(!isos.some(iso=>iso.id===d.source))d.source=isos[0]?.id||'';
-  if(!isos.length&&debian)return fields+'<p>Add a Debian 13 amd64 DVD-1 or netinst ISO to the ISO library.</p>';
-  if(!isos.length)return fields+'<p>Add an Ubuntu Server 24.04 amd64 live installer ISO or choose the cloud image.</p>';
-  return fields+ws('source','Installer ISO',isos.map(iso=>[iso.id,iso.label]),d.source);
+  if(!isos.length&&d.os==='rocky')return fields+'<p>Add a Rocky Linux 10 x86_64 DVD, Minimal or Boot ISO to the ISO library.</p>';
+  if(!isos.length&&d.os==='debian')return fields+'<p>Add a Debian 13 amd64 DVD-1 or netinst ISO to the ISO library.</p>';
+  if(!isos.length)return fields+'<p>Add an Ubuntu Server 22.04, 24.04 or 26.04 LTS amd64 live installer ISO or choose the cloud image.</p>';
+  return fields+ws('source','Installer ISO',isos.map(iso=>[iso.id,iso.label]),d.source)+
+    (d.os==='ubuntu'&&simpleOptions.ubuntu?.install_sources?ws('ubuntu_install_source','Installation size',
+      Object.entries(simpleOptions.ubuntu.install_sources),d.ubuntu_install_source||'ubuntu-server'):'');
 }
 
 function collectSimple(){
@@ -428,7 +433,7 @@ function machineConfigFields(d,dest){
 
 function drawSimple(){
   const d=simpleDraft;if(!d)return;
-  $('#simple-title').textContent=simpleStep===2?'Ready to create':(d.os==='windows'?'Windows Server':d.os==='debian'?'Debian':'Ubuntu')+(d.purpose==='template'?' template':' VM setup');
+  $('#simple-title').textContent=simpleStep===2?'Ready to create':(d.os==='windows'?'Windows Server':linuxNames[d.os])+(d.purpose==='template'?' template':' VM setup');
   $('#simple-steps').innerHTML=['Machine','Software','Review'].map((s,i)=>`<li tabindex="-1" ${i===simpleStep?'aria-current="step"':''}>${i+1}. ${s}</li>`).join('');
   $('#simple-back').hidden=simpleStep===0;$('#simple-next').textContent=simpleStep===2?'Create '+simplePlan.machines.length+(d.purpose==='template'?' template':' machine'+(simplePlan.machines.length===1?'':'s')):simpleStep===1?'Review build':'Continue';
   let html='';
@@ -443,7 +448,7 @@ function drawSimple(){
         wf('github_username','GitHub username for SSH keys (optional)',d.github_username||'','text','maxlength="39" autocomplete="off"')+
         wf('ssh_public_key','Paste an SSH public key (optional)',d.ssh_public_key||'','text','maxlength="8192" placeholder="ssh-ed25519 …"')+
         (d.purpose==='vm'?wc('ubuntu_password_enabled','Allow password sign-in',d.ubuntu_password_enabled)+
-          (d.ubuntu_password_enabled?wf('ubuntu_password',(d.os==='debian'?'Debian':'Ubuntu')+' login password',d.ubuntu_password||'','password',
+          (d.ubuntu_password_enabled?wf('ubuntu_password',(linuxNames[d.os])+' login password',d.ubuntu_password||'','password',
             'required minlength="12" maxlength="128" autocomplete="new-password"'):''):''))+
       '</section><section aria-labelledby="machine-source"><h3 id="machine-source">Installation source</h3>'+
       (d.os==='windows'?windowsSourceFields(d):
@@ -495,7 +500,7 @@ function drawSimple(){
         d.count=1;if(d.source_kind==='template')d.source_kind='iso';
         delete d.ubuntu_password;delete d.ubuntu_password_enabled;
       }
-      if(name==='source_kind'&&d.source_kind==='iso'){d.profile=d.os==='debian'?'debian-13':'ubuntu-24.04';d.memory_gb=Math.max(4,d.memory_gb);d.disk=Math.max(16,d.disk)}
+      if(name==='source_kind'&&d.source_kind==='iso'){d.profile=linuxProfiles[d.os];d.memory_gb=Math.max(4,d.memory_gb);d.disk=Math.max(16,d.disk)}
       if(d.os!=='windows'&&d.source_kind==='template'){
         const templates=simpleOptions[d.os+'_templates']||[];
         const selected=templates.find(t=>t.vmid===Number(d.template_id))||templates[0];
@@ -520,6 +525,7 @@ document.addEventListener('click',async e=>{
       const hint=await api('simple/software',{targets:[{node:src.node,vmid:src.vmid}]});
       if(view!==fromView)return;
       if(hint.platforms[machineKey(src)]==='windows')await openSimple('windows','vm','',src);
+      else if(hint.rocky_templates?.includes(machineKey(src)))await openSimple('rocky','vm','',src);
       else if(hint.debian_templates?.includes(machineKey(src)))await openSimple('debian','vm','',src);
       else if(hint.ubuntu_templates?.includes(machineKey(src)))await openSimple('ubuntu','vm','',src);
       else{
@@ -550,9 +556,11 @@ function reviewProgress(message){
 }
 async function reviewBuild(draft){
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
+  if(draft.os==='ubuntu'&&draft.source_kind!=='cloud')delete settings.profile;
+  if(draft.os!=='ubuntu'||draft.source_kind!=='iso')delete settings.ubuntu_install_source;
   delete settings.ubuntu_password_enabled;
   if(!draft.ubuntu_password_enabled)delete settings.ubuntu_password;
-  if(draft.os==='debian'&&settings.ubuntu_password){settings.linux_password=settings.ubuntu_password;delete settings.ubuntu_password}
+  if(draft.os!=='ubuntu'&&settings.ubuntu_password){settings.linux_password=settings.ubuntu_password;delete settings.ubuntu_password}
   return requestBuildReview(settings,()=>simpleDraft===draft,reviewProgress);
 }
 async function requestBuildReview(settings,active,progress){
@@ -560,7 +568,7 @@ async function requestBuildReview(settings,active,progress){
   const ticket=await api('simple/plan',settings,{Prefer:'respond-async'});
   if(!ticket.review_id)return ticket;
   const stages={inventory:'Checking available storage and machine IDs…',editions:'Checking the selected Windows edition…',drivers:'Checking guest drivers and installer integrity…',
-    debian_media:'Checking the Debian installer ISO...',ubuntu_media:'Checking the Ubuntu Server ISO…',github_keys:'Reading public SSH keys from GitHub…'};
+    rocky_media:'Checking the Rocky Linux installer ISO...',debian_media:'Checking the Debian installer ISO...',ubuntu_media:'Checking the Ubuntu Server ISO…',github_keys:'Reading public SSH keys from GitHub…'};
   let failures=0;
   while(active()){
     let result;
@@ -581,7 +589,7 @@ $('#simple-form').onsubmit=async e=>{
   $('#simple-next').disabled=true;$('#simple-error').textContent='';
   try{
     collectSimple();
-    if(simpleStep===0){if(draft.os==='windows'&&draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');if(draft.os==='debian'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose a Debian 13 installer ISO.');if(draft.os==='ubuntu'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose an Ubuntu Server 24.04 ISO or the cloud image.');simpleStep=1;drawSimple();focusSimpleStep()}
+    if(simpleStep===0){if(draft.os==='windows'&&draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');if(['rocky','debian'].includes(draft.os)&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose a '+linuxNames[draft.os]+' installer ISO.');if(draft.os==='ubuntu'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose an Ubuntu Server LTS ISO or the cloud image.');simpleStep=1;drawSimple();focusSimpleStep()}
     else if(simpleStep===1){$('#simple-back').disabled=true;$('#simple-next').textContent='Preparing review…';$('#simple-fields').inert=true;const plan=await reviewBuild(draft);if(simpleDraft!==draft)return;simplePlan=plan;simpleStep=2;drawSimple();focusSimpleStep()}
     else{if(!draft.confirmed)throw Error('Confirm the machines and software before creating.');const result=await api('simple/run',{plan_id:simplePlan.id,confirmed:true,risk_confirmed:!!draft.risk_confirmed});submittedBuilds(result.jobs);if(simpleDraft===draft)$('#simple-dialog').close();await refresh();}
   }catch(err){if(simpleDraft===draft)$('#simple-error').textContent=err.message}

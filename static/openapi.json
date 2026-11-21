@@ -473,7 +473,7 @@
       "GuidedBuildDescription": {
         "type": "object",
         "properties": {
-          "os": {"type": "string", "enum": ["windows","ubuntu","debian"]},
+          "os": {"type": "string", "enum": ["windows","ubuntu","debian","rocky"]},
           "purpose": {"type": "string", "enum": ["vm","template"]},
           "source_kind": {"type": "string", "enum": ["cloud","iso","template"]},
           "edition": {"type": "string"}, "password_login": {"type": "boolean"},
@@ -1433,6 +1433,7 @@
             "type": "object",
             "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
           },
+          "has_kickstart": {"type":"boolean","description":"Rocky Linux ISO job with a reusable redacted Kickstart file."},
           "has_preseed": {"type":"boolean","description":"Debian ISO job with a reusable redacted preseed file."},
           "has_autoinstall": {
             "type": "boolean",
@@ -2703,7 +2704,7 @@
     "/api/simple/options": {
       "get": {
         "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
-        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 24.04 amd64 installer IDs. The ubuntu object lists suggested packages and firewall/update policies. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. Also includes Windows media, programs and settings.",
+        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 installer IDs ordered newest first. The ubuntu object lists suggested packages, firewall/update policies and install_sources. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. rocky_isos lists Rocky Linux 10 x86_64 DVD, Minimal and Boot images per destination. rocky_templates lists prepared Rocky templates. Also includes Windows media, programs and settings.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2898,8 +2899,8 @@
     },
     "/api/simple/plan": {
       "post": {
-        "summary": "Review a batch of new Windows Server, Ubuntu or Debian machines and software",
-        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu ISO installs support Ubuntu Server 24.04 amd64 and require a discovered source from simple/options. Debian 13 installs accept ISO or template sources and default to the newest discovered compatible installer. Ubuntu cloud images remain available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
+        "summary": "Review a batch of new Windows Server, Ubuntu, Debian or Rocky Linux machines and software",
+        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu ISO installs support Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 and require a discovered source from simple/options. Rocky Linux 10 requires an x86-64-v3 node and accepts DVD, Minimal or Boot media or a prepared Rocky template. Minimal and Boot need guest DNS and HTTPS access to the version-matched Rocky repositories. Debian 13 installs accept ISO or template sources and default to the newest discovered compatible installer. Ubuntu cloud images remain available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2958,7 +2959,8 @@
                     "enum": [
                       "windows",
                       "ubuntu",
-                      "debian"
+                      "debian",
+                      "rocky"
                     ],
                     "default": "windows"
                   },
@@ -3015,7 +3017,7 @@
                   },
                   "source": {
                     "type": "string",
-                    "description": "ISO ID from discovery. Debian defaults to the first compatible ISO on the selected node."
+                    "description": "ISO ID from discovery. Debian and Rocky default to the first compatible ISO on the selected node."
                   },
                   "edition": {
                     "type": "integer",
@@ -3043,7 +3045,7 @@
                   },
                   "profile": {
                     "type": "string",
-                    "description": "Ubuntu cloud release from discovery or debian-13 for Debian."
+                    "description": "Ubuntu cloud release from discovery or debian-13 or rocky-10 for the corresponding installer."
                   },
                   "username": {
                     "type": "string",
@@ -3143,7 +3145,7 @@
                     "maxLength": 39,
                     "description": "Optional GitHub account with public SSH keys. Keys are frozen at review, which returns github_username and ssh_key_fingerprints."
                   },
-                  "linux_password": {"type":"string","format":"password","writeOnly":true,"minLength":12,"maxLength":128,"description":"Optional console and SSH password for a working Debian or Ubuntu VM or clone. Excluded from reusable installer files."},
+                  "linux_password": {"type":"string","format":"password","writeOnly":true,"minLength":12,"maxLength":128,"description":"Optional console and SSH password for a working Rocky, Debian or Ubuntu VM or clone. Excluded from reusable installer files."},
                   "ubuntu_password": {
                     "type": "string",
                     "format": "password",
@@ -3217,13 +3219,14 @@
                     }
                   },
                   {
-                    "title": "Ubuntu Server 24.04 ISO",
+                    "title": "Ubuntu Server LTS ISO",
                     "description": "Uses the Proxmox default firmware (SeaBIOS), machine type and display.",
                     "required": ["os", "source_kind", "source"],
                     "properties": {
                       "os": {"enum": ["ubuntu"]},
                       "source_kind": {"enum": ["iso"]},
-                      "profile": {"enum": ["ubuntu-24.04"]}
+                      "profile": {"enum": ["ubuntu-22.04", "ubuntu-24.04", "ubuntu-26.04"], "description": "Optional. Must match the inspected ISO."},
+                      "ubuntu_install_source": {"enum": ["ubuntu-server", "ubuntu-server-minimal"], "default": "ubuntu-server"}
                     }
                   },
                   {
@@ -3235,6 +3238,16 @@
                       "source_kind": {"enum": ["template"]},
                       "purpose": {"enum": ["vm"]}
                     }
+                  },
+                  {
+                    "title": "Rocky Linux 10 installer ISO",
+                    "required": ["os"],
+                    "properties": {"os":{"enum":["rocky"]},"source_kind":{"enum":["iso"]},"profile":{"enum":["rocky-10"]}}
+                  },
+                  {
+                    "title": "Rocky Linux template clone",
+                    "required": ["os","source_kind","template_id"],
+                    "properties": {"os":{"enum":["rocky"]},"source_kind":{"enum":["template"]},"purpose":{"enum":["vm"]}}
                   },
                   {
                     "title": "Debian 13 installer",
@@ -3808,6 +3821,17 @@
               }
             }
           }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/kickstart": {
+      "get": {
+        "summary": "Download the reusable Rocky Linux Kickstart answer",
+        "parameters": [{"name":"job_id","in":"path","required":true,"schema":{"type":"string"}}],
+        "responses": {
+          "200": {"description":"Public keys and system disk serial are replaced with placeholders.","content":{"text/plain":{"schema":{"type":"string"}}}},
+          "401": {"description":"Authentication required"},
+          "404": {"description":"No Rocky Linux ISO configuration for this job"}
         }
       }
     },

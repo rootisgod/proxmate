@@ -6,6 +6,9 @@ import time
 from urllib.parse import quote
 
 import operations
+import linux_install
+import management
+from guest_tasks import run_guest
 from vm_config import machine_identity
 
 
@@ -56,30 +59,47 @@ def finish(cfg,manager,log,expected_identity):
         user=cfg['username']
         if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',user): raise ValueError('Invalid Linux username')
         clean='cloud-init clean --logs --machine-id'
-        if cfg['kind'] in ('ubuntu-iso','debian-iso'):
+        if cfg['kind'] in linux_install.ISO_KINDS:
             clean+=' --seed'
         script='set -eu\n'+clean+'\nrm -f /etc/ssh/ssh_host_* /var/lib/proxmate/bootstrap-ready '+shlex.quote('/home/'+user+'/.ssh/authorized_keys')+'\n'
         if cfg['kind'] in ('ubuntu-iso','debian-iso'):
             script+=('rm -f /etc/cloud/cloud.cfg.d/99-installer.cfg '
                      '/etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg '
                      '/etc/netplan/00-installer-config.yaml /etc/netplan/50-cloud-init.yaml\n')
-        if cfg['kind']=='debian-iso':
+        if cfg['kind'] in ('debian-iso','rocky-iso'):
             # The installer leaves a separate D-Bus ID. systemd can reuse it on a clone's first boot.
             script+=('test "$(cat /etc/machine-id)" = uninitialized\n'
-                     'ln -sfT /etc/machine-id /var/lib/dbus/machine-id\n'
-                     'rm -f /etc/cloud/cloud-init.disabled /etc/sudoers.d/90-proxmate\n'
-                     'printf "auto lo\\niface lo inet loopback\\nsource /etc/network/interfaces.d/*\\n" > /etc/network/interfaces\n')
+                     'if test -d /var/lib/dbus; then ln -sfT /etc/machine-id /var/lib/dbus/machine-id; fi\n'
+                     'rm -f /etc/cloud/cloud-init.disabled /etc/sudoers.d/90-proxmate\n')
+        if cfg['kind']=='debian-iso':
+            script+='printf "auto lo\\niface lo inet loopback\\nsource /etc/network/interfaces.d/*\\n" > /etc/network/interfaces\n'
+        if cfg['kind']=='rocky-iso':
+            script=('set -e\nsystemctl stop proxmate-ssh-key.path proxmate-ssh-key.service\n'+script+
+                    'rm -f /etc/proxmate/ssh-host.pub /root/anaconda-ks.cfg /root/original-ks.cfg /root/initial-setup-ks.cfg\n')
         command=['/bin/sh','-c',script]
     log('Preparing reusable template: cleaning guest identity and setup secrets.')
-    pid=p.call('POST',base+'/agent/exec',command=command)['pid']
-    deadline=time.monotonic()+1200
-    while time.monotonic()<deadline:
-        status=p.call('GET',base+'/agent/exec-status',pid=pid)
-        if status.get('exited'):
-            if status.get('exitcode')!=0: raise RuntimeError('Guest generalization failed. Inspect the retained VM; it was not converted.')
-            break
-        time.sleep(5)
-    else: raise RuntimeError('Generalization timed out. Inspect the retained VM; it was not converted.')
+    if cfg['kind']=='rocky-iso':
+        binding=manager.get('connections',f'{node}:{vmid}')
+        if (binding.get('machine_identity')!=expected_identity or binding['credential_id']!=cfg['bootstrap']['credential_id']
+                or not binding.get('verified_at') or not binding.get('become')):
+            raise ValueError('Rocky template preparation requires the verified build login.')
+        credential=manager.get('credentials',binding['credential_id'])
+        if binding.get('credential_revision')!=credential['updated']:
+            raise ValueError('Rocky build login changed before template preparation.')
+        management.check_saved_trust(binding,management.agent_trust(p,base,'linux',rocky=True),expected_identity)
+        management.verify_guest_access(p,cfg,binding,credential,log)
+        owned_config()
+        run_guest(binding,credential,[{'ansible.builtin.shell':{'cmd':script}}],log)
+    else:
+        pid=p.call('POST',base+'/agent/exec',command=command)['pid']
+        deadline=time.monotonic()+1200
+        while time.monotonic()<deadline:
+            status=p.call('GET',base+'/agent/exec-status',pid=pid)
+            if status.get('exited'):
+                if status.get('exitcode')!=0: raise RuntimeError('Guest generalization failed. Inspect the retained VM; it was not converted.')
+                break
+            time.sleep(5)
+        else: raise RuntimeError('Generalization timed out. Inspect the retained VM; it was not converted.')
     owned_config()
     p.wait(node,p.call('POST',base+'/status/shutdown',timeout=120,forceStop=0),log)
     if p.call('GET',base+'/status/current').get('status')!='stopped': raise ValueError('VM did not shut down; no template conversion performed')
@@ -87,7 +107,7 @@ def finish(cfg,manager,log,expected_identity):
     if cfg['kind']=='windows':
         operations.execute(dict(action='finish-setup',node=node,vmid=vmid,prepared=True),log)
         p.call('PUT',base+'/config',delete='ide2,sata2',boot='order=sata0',onboot=0)
-    elif cfg['kind'] in ('ubuntu-iso','debian-iso'):
+    elif cfg['kind'] in linux_install.ISO_KINDS:
         if current.get('ide2') or current.get('sata1'):
             raise ValueError('Linux installation media is still attached. Inspect the guest before converting.')
         p.call('PUT',base+'/config',ide2=cfg['storage']+':cloudinit',ipconfig0='ip=dhcp',
