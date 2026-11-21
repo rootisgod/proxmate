@@ -1,6 +1,8 @@
 import copy
 import io
+import os
 from pathlib import Path
+import subprocess
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -17,6 +19,34 @@ from test_simple_flow import simple_lab
 
 
 NS={'u':'urn:schemas-microsoft-com:unattend'}
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Windows Shell is required to create and read real .lnk files')
+def test_domain_console_shortcuts_open_the_correct_msc_and_are_idempotent(tmp_path):
+    item=next(t for t in guest_tasks.BUILTINS if t['id']==guest_tasks.DOMAIN_CONTROLLER)
+    steps=guest_tasks.compile_task(item,dict(domain_name='lab.example.test',dsrm_password='Fixture restore 123!'))
+    shortcut=steps[-1]['ansible.windows.win_powershell']['script']
+    # Redirect just the two Windows special folders into the test directory.
+    shortcut=shortcut.replace("[Environment]::GetFolderPath('CommonDesktopDirectory')","(Get-Location).Path")
+    shortcut=shortcut.replace('[Environment]::SystemDirectory',"(Get-Location).Path")
+    for name in ('mmc.exe','gpmc.msc','dsa.msc'):
+        (tmp_path/name).touch()
+    harness=tmp_path/'verify.ps1'
+    harness.write_text("$ErrorActionPreference='Stop'\n$Ansible=@{}\nfunction Install-Links {\n"+shortcut+"\n}\n"+r"""
+Install-Links
+if (!$Ansible.Changed) { throw 'Initial shortcuts missing' }
+Install-Links
+if ($Ansible.Changed) { throw 'Repeated installation rewrote the shortcuts' }
+$shell=New-Object -ComObject WScript.Shell
+foreach ($pair in @{'Group Policy Management'='gpmc.msc'; 'Active Directory Users and Computers'='dsa.msc'}.GetEnumerator()) {
+    $link=$shell.CreateShortcut((Join-Path $PWD ($pair.Key+'.lnk')))
+    if ($link.TargetPath -ne (Join-Path $PWD 'mmc.exe') -or $link.Arguments -ne ('"{0}"' -f (Join-Path $PWD $pair.Value))) {
+        throw 'Unexpected MMC target or console'
+    }
+}
+""",encoding='utf-8-sig')
+    subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(harness)],
+                   cwd=tmp_path,check=True,capture_output=True,text=True,timeout=30)
 
 
 def xml_from_iso(path):

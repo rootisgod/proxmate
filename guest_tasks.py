@@ -16,8 +16,15 @@ from script_library import EXAMPLES, validate_script
 
 
 SERVICE_STATE_INPUT = {'state': {'type': 'choice', 'choices': ['started', 'stopped', 'restarted']}}
+DOMAIN_CONTROLLER = 'windows-domain-controller'
 
 BUILTINS = [
+    dict(id=DOMAIN_CONTROLLER, name='Set up a Windows domain controller', platform='windows', kind='ansible', builtin=True,
+         description='Create the first controller and DNS for a new forest on one standalone Windows Server with Desktop Experience. Use the built-in Administrator login. Windows restarts, then both management consoles appear on the public desktop.',
+         dangerous=True, parameters={'domain_name': 'New forest DNS name (e.g. lab.example.test)',
+                                     'dsrm_password': 'Directory Services Restore Mode (DSRM) password'},
+         input_types={'domain_name': {'type': 'dns_domain'}, 'dsrm_password': {'type': 'password'}},
+         body=Path(__file__).with_name('windows_domain.yml').read_text(encoding='utf-8')),
     dict(id='install-chocolatey', name='Install Chocolatey', platform='windows', description='Install the Chocolatey package manager.', parameters={}),
     dict(id='chocolatey-package', name='Install a Chocolatey package', platform='windows', description='Install a named package without allowing checksum bypass.', parameters={'package': 'Package ID, e.g. 7zip'}),
     dict(id='windows-feature', name='Install a Windows Server feature (restart if needed)', platform='windows', description='Install a role or feature with its management tools. Restart automatically if required.', parameters={'feature':'Feature name, e.g. Web-Server'}),
@@ -56,12 +63,28 @@ def input_type_schema(parameters, defaults, types, platform):
 
 
 def validate_input(key,value,spec):
+    kind=spec.get('type')
+    if kind=='password':
+        if not isinstance(value,str) or not 12<=len(value)<=128 or any(ord(c)<32 or ord(c)==127 for c in value):
+            raise ValueError('Supply a 12–128 character restore password without control characters.')
+        return
+    if kind=='dns_domain':
+        label=r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+        if (not isinstance(value,str) or len(value)>253 or not re.fullmatch(label+r'(?:\.'+label+r')+',value)
+                or value.split('.')[-1].isdigit()):
+            raise ValueError('Enter a fully qualified DNS domain name, for example lab.example.test.')
+        return
     if not isinstance(value,str) or not PLAIN_VALUE.fullmatch(value):
         raise ValueError('Invalid task parameter: '+key)
-    kind=spec.get('type')
     if kind=='choice' and value not in spec['choices']: raise ValueError('Choose a listed value for '+key)
     if kind=='boolean' and value not in ('true','false'): raise ValueError('Choose yes or no for '+key)
     if kind=='drive' and not re.fullmatch('[D-Z]',value): raise ValueError('Choose a drive letter from D to Z for '+key)
+
+
+def public_params(selection):
+    """Only operator-visible parameters belong in reviews, recipes and build history."""
+    types=selection['item'].get('input_types',{})
+    return {k:v for k,v in selection['params'].items() if types.get(k,{}).get('type')!='password'}
 
 
 def selected_drive_letters(selections):
@@ -89,6 +112,14 @@ def compile_task(item, params):
     if item['id'] in ('linux-service','windows-service') and 'state' in params and params['state'] not in ('started', 'stopped', 'restarted'):
         raise ValueError('Service state must be started, stopped or restarted')
     ident = item['id']
+    if ident == DOMAIN_CONTROLLER:
+        tasks=yaml.safe_load(item['body'])
+        for task in tasks:
+            task['vars']={'domain_name':params['domain_name']}
+            if 'microsoft.ad.domain' in task:
+                # Keep arbitrary password characters literal across the Ansible template boundary.
+                task['vars']['dsrm_encoded']=base64.b64encode(params['dsrm_password'].encode()).decode()
+        return tasks
     if item.get('kind') in ('windows-setup','ubuntu-setup','linux-setup'): return copy.deepcopy(item['steps'])
     if ident == 'install-chocolatey': return [{'chocolatey.chocolatey.win_chocolatey': {'name': 'chocolatey', 'state': 'present'}}]
     if ident == 'chocolatey-package': return [{'chocolatey.chocolatey.win_chocolatey': {'name': params['package'], 'state': 'present'}}]

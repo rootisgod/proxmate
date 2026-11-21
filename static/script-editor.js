@@ -6,14 +6,17 @@ function scriptLibrary() {
     return '<div class="script-cards">' + records.map(t =>
       '<article class="panel script-card"><div class="script-meta">'+
       esc(t.platform === 'windows' ? 'Windows' : 'Linux')+' · '+esc(scriptFormats[t.kind])+
-      '</div><h3>'+esc(t.name)+'</h3>'+(t.example?'<p>'+esc(t.description)+'</p>':'')+
-      '<div class="row-actions">'+mgButton(t.example?'Open example':'Edit script','edit-tasks',t.id)+
+      '</div><h3>'+esc(t.name)+'</h3>'+(t.example||t.builtin?'<p>'+esc(t.description)+'</p>':'')+
+      (t.builtin?'<details><summary>View script source</summary><pre class="run-source">'+esc(t.body)+'</pre></details>':'')+
+      '<div class="row-actions">'+(t.builtin?'':mgButton(t.example?'Open example':'Edit script','edit-tasks',t.id))+
       '<button data-simple-task="'+esc(t.id)+'">Run script</button>'+
-      (t.example?'':mgButton('Delete','delete-tasks',t.id))+'</div></article>').join('')+'</div>';
+      (t.example||t.builtin?'':mgButton('Delete','delete-tasks',t.id))+'</div></article>').join('')+'</div>';
   }
-  const saved = scripts.filter(t => !t.example), examples = scripts.filter(t => t.example);
+  const saved = scripts.filter(t => !t.example&&!t.builtin), examples = scripts.filter(t => t.example);
+  const builtins = scripts.filter(t => t.builtin);
   return title('Script library','Guest scripts for new and existing machines.',mgButton('New script','new-tasks'))+
     '<button data-simple="apply">Run a script</button>'+
+    (builtins.length?'<h2>Built-in scripts</h2>'+cards(builtins):'')+
     (saved.length?'<h2>Your scripts</h2>'+cards(saved):'')+
     (examples.length?'<h2>Starter scripts</h2><p>Open an example to read it or save your own copy.</p>'+cards(examples):'');
 }
@@ -33,6 +36,8 @@ function paramControl(spec,value,attrs,occupied=[],required=true){
   const kind=spec?.type;
   if(kind==='boolean')return '<input type="checkbox" '+attrs+(value==='true'?' checked':'')+'>';
   const needed=required?' required':'';
+  if(kind==='password')return '<input type="password" autocomplete="new-password" minlength="12" maxlength="128" '+attrs+needed+'>';
+  if(kind==='dns_domain')return '<input type="text" autocapitalize="none" spellcheck="false" maxlength="253" placeholder="lab.example.test" '+attrs+needed+' value="'+esc(value??'')+'">';
   if(kind==='choice'||kind==='drive'){
     const choices=kind==='drive'?[...'DEFGHIJKLMNOPQRSTUVWXYZ']:spec.choices;
     return '<select '+attrs+needed+'><option value="">'+(required?'Choose…':'No default')+'</option>'+

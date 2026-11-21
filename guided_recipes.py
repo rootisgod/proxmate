@@ -1,4 +1,5 @@
 """Reusable operator choices for guided builds. Execution secrets belong to one build."""
+import copy
 import uuid
 
 from flask import jsonify, request
@@ -8,6 +9,7 @@ import operations
 import linux_access
 import linux_install
 import ubuntu_build
+from guest_tasks import DOMAIN_CONTROLLER, public_params
 
 
 def specification(plan, cfg, choices=None):
@@ -78,7 +80,7 @@ def restore_historical_tasks(settings, selections):
         elif item.get('kind') == 'windows-setup':
             settings['windows_settings'].append(ident.removeprefix('setup-'))
         else:
-            settings['tasks'].append({'id': ident, 'params': selection['params']})
+            settings['tasks'].append({'id': ident, 'params': public_params(selection)})
     return needs_password
 
 
@@ -96,7 +98,9 @@ def from_job(payload):
 
 def description(recipe):
     settings = recipe['settings']
+    dc=next((s for s in settings.get('tasks',[]) if s['id']==DOMAIN_CONTROLLER),None)
     return dict(os=settings['os'], purpose=settings['purpose'], source_kind=settings['source_kind'],
+                **({'domain_name':dc['params']['domain_name']} if dc else {}),
                 edition=recipe['edition'], password_login=recipe['password_login'],needs_key_source=recipe['needs_key_source'])
 
 
@@ -123,13 +127,19 @@ class GuidedRecipes:
     def expand(self, draft):
         recipe = self.lookup(draft['reuse'])
         allowed = {'name', 'count', 'password', 'ubuntu_password', 'linux_password', 'generalized'}
+        tasks=copy.deepcopy(recipe['settings'].get('tasks',[]))
+        for task in tasks:
+            if task['id']==DOMAIN_CONTROLLER:
+                allowed.update(('domain_name','dsrm_password'))
+                task['params'].update(domain_name=draft.get('domain_name',task['params']['domain_name']),
+                                      dsrm_password=draft.get('dsrm_password',''))
         if recipe['needs_key_source']:
             allowed.update(('github_username','ssh_public_key'))
             if not any(isinstance(draft.get(k),str) and draft[k].strip() for k in ('github_username','ssh_public_key')):
                 raise ValueError('Supply the GitHub username or workstation public key for this historical build.')
         if set(draft) - allowed - {'reuse'}:
             raise ValueError('Supply a new name, quantity and login for this saved build.')
-        settings = dict(recipe['settings'], **{k: v for k, v in draft.items() if k in allowed})
+        settings = {**recipe['settings'], **{k:v for k,v in draft.items() if k in allowed-{'domain_name','dsrm_password'}}, 'tasks':tasks}
         password = settings.get('password') if settings['os']=='windows' else linux_access.requested_password(settings,settings['os'])
         if recipe['password_login'] and not password:
             raise ValueError('Enter a fresh guest password for this build.')

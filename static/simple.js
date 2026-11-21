@@ -256,7 +256,8 @@ function bulkChoices(label, options) {
 
 function softwareFields(d){
   const windows=d.os==='windows', platform=windows?'windows':'linux';
-  const saved=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform);
+  const saved=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform&&
+    (t.id!=='windows-domain-controller'||(d.purpose!=='template'&&Number(d.count||1)===1)));
   const linux=simpleOptions[d.os];
   const fresh=windows?freshWindowsSettings(d):linux?{
     settings:d.os==='ubuntu'?'<h3>Ubuntu settings</h3>'+ws('ubuntu_firewall','Firewall',Object.entries(linux.firewall),d.ubuntu_firewall||'default')+
@@ -281,7 +282,7 @@ function softwareFields(d){
       '<label>'+esc(label)+paramControl(scriptInputValue(t.input_types,key),d.script_params?.[t.id+':'+key]??scriptInputValue(t.defaults,key),
         'data-script-param="'+esc(t.id+':'+key)+'"'+(selected?'':' disabled'),
         [...(d.source_kind==='template'?[]:simpleOptions.iso_setup_letters||[]),...(d.data_disks||[]).map(disk=>disk.letter)])+'</label>').join('')+
-      '</div><details><summary>View source</summary><pre>'+esc(t.body)+'</pre></details></div>';
+      '</div>'+(t.builtin?'<p>'+esc(t.description)+'</p>':'')+'<details><summary>View source</summary><pre>'+esc(t.body)+'</pre></details></div>';
   }).join('')+(saved.length?'':'<p>Add scripts in the Script library to use them here.</p>')]);
   const preferred=d.software_section||(d.scripts?.length?'scripts':'');
   const active=sections.some(([id])=>id===preferred)?preferred:sections[0][0];
@@ -556,6 +557,7 @@ function reviewProgress(message){
 }
 async function reviewBuild(draft){
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
+  delete settings.script_params;
   if(draft.os==='ubuntu'&&draft.source_kind!=='cloud')delete settings.profile;
   if(draft.os!=='ubuntu'||draft.source_kind!=='iso')delete settings.ubuntu_install_source;
   delete settings.ubuntu_password_enabled;

@@ -85,6 +85,7 @@ async function openScriptRun(guests=[],taskId='',draft=null) {
   if(!state){view='server';render();return}
   if(!guests.length)return chooseRunTargets('Choose machines for the script',selected=>openScriptRun(selected,taskId));
   if(guests.length>100)throw Error('Choose up to 100 machines per run.');
+  if(taskId==='windows-domain-controller'&&guests.length!==1)throw Error('Choose one Windows Server for the first domain controller.');
   const stopped=guests.find(g=>g.status!=='running');
   if(stopped)throw Error('Start '+(stopped.name||machineKey(stopped))+' before running a guest script.');
   const loading=()=>{};
@@ -126,7 +127,13 @@ function scriptRunForm(context,draft) {
     '<div id="run-setup"></div>',async()=>{
     if(!draft.os)throw Error('Choose the guest operating system.');
     const form=$('#manage-form'),fields=form.elements;
-    const params=Object.fromEntries([...form.querySelectorAll('[data-run-param]')].map(el=>[el.dataset.runParam,paramValue(el)]));
+    const params={};
+    draft.params={};
+    for(const el of form.querySelectorAll('[data-run-param]')){
+      const key=el.dataset.runParam;
+      params[key]=paramValue(el);
+      if(el.type!=='password')draft.params[key]=params[key];
+    }
     const payload={targets};
     let source='';
     if(draft.mode==='library'){
@@ -138,7 +145,6 @@ function scriptRunForm(context,draft) {
       payload.one_off={platform:draft.os,kind:fields.kind.value,body:source,
         parameters:Object.fromEntries(Object.keys(params).map(key=>[key,key])),params};
     }
-    draft.params=params;
     if(missing.length){
       if(fields.credential_id.value)payload.credential_id=fields.credential_id.value;
       else {
@@ -184,7 +190,7 @@ function scriptRunForm(context,draft) {
   function scriptFields(){
     const holder=$('#run-script'), library=draft.mode==='library';
     if(library){
-      const available=scripts.filter(t=>t.platform===draft.os);
+      const available=scripts.filter(t=>t.platform===draft.os&&(t.id!=='windows-domain-controller'||guests.length===1));
       const choices=[['','Choose a script'],...available.slice().sort((a,b)=>Number(!!b.kind)-Number(!!a.kind)||a.name.localeCompare(b.name)).map(t=>[t.id,t.name])];
       holder.innerHTML=ws('script','Library script',choices,draft.script)+'<div id="run-params"></div><div id="run-script-details"></div>';
       const select=holder.querySelector('select');select.required=true;
@@ -193,7 +199,8 @@ function scriptRunForm(context,draft) {
         if(select.value!==draft.script)draft.params={};
         draft.script=select.value;
         renderParams(task?.parameters||{},{...task?.defaults,...draft.params},task?.input_types);
-        $('#run-script-details').innerHTML=task?.body?'<details><summary>View script source</summary><pre class="run-source">'+esc(task.body)+'</pre></details>':'';
+        $('#run-script-details').innerHTML=(task?.builtin?'<p>'+esc(task.description)+'</p>':'')+
+          (task?.body?'<details><summary>View script source</summary><pre class="run-source">'+esc(task.body)+'</pre></details>':'');
       };
       select.onchange=choose;choose();
     }else{

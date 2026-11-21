@@ -26,7 +26,7 @@ import ubuntu_build
 import windows_build
 import windows_setup
 from provisioning import PROFILES,LOCALES,windows_setup_key,windows_options
-from guest_tasks import selected_drive_letters
+from guest_tasks import DOMAIN_CONTROLLER, public_params, selected_drive_letters
 from vm_config import machine_identity, vm_path
 
 LINUX_INSTALLERS = {'ubuntu': ubuntu_build, 'debian': debian_build, 'rocky': rocky_build}
@@ -224,7 +224,9 @@ class SimpleFlow:
         requests=d.get('tasks',[])
         if not isinstance(requests,list): raise ValueError('Choose software or saved scripts')
         selections=self.m.task_selection(requests) if requests else []
-        requested_tasks=[dict(id=s['item']['id'],params=s['params']) for s in selections]
+        if any(s['item']['id']==DOMAIN_CONTROLLER for s in selections) and (count!=1 or purpose!='vm'):
+            raise ValueError('Create one working Windows VM for the first domain controller.')
+        requested_tasks=[dict(id=s['item']['id'],params=public_params(s)) for s in selections]
         if any(t['item']['platform']!=('windows' if os=='windows' else 'linux') for t in selections):
             raise ValueError('Choose scripts for the selected operating system')
         credential=dict(id=uuid.uuid4().hex,name=prefix+' login',platform='windows' if os=='windows' else 'linux')
@@ -321,6 +323,8 @@ class SimpleFlow:
         if edition:
             for selected in selections:
                 task_id, params = selected['item']['id'], selected['params']
+                if task_id==DOMAIN_CONTROLLER and edition.get('desktop') is False:
+                    raise ValueError('Choose Desktop Experience for the domain controller and its desktop consoles.')
                 if task_id == 'windows-feature' and params['feature'] == 'NET-Framework-Core':
                     selected['item']['installer_sxs'] = True
                 if task_id == 'chocolatey-package' and params['package'].lower() == 'microsoft-windows-terminal':
@@ -411,7 +415,7 @@ class SimpleFlow:
         with self.m.db() as con: con.execute('INSERT INTO plans VALUES (?,?,?)',(ident,time.time(),self.m.encode(plan)))
         diagnostics.event('plan.ready',plan_id=ident,platform=os,source_kind=configs[0].get('source_kind'),machine_count=count)
         return dict(id=ident,machines=[{k:c[k] for k in ('vmid','name','node','memory','cores','disk','storage','bridge')} for c in configs],
-            edition=plan['edition'],purpose=purpose,tasks=[{'name':t['item']['name'],'params':t['params'],'dangerous':bool(t['item'].get('dangerous'))} for t in selections],dangerous=plan['dangerous'],
+            edition=plan['edition'],purpose=purpose,tasks=[{'name':t['item']['name'],'params':public_params(t),'dangerous':bool(t['item'].get('dangerous'))} for t in selections],dangerous=plan['dangerous'],
             rdp=bool(configs[0].get('windows',{}).get('rdp')),clone_mode=template['mode'] if cloning or linux_clone else None,data_disks=[{k:v for k,v in disk.items() if k in ('size','label','letter')} for disk in configs[0].get('data_disks',[])],
             remote_access='HTTPS WinRM' if os=='windows' else ('SSH with workstation keys' if personal_keys else 'SSH'),
             **({'ssh_key_fingerprints':[linux_access.fingerprint(k) for k in personal_keys],

@@ -82,7 +82,15 @@ with tempfile.TemporaryDirectory() as tmp:
         for item in BUILTINS:
             if item['platform']!=platform:continue
             params={k:('started' if k=='state' else 'testpackage') for k in item['parameters']}
-            tasks.extend(compile_task(item,params))
+            if item['id']=='windows-domain-controller':
+                params={'domain_name':'lab.example.test','dsrm_password':'Fixture only 123!'}
+            steps=compile_task(item,params)
+            if item['id']=='windows-domain-controller':
+                from script_library import check_powershell
+                for step in steps:
+                    if 'ansible.windows.win_powershell' in step:
+                        check_powershell(step['ansible.windows.win_powershell']['script'])
+            tasks.extend(steps)
         if platform=='windows':
             import windows_setup
             for selected in windows_setup.select([o['id'] for o in windows_setup.OPTIONS],[],app.manager,

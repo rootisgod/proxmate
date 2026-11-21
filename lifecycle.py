@@ -13,7 +13,7 @@ import operations
 import management
 import linux_install
 from bootstrap import linux_script,windows_script,options as bootstrap_options
-from guest_tasks import run_guest
+from guest_tasks import public_params, run_guest
 from vm_config import config_identity, json_digest as digest, machine_identity, safe_guest_config, vm_path
 
 
@@ -171,7 +171,7 @@ class Lifecycle:
         if plan.get('config'): result['build']=provenance(plan['config'])
         if plan.get('provenance'): result['provenance']=plan['provenance']
         result['dangerous']=plan['operation']=='backup-retention' or any(s['item'].get('dangerous') for s in plan.get('frozen_tasks',[]))
-        if plan.get('frozen_tasks'): result['tasks']=[{'name':s['item']['name'],'params':s['params'],'body':s['item'].get('body','')} for s in plan['frozen_tasks']]
+        if plan.get('frozen_tasks'): result['tasks']=[{'name':s['item']['name'],'params':public_params(s),'body':s['item'].get('body','')} for s in plan['frozen_tasks']]
         result['notes']=['Existing VMs are never overwritten. Failed resources are retained for inspection.',
                          'Restored/test guests have onboot disabled. Test boot requires disconnected NICs and no host passthrough.',
                          'A boot check verifies guest-agent OS responsiveness, not application/data correctness.',
@@ -341,7 +341,7 @@ class Lifecycle:
             p=operations.Proxmox();cfg=p.call('GET',vm_path(t)+'/config')
             builds=sorted([b for b in self.m.all('builds') if b['node']==t['node'] and b['vmid']==t['vmid'] and b.get('machine_identity')==machine_identity(cfg)],key=lambda b:b['created'])
             if builds:
-                b=builds[-1];b['tasks'].append({'job_id':job_id,'created':time.time(),'tasks':[{'id':s['item']['id'],'name':s['item']['name'],'params':s['params'],'script_sha256':digest(s['item'].get('body',''))} for s in plan['tasks']]});self.m.put('builds',b)
+                b=builds[-1];b['tasks'].append({'job_id':job_id,'created':time.time(),'tasks':[{'id':s['item']['id'],'name':s['item']['name'],'params':public_params(s),'script_sha256':digest(s['item'].get('body',''))} for s in plan['tasks']]});self.m.put('builds',b)
 
     def probe_bootstrap(self, d, expected_identity, credential, previous, log):
         opts=d['bootstrap']

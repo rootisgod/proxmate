@@ -504,6 +504,7 @@
         ]
       },
       "TaskSelection": {
+        "description": "Discover IDs and input types with GET /api/manage/tasks. For windows-domain-controller, supply one working Windows Server with Desktop Experience and params.domain_name (new forest DNS name) and params.dsrm_password (write-only restore password, 12–128 characters). The dangerous review requires risk confirmation. Success includes a verified local controller, directory shares, and both public desktop management shortcuts.",
         "type": "object",
         "properties": {
           "id": {
@@ -2953,6 +2954,13 @@
                     "oneOf": [{"required":["recipe_id"]},{"required":["job_id"]}],
                     "properties": {"recipe_id":{"type":"string"},"job_id":{"type":"string"}},
                     "description": "Reuse a guided configuration. Provide a new name, optional quantity, fresh required guest password and renewed Windows template confirmation."
+                  },
+                  "dsrm_password": {
+                    "type": "string", "format": "password", "writeOnly": true, "minLength": 12, "maxLength": 128,
+                    "description": "Required when repeating a saved domain controller build. For an initial build, supply it inside the task params."
+                  },
+                  "domain_name": {
+                    "type": "string", "description": "Optional replacement forest DNS name when repeating a saved domain controller build."
                   },
                   "os": {
                     "type": "string",

@@ -1,0 +1,95 @@
+- name: Check the server before changing roles
+  ansible.windows.win_powershell:
+    parameters:
+      DomainName: "{{ domain_name }}"
+    script: |
+      param([string]$DomainName)
+      $Ansible.Changed = $false
+      $machine = Get-CimInstance Win32_ComputerSystem
+      $installation = Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' InstallationType
+      if ($installation -ne 'Server') { throw 'Choose a Windows Server with Desktop Experience.' }
+      if ($machine.DomainRole -ge 4) {
+          $root = [DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest().RootDomain.Name
+          if ($machine.Domain -ne $DomainName -or $root -ne $DomainName) { throw 'This controller belongs to another domain or forest.' }
+          $Ansible.Result = 'controller'
+          return
+      }
+      if ($machine.PartOfDomain) { throw 'Choose a standalone server for the first controller.' }
+      if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -notmatch '-500$') {
+          throw 'Use the built-in Administrator login so WinRM can reconnect after promotion.'
+      }
+      try {
+          $records = Resolve-DnsName -Name "_ldap._tcp.dc._msdcs.$DomainName." -Type SRV -DnsOnly -ErrorAction Stop
+          if ($records | Where-Object Type -eq 'SRV') { throw 'DNS already advertises a controller for this domain.' }
+      } catch {
+          if ($_.FullyQualifiedErrorId -notmatch '^DNS_(ERROR_RCODE_NAME_ERROR|INFO_NO_RECORDS)(,|$)') { throw }
+      }
+      $Ansible.Result = 'standalone'
+  register: dc_preflight
+
+- name: Install Active Directory Domain Services and both management consoles
+  ansible.windows.win_feature:
+    name:
+      - AD-Domain-Services
+      - RSAT-ADDS-Tools
+      - GPMC
+    state: present
+    include_management_tools: true
+  register: dc_features
+
+- name: Finish the feature installation if Windows requires a restart
+  ansible.windows.win_reboot:
+    reboot_timeout: 900
+  when: dc_features.reboot_required
+
+- name: Create the forest with DNS and reconnect after promotion
+  microsoft.ad.domain:
+    dns_domain_name: "{{ domain_name }}"
+    safe_mode_password: "{{ dsrm_encoded | b64decode }}"
+    install_dns: true
+    reboot: true
+    reboot_timeout: 900
+  no_log: true
+  when: dc_preflight.result == 'standalone'
+
+- name: Wait for the local controller and its directory shares
+  ansible.windows.win_powershell:
+    parameters:
+      DomainName: "{{ domain_name }}"
+    script: |
+      param([string]$DomainName)
+      $Ansible.Changed = $false
+      $machine = Get-CimInstance Win32_ComputerSystem
+      if ($machine.DomainRole -lt 4 -or $machine.Domain -ne $DomainName) { throw 'The local server is not a controller for the requested domain.' }
+      if ((Get-ADForest -Server localhost).RootDomain -ne $DomainName) { throw 'The local forest root does not match.' }
+      foreach ($name in 'NTDS','DNS','Netlogon') {
+          if ((Get-Service $name).Status -ne 'Running') { throw "Waiting for $name." }
+      }
+      Get-SmbShare -Name SYSVOL,NETLOGON -ErrorAction Stop | Out-Null
+  register: dc_ready
+  until: dc_ready is succeeded
+  retries: 30
+  delay: 10
+
+- name: Place both management consoles on the public desktop
+  ansible.windows.win_powershell:
+    script: |
+      $Ansible.Changed = $false
+      $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
+      $system = [Environment]::SystemDirectory
+      $shell = New-Object -ComObject WScript.Shell
+      $tools = [ordered]@{'Group Policy Management' = 'gpmc.msc'; 'Active Directory Users and Computers' = 'dsa.msc'}
+      foreach ($name in $tools.Keys) {
+          $console = Join-Path $system $tools[$name]
+          if (-not (Test-Path -LiteralPath $console -PathType Leaf)) { throw "Missing console $console." }
+          $path = Join-Path $desktop "$name.lnk"
+          $link = $shell.CreateShortcut($path)
+          $target = Join-Path $system 'mmc.exe'
+          $arguments = '"{0}"' -f $console
+          if (!(Test-Path -LiteralPath $path) -or $link.TargetPath -ne $target -or $link.Arguments -ne $arguments) {
+              $link.TargetPath = $target
+              $link.Arguments = $arguments
+              $link.Save()
+              $Ansible.Changed = $true
+          }
+      }

@@ -1,4 +1,5 @@
 import copy
+import base64
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -135,6 +136,44 @@ def test_snapshot_failure_aborts_tasks_but_reports_other_vm(lab):
     with pytest.raises(RuntimeError,match='VMs failed'): app.manager.execute(app.manager.load_plan(p['id']),log.append)
     assert len(runs)==1 and runs[0][3] is True  # Readiness only; no task after failed snapshot.
     assert any('RESULT: failed' in s for s in log)
+
+
+def test_first_domain_controller_reviews_and_runs_with_a_write_only_password(lab):
+    app,c,h,fake,runs=lab
+    setup_guest(app)
+    secret='P@ss {{ 7*7 }} " #123!'
+    params=dict(domain_name='ad.example.test',dsrm_password=secret)
+    targets=[dict(node='pve',vmid=201)]
+    script=dict(id='windows-domain-controller',params=params)
+    payload=dict(targets=targets,tasks=[script])
+    review=c.post('/api/simple/existing-plan',json=payload,headers=h)
+    assert review.status_code==200 and secret not in review.text
+    assert review.json['dangerous'] and review.json['tasks'][0]['params']=={'domain_name':'ad.example.test'}
+    frozen=app.manager.load_plan(review.json['id'])
+    assert frozen['tasks'][0]['item']['builtin'] and frozen['tasks'][0]['params']==params
+    assert c.post('/api/manage/run',json=dict(plan_id=review.json['id'],confirmed=True),headers=h).status_code==400
+    with pytest.raises(ValueError,match='one-time'):
+        app.manager.prepare('schedules',dict(name='Schedule',plan_id=review.json['id']))
+    with pytest.raises(ValueError,match='one Windows Server'):
+        app.manager.create_plan(dict(operation='tasks',tasks=[script],targets=targets+[dict(node='pve',vmid=202)]))
+    for key,bad in [('domain_name','lab'),('domain_name','192.0.2.1'),('domain_name','bad-.example'),
+                    ('dsrm_password','short'),('dsrm_password','bad\npassword-1234')]:
+        response=c.post('/api/simple/existing-plan',json=dict(payload,tasks=[dict(script,params={**params,key:bad})]),headers=h)
+        assert response.status_code==400 and secret not in response.text
+    log=[]
+    app.manager.execute(frozen,log.append)
+    assert secret not in '\n'.join(log) and not fake.writes
+    steps=runs[-1][2]
+    promotion,=[s for s in steps if 'microsoft.ad.domain' in s]
+    assert promotion['microsoft.ad.domain']['reboot'] and promotion['microsoft.ad.domain']['install_dns']
+    assert base64.b64decode(promotion['vars']['dsrm_encoded']).decode()==secret and promotion['no_log']
+    assert not any('dsrm_encoded' in s.get('vars',{}) for s in steps if s is not promotion)
+    cfg=fake.call('GET','nodes/pve/qemu/201/config')
+    app.manager.put('builds',dict(id='test-build',created=1,node='pve',vmid=201,
+                                  machine_identity=management.machine_identity(cfg),tasks=[]))
+    app.lifecycle.record_tasks(frozen,'test-job')
+    history=app.manager.get('builds','test-build')['tasks'][0]
+    assert history['tasks'][0]['params']=={'domain_name':'ad.example.test'}
 
 
 def test_changed_identity_and_rotated_credentials_abort_before_guest_tasks(lab):

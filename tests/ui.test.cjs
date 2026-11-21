@@ -175,6 +175,31 @@ test('library shortcut preselects a script, offers its defaults, and sends only 
   }finally{f.close()}
 });
 
+test('the built-in domain controller script prompts for a masked restore password',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    const id='windows-domain-controller';
+    f.records.tasks.push({id,builtin:true,kind:'ansible',platform:'windows',name:'Set up a Windows domain controller',
+      description:'First controller of a new forest.',body:'- name: Promote the server',
+      parameters:{domain_name:'DNS name',dsrm_password:'Restore password'},
+      input_types:{domain_name:{type:'dns_domain'},dsrm_password:{type:'password'}}});
+    f.records.connections.push({node:'pve',vmid:201,platform:'windows'});
+    doc.querySelector('[data-view=scripts]').click();await f.settle();
+    const button=doc.querySelector('[data-simple-task="'+id+'"]');
+    assert.equal(button.closest('article').querySelector('[data-mg="edit-tasks"]'),null);
+    button.click();await f.settle();
+    const form=doc.querySelector('#manage-form');
+    form.elements.target.click();form.requestSubmit();await f.settle();
+    const password=form.querySelector('[data-run-param=dsrm_password]');
+    assert.equal(password.type,'password');assert.equal(password.autocomplete,'new-password');
+    password.value='Literal !{{chars}} #123';
+    form.querySelector('[data-run-param=domain_name]').value='ad.example.test';
+    form.requestSubmit();await f.settle();
+    assert.deepEqual(f.calls.find(([url])=>url==='/api/simple/existing-plan')[1].tasks,
+      [{id,params:{domain_name:'ad.example.test',dsrm_password:'Literal !{{chars}} #123'}}]);
+  }finally{f.close()}
+});
+
 test('one-off script review retains source and parameters and never saves a library entry',async()=>{
   const f=await fixture({},true),{w}=f,doc=w.document;
   try{

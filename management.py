@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from flask import jsonify, request
 import operations
-from guest_tasks import BUILTINS, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters
+from guest_tasks import BUILTINS, DOMAIN_CONTROLLER, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters, public_params
 from script_library import check_script, ScriptDiagnostic
 from task_recovery import TaskProgress
 from vm_config import machine_identity, reviewed_target_identity
@@ -303,12 +303,17 @@ class Manager:
                 checked.pop('vmid', None); checked.pop('confirmed', None)
                 value['config'] = checked
                 value['tasks'] = d.get('tasks', [])
-                if value['tasks']: self.task_selection(value['tasks'])
+                if value['tasks']:
+                    for selection in self.task_selection(value['tasks']):
+                        if public_params(selection)!=selection['params']:
+                            raise ValueError('Use a guided saved build or supply the restore password in Operations. Advanced recipes cannot store secret task inputs.')
                 value['credential_id'] = d.get('credential_id') or ''
                 if value['credential_id']: self.get('credentials', value['credential_id'])
             if kind == 'schedules':
                 plan = self.load_plan(d['plan_id']) if d.get('plan_id') else old.get('plan')
                 if plan and plan.get('recovery'): raise ValueError('Recovery applies once to the original machine.')
+                if plan and any(s['item']['id']==DOMAIN_CONTROLLER for s in plan.get('tasks',[])):
+                    raise ValueError('Review domain controller promotion as a one-time operation.')
                 if not plan or plan['operation'] not in ('tasks', 'backup', 'shutdown', 'start', 'readiness'): raise ValueError('Review a task, backup, start, shutdown or readiness plan first')
                 if d.get('confirmed') is not True: raise ValueError('Confirm the exact scheduled targets and operation')
                 if plan['dangerous'] and d.get('risk_confirmed') is not True: raise ValueError('Confirm risky tasks explicitly')
@@ -350,6 +355,8 @@ class Manager:
                     group_credentials[target_id(t)] = group['credential_id']
         chosen = targets(chosen)
         if selections is None: selections = self.task_selection(d.get('tasks')) if op=='tasks' else []
+        if any(s['item']['id']==DOMAIN_CONTROLLER for s in selections) and len(chosen)!=1:
+            raise ValueError('Choose one Windows Server for the first domain controller.')
         drive_letters=selected_drive_letters(selections)
         discovered = discovered or {}
         p = operations.Proxmox()
@@ -409,7 +416,7 @@ class Manager:
         tasks=[]
         for selection in plan['tasks']:
             item=selection['item']
-            summary=dict(name=item['name'],params=selection['params'])
+            summary=dict(name=item['name'],params=public_params(selection))
             if plan.get('recovery') and item['id']=='prepare-created-volume':
                 summary['data_disk']={key:item['disk'][key] for key in ('size','label','letter')}
             tasks.append(summary)

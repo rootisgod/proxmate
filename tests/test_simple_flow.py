@@ -47,6 +47,27 @@ def settings(**changes):
     return dict(os='windows',name='demo',count=3,purpose='vm',source='local:iso/server.iso',edition=7,password='Secret-Setup#123',tasks=[{'id':'install-chocolatey','params':{}},{'id':'chocolatey-package','params':{'package':'7zip'}},{'id':'windows-feature','params':{'feature':'Web-Server'}}],**changes)
 
 
+def test_guided_domain_controller_requires_a_fresh_restore_password_on_reuse(simple_lab):
+    app,c,h,_=simple_lab
+    secret='Example restore #123!'
+    task={'id':'windows-domain-controller','params':{'domain_name':'ad.example.test','dsrm_password':secret}}
+    draft={**settings(),'count':1,'tasks':[task]}
+    for change in ({'count':2},{'purpose':'template'}):
+        assert c.post('/api/simple/plan',json={**draft,**change},headers=h).status_code==400
+    res=c.post('/api/simple/plan',json=draft,headers=h)
+    assert res.status_code==200 and res.json['dangerous'] and secret not in res.text
+    plan=app.manager.load_plan(res.json['id'])
+    assert plan['tasks'][0]['params']['dsrm_password']==secret and secret not in repr(plan['recipe'])
+    saved=c.post('/api/simple/recipes',json={'plan_id':res.json['id'],'name':'DC build'},headers=h).json
+    assert saved['domain_name']=='ad.example.test'
+    repeat=dict(name='dc2',reuse={'recipe_id':saved['id']},password='New Administrator #123!')
+    assert c.post('/api/simple/plan',json=repeat,headers=h).status_code==400
+    fresh=c.post('/api/simple/plan',json=dict(repeat,domain_name='other.example.test',dsrm_password='Fresh restore #456!'),headers=h)
+    assert fresh.status_code==200 and fresh.json['tasks'][0]['params']=={'domain_name':'other.example.test'}
+    assert app.manager.load_plan(fresh.json['id'])['tasks'][0]['params']['dsrm_password']=='Fresh restore #456!'
+    assert not c.get('/api/jobs',headers=h).json
+
+
 def test_ubuntu_iso_review_freezes_keys_and_downloads_reusable_config(simple_lab,monkeypatch):
     app,client,headers,inv = simple_lab
     source = 'local:iso/ubuntu-24.04-live-server-amd64.iso'

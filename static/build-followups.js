@@ -47,6 +47,8 @@ function repeatGuidedBuild(recipe,reuse){
   const fields=wf('name','New machine name','','text','required maxlength="12" pattern="[A-Za-z][A-Za-z0-9\\-]{0,11}" autofocus')+
     (recipe.password_login?wf(windows?'password':recipe.os==='ubuntu'?'ubuntu_password':'linux_password',windows?'New Administrator password':'New guest password','','password',
       'required minlength="12" maxlength="128" autocomplete="new-password"'):'')+
+    (recipe.domain_name?wf('domain_name','New forest DNS name','','text','required maxlength="253" placeholder="lab.example.test"')+
+      wf('dsrm_password','Directory Services Restore Mode (DSRM) password','','password','required minlength="12" maxlength="128" autocomplete="new-password"'):'')+
     (recipe.needs_key_source?'<p>Supply the workstation key source again for this older build.</p>'+
       wf('github_username','GitHub username','','text','maxlength="39"')+wf('ssh_public_key','Or paste an SSH public key','','text','maxlength="8192"'):'')+
     (windows&&recipe.source_kind==='template'?wc('generalized','I verified this source template was prepared with Sysprep and the QEMU Guest Agent.'):'');
