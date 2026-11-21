@@ -61,6 +61,23 @@ test('machine inventory is the landing screen with advanced tools collapsed',asy
   }finally{f.close()}
 });
 
+test('advanced activity views filter jobs and preserve the full Progress history',async()=>{
+  const f=await fixture({},true),{w}=f;
+  try{
+    const rows=['backup','ansible','start'].map(action=>({id:action,action,status:'succeeded',created:1}));
+    Object.defineProperty(w.document,'hidden',{value:false});
+    const fetch=w.fetch;
+    w.fetch=async(url,opts)=>url==='/api/jobs?summary=1'?{ok:true,json:async()=>rows}:fetch(url,opts);
+    await w.eval('pollDashboard()');
+    for(const [view,expected] of [['backups',['backup']],['ansible',['ansible']],['jobs',['backup','ansible','start']]]){
+      w.document.querySelector('nav [data-view="'+view+'"]').click();
+      await f.settle();
+      assert.deepEqual([...w.document.querySelectorAll('#content [data-log]')].map(button=>button.dataset.log),expected);
+    }
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('job logs load on open and update only when the open job changes',async()=>{
   const f=await fixture({},true),{w}=f;
   try{
@@ -774,7 +791,13 @@ async function fixture(initialServer={},startAtHome=false){
     else if(url.startsWith('/api/manage/')){const kind=url.split('/').at(-1);value=records[kind]||{id:'job'};}
     return {ok:true,status:200,json:async()=>value};
   };
-  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple-help.js','simple.js','build-followups.js','guest-operations.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
+  for(const asset of w.document.querySelectorAll('script[src]')){
+    const url=new URL(asset.src);
+    assert.equal(url.origin,w.location.origin);
+    const script=w.document.createElement('script');
+    script.textContent=fs.readFileSync('.'+url.pathname,'utf8');
+    w.document.head.append(script);
+  }
   const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
   await settle();
   if(server.connected&&!startAtHome){w.eval("view='overview';render()");await settle();}

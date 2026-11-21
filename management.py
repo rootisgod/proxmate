@@ -9,7 +9,6 @@ import re
 import socket
 import time
 import uuid
-import os
 from urllib.parse import urlparse
 
 from flask import jsonify, request
@@ -17,6 +16,7 @@ import operations
 from guest_tasks import BUILTINS, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters
 from script_library import check_script, ScriptDiagnostic
 from task_recovery import TaskProgress
+from vm_config import machine_identity, reviewed_target_identity
 
 KINDS = {'credentials', 'connections', 'tasks', 'groups', 'recipes', 'schedules'}
 OPS = {'tasks', 'readiness', 'start', 'shutdown', 'stop', 'resize', 'backup', 'snapshot', 'restore'}
@@ -368,7 +368,6 @@ class Manager:
             if op in ('tasks', 'readiness'):
                 binding = discovered.get(('connections', target_id(t))) or self.get('connections', target_id(t))
                 if binding.get('machine_identity'):
-                    from lifecycle import machine_identity
                     if binding['machine_identity'] != machine_identity(cfg):
                         raise ValueError('The saved connection belongs to another machine. Review its identity and reconnect.')
                 if group_credentials.get(target_id(t)): binding['credential_id'] = group_credentials[target_id(t)]
@@ -392,11 +391,7 @@ class Manager:
             con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
         return dict(id=ident, **self.summary(plan))
 
-    @staticmethod
-    def identity(config):
-        # SMBIOS UUID and disk volume identity protect against reusing a deleted VM ID.
-        value = {k:v for k,v in config.items() if k in ('smbios1','vmgenid','name') or re.fullmatch(r'(scsi|sata|virtio|ide)\d+',k)}
-        return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
+    identity = staticmethod(reviewed_target_identity)
 
     @staticmethod
     def summary(plan):

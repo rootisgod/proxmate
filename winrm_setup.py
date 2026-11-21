@@ -10,7 +10,7 @@ from flask import jsonify, request
 from requests import RequestException
 import management
 import operations
-from lifecycle import machine_identity, vm_path
+from vm_config import machine_identity, vm_path
 
 
 INSPECT=r"""

@@ -9,7 +9,7 @@ from pathlib import Path
 import diagnostics
 import management
 import operations
-from lifecycle import config_identity, machine_identity, safe_guest_config, vm_path
+from vm_config import config_identity, machine_identity, safe_guest_config, vm_path
 from provisioning import answer_iso
 
 
@@ -186,9 +186,3 @@ $used = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name })
     diagnostics.event('disk.letter_conflict', vmid=cfg['vmid'], slot=requested[letter]['slot'],
                       letter=letter, drive_type='cdrom', free_letter=free)
     raise ValueError(message + ' ' + suggestion)
-
-
-def volume_task(disk):
-    script=Path(__file__).with_name('windows_volume.ps1').read_text(encoding='utf8')
-    return {'ansible.windows.win_powershell':{'script':script,'parameters':dict(
-        Serial=disk['serial'],SizeGiB=disk['size'],Label=disk['label'],Letter=disk['letter'])}}

@@ -6,7 +6,7 @@ import time
 from urllib.parse import quote
 
 import operations
-from lifecycle import machine_identity
+from vm_config import machine_identity
 
 
 WINDOWS_GENERALIZE=r'''

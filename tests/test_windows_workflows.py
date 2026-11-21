@@ -1,5 +1,6 @@
 import copy
 import io
+from pathlib import Path
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -127,7 +128,11 @@ def test_clone_to_verified_software_and_exact_archived_media(clone_lab,monkeypat
     with app.db() as con: con.execute('UPDATE job_waits SET next_check=0')
     assert app.run_next_job() and detail()['status']=='succeeded',detail()['log']
     assert auth==['login']
-    assert applied[0][0]['ansible.windows.win_powershell']['parameters']['Serial']==cfg['data_disks'][0]['serial']
+    disk = cfg['data_disks'][0]
+    assert applied[0] == [{'ansible.windows.win_powershell': {
+        'script': Path(windows_build.__file__).with_name('windows_volume.ps1').read_text(encoding='utf8'),
+        'parameters': {'Serial': disk['serial'], 'SizeGiB': disk['size'], 'Label': disk['label'], 'Letter': disk['letter']},
+    }}]
     assert applied[1][0]['ansible.windows.win_regedit']['name']=='NoAutoUpdate'
     assert not app.run_next_job()
     console='/api/jobs/'+job+'/console'

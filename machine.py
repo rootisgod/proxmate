@@ -13,7 +13,8 @@ import diagnostics
 import winrm_setup
 from guest_tasks import run_guest
 from job_queue import target_ids
-from lifecycle import machine_identity, source_vmid, vm_path
+from lifecycle import source_vmid
+from vm_config import stable_identity, vm_path
 
 
 RDP_LISTENER = r"""
@@ -64,10 +65,6 @@ def discover(p, target, resource, config):
     elif ostype.startswith('win') or ostype in ('w2k','w2k3','w2k8','wvista','wxp'): platform='windows'
     else: platform='linux' if ostype in ('l24','l26') else None
     return dict(addresses=ips, os=reported.get('pretty-name') or reported.get('name'), platform=platform)
-
-
-def stable_identity(config):
-    return machine_identity(config) if config.get('smbios1') or config.get('vmgenid') else None
 
 
 def verify_identity(p, target, expected):

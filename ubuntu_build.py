@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 
 import media
 import operations
+from vm_config import config_identity, machine_identity, safe_guest_config, vm_path
 
 
 LABEL = 'Ubuntu Server 24.04 LTS'
@@ -259,7 +260,6 @@ def install(cfg, source, identity, job_id, log):
 
 
 def detach(cfg, build, log):
-    from lifecycle import machine_identity, vm_path
 
     client = operations.Proxmox()
     path = vm_path(cfg)
@@ -301,7 +301,6 @@ def templates(manager, resources):
 
 
 def review_template(life, dest, draft):
-    from lifecycle import config_identity, machine_identity, safe_guest_config
     from management import number
 
     target = dict(node=dest['node'], vmid=number(draft.get('template_id'), 100, 999999999))
@@ -328,7 +327,6 @@ def review_template(life, dest, draft):
 
 
 def clone(cfg, log):
-    from lifecycle import config_identity, machine_identity, vm_path
 
     p = operations.Proxmox()
     preflight(p, cfg)

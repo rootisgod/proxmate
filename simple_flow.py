@@ -6,7 +6,6 @@ import re
 import time
 import threading
 import uuid
-from urllib.parse import quote
 from requests import RequestException
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -23,7 +22,8 @@ import ubuntu_build
 import windows_build
 import windows_setup
 from provisioning import PROFILES,LOCALES,windows_setup_key,windows_options
-from guest_tasks import run_guest, selected_drive_letters
+from guest_tasks import selected_drive_letters
+from vm_config import machine_identity, vm_path
 
 
 FEATURES=[('Web-Server','Web server (IIS)'),('NET-Framework-45-Features','.NET Framework 4.x'),
@@ -447,8 +447,8 @@ class SimpleFlow:
             self.assert_owned(cfg,job_id)
             p=operations.Proxmox()
             if cfg.get('source_kind')=='template': windows_build.detach_clone_media(p,cfg,build,log)
-            current=p.call('GET',windows_build.vm_path(cfg)+'/config')
-            if windows_build.machine_identity(current)!=build['machine_identity'] or windows_build.disk_volumes(cfg,current)!=build.get('data_volumes',{}):
+            current=p.call('GET',vm_path(cfg)+'/config')
+            if machine_identity(current)!=build['machine_identity'] or windows_build.disk_volumes(cfg,current)!=build.get('data_volumes',{}):
                 raise ValueError('Allocated disks changed before guest setup')
             windows_build.check_optical_letters(p,cfg,build['machine_identity'])
             # Claim explicit letters first so an automatic allocation cannot take a later disk's letter.
@@ -481,7 +481,6 @@ class SimpleFlow:
         self.m.put('builds',dict(build,template_finished_by=recovery_job))
 
     def assert_owned(self,cfg,job_id):
-        from lifecycle import machine_identity
         built=self.m.get('builds',job_id)
         current=operations.Proxmox().call('GET',f'nodes/{cfg["node"]}/qemu/{cfg["vmid"]}/config')
         if built['machine_identity']!=machine_identity(current): raise ValueError('The newly created VM was replaced; software was not applied')

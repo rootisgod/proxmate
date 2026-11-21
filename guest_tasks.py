@@ -2,7 +2,6 @@
 import base64
 import copy
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -112,8 +111,12 @@ def compile_task(item, params):
     if ident == 'windows-manual-updates':
         return [{'ansible.windows.win_regedit':{'path':r'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU','name':'NoAutoUpdate','type':'dword','data':1}}]
     if ident == 'prepare-created-volume':
-        from windows_build import volume_task
-        return [volume_task(item['disk'])]
+        disk = item['disk']
+        script = Path(__file__).with_name('windows_volume.ps1').read_text(encoding='utf8')
+        return [{'ansible.windows.win_powershell': {
+            'script': script,
+            'parameters': {'Serial': disk['serial'], 'SizeGiB': disk['size'], 'Label': disk['label'], 'Letter': disk['letter']},
+        }}]
     if ident == 'windows-updates': return [{'ansible.windows.win_updates': {'category_names': ['SecurityUpdates', 'CriticalUpdates'], 'reboot': False}}]
     if ident == 'linux-package': return [{'ansible.builtin.package': {'name': params['package'], 'state': 'present'}}]
     if ident == 'linux-updates':

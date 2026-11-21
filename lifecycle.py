@@ -1,6 +1,5 @@
 """Reviewed recovery, guest bootstrap completion and versioned template lifecycle."""
 import copy
-import hashlib
 import ipaddress
 import json
 import re
@@ -14,12 +13,7 @@ import operations
 import management
 from bootstrap import linux_script,windows_script,options as bootstrap_options
 from guest_tasks import run_guest
-
-
-def digest(value): return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
-def vm_path(t): return f'nodes/{t["node"]}/qemu/{t["vmid"]}'
-def config_identity(config): return digest({k:v for k,v in config.items() if k not in ('digest','lock')})
-def machine_identity(config): return digest({k:config.get(k) for k in ('smbios1','vmgenid')})
+from vm_config import config_identity, json_digest as digest, machine_identity, safe_guest_config, vm_path
 
 
 class WaitForGuest(Exception):
@@ -48,15 +42,6 @@ def source_vmid(a):
     match=re.search(r':backup/(?:vzdump-qemu-(\d+)-|vm/(\d+)/)',vol)
     if not match: return None
     return int(match[1] or match[2])
-
-
-def safe_guest_config(config):
-    for key,value in config.items():
-        if any(prefix in str(value) for prefix in ('proxmate-unattend-', 'proxmate-ubuntu-')):
-            raise ValueError('Remove generated setup media before backup recovery or template tests')
-        if key in ('args','hookscript','ivshmem') or re.fullmatch(r'(hostpci|usb|virtiofs)\d+',key):
-            raise ValueError('Remove passthrough, hooks and custom QEMU arguments before using this recovery/test workflow')
-        if '/dev/' in str(value): raise ValueError('Host device paths are not allowed in recovery/test guests')
 
 
 def provenance(config):
