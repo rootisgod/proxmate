@@ -130,7 +130,8 @@ def test_frozen_software_runs_once_after_restart(recovery,monkeypatch,action):
     tasks=app.manager.task_selection([{'id':'linux-package','params':{'package':'curl'}}])
     calls,_=build(app,fake,monkeypatch,action,tasks)
     importlib.reload(app)
-    def software(plan,log):
+    def software(plan,log,job_id=None):
+        if action=='simple': assert job_id=='build'
         assert plan['tasks']==tasks
         assert plan['targets'][0]['connection']['machine_identity']==lifecycle.machine_identity(fake.configs[201])
         calls.append(('software',201))

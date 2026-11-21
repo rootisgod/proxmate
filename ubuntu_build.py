@@ -276,15 +276,20 @@ def detach(cfg, build, log):
 
 
 def template_builds(manager):
-    with manager.db() as db:
-        rows = db.execute("""SELECT records.value, jobs.payload FROM records JOIN jobs ON records.id=jobs.id
-                             WHERE records.kind='builds' AND jobs.action='simple' AND jobs.status='succeeded'""").fetchall()
     builds = []
-    for row in rows:
-        build = manager.decode(row['value'])
-        if (build.get('config', {}).get('kind') == 'ubuntu-iso' and build.get('bootstrap_verified')
-                and manager.decode(row['payload']).get('plan', {}).get('purpose') == 'template'):
-            builds.append(build)
+    with manager.db() as db:
+        rows = db.execute("""SELECT records.value, jobs.id, jobs.status FROM records JOIN jobs ON records.id=jobs.id
+                             WHERE records.kind='builds' AND jobs.action='simple'""")
+        for row in rows:
+            build = manager.decode(row['value'])
+            if build.get('config', {}).get('kind') != 'ubuntu-iso' or not build.get('bootstrap_verified'):
+                continue
+            if build.get('template_finished_by'):
+                builds.append(build)
+            elif row['status']=='succeeded':
+                payload=db.execute('SELECT payload FROM jobs WHERE id=?',(row['id'],)).fetchone()['payload']
+                if manager.decode(payload).get('plan', {}).get('purpose')=='template':
+                    builds.append(build)
     return builds
 
 

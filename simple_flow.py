@@ -16,6 +16,7 @@ from flask import jsonify,request
 import management
 import media
 import diagnostics
+from guided_recipes import GuidedRecipes, specification
 from reviews import Reviews
 import operations
 import ubuntu_build
@@ -34,6 +35,16 @@ def require_unbound_target(con, config):
     key=management.target_id(config)
     if con.execute("SELECT 1 FROM records WHERE kind='connections' AND id=?",(key,)).fetchone():
         raise ValueError(f'{key} already has a saved guest connection. Review the build again to choose a free VM ID.')
+
+
+def reserved_targets(con,decode):
+    ids,names=set(),set()
+    for row in con.execute("SELECT payload FROM jobs WHERE status IN ('queued','running','waiting')"):
+        payload=decode(row['payload'])
+        cfg=payload.get('plan',{}).get('config',payload)
+        if cfg.get('vmid'): ids.add(int(cfg['vmid']))
+        if cfg.get('name'): names.add(cfg['name'].lower())
+    return ids,names
 
 
 def choose(items,capability):
@@ -79,6 +90,7 @@ def discovery(inv):
 class SimpleFlow:
     def __init__(self,manager,lifecycle):
         self.m,self.life=manager,lifecycle
+        self.recipes=GuidedRecipes(manager)
         self.media_cache={}
         self.cache_lock=threading.Lock()
 
@@ -159,6 +171,9 @@ class SimpleFlow:
 
     def plan(self,d,progress=lambda stage:None):
         if not isinstance(d,dict): raise ValueError('Supply wizard settings')
+        reused=None
+        if 'reuse' in d:
+            d,reused=self.recipes.expand(d)
         os=d.get('os','windows')
         if os not in ('windows','ubuntu'): raise ValueError('Choose Windows Server or Ubuntu')
         count=management.number(d.get('count',1),1,20);purpose=d.get('purpose','vm')
@@ -191,6 +206,7 @@ class SimpleFlow:
         requests=d.get('tasks',[])
         if not isinstance(requests,list): raise ValueError('Choose software or saved scripts')
         selections=self.m.task_selection(requests) if requests else []
+        requested_tasks=[dict(id=s['item']['id'],params=s['params']) for s in selections]
         if any(t['item']['platform']!=('windows' if os=='windows' else 'linux') for t in selections):
             raise ValueError('Choose scripts for the selected operating system')
         credential=dict(id=uuid.uuid4().hex,name=prefix+' login',platform='windows' if os=='windows' else 'linux')
@@ -282,10 +298,9 @@ class SimpleFlow:
         with self.m.db() as con:
             # Proxmox can release a VM ID while its guest connection is still pinned here.
             saved_connections={row['id'] for row in con.execute("SELECT id FROM records WHERE kind='connections'")}
-            for row in con.execute("SELECT payload FROM jobs WHERE status IN ('queued','running','waiting')"):
-                payload=self.m.decode(row['payload']);cfg=payload.get('plan',{}).get('config',payload)
-                if cfg.get('vmid'): used.add(int(cfg['vmid']))
-                if cfg.get('name'): names.add(cfg['name'].lower())
+            reserved_ids,reserved_names=reserved_targets(con,self.m.decode)
+            used.update(reserved_ids)
+            names.update(reserved_names)
         vmid=max(100,int(inv['next_id']));configs=[]
         for i in range(count):
             while vmid in used or f"{dest['node']}:{vmid}" in saved_connections: vmid+=1
@@ -342,6 +357,10 @@ class SimpleFlow:
         plan=dict(operation='simple-build',configs=configs,credential=credential,tasks=selections,purpose=purpose,
             source=d.get('source','') if os=='windows' or ubuntu_iso else profile,media_identity=inspected['identity'] if inspected else None,
             edition=template['name'] if cloning or ubuntu_clone else edition['label'] if edition else inspected['release'] if ubuntu_iso else PROFILES[profile]['label'],dangerous=any(t['item'].get('dangerous') for t in selections))
+        recipe=specification(plan,configs[0],dict(d,tasks=requested_tasks))
+        if reused and any(reused[k]!=recipe[k] for k in ('media_identity','template_identity')):
+            raise ValueError('The saved installation source changed. Review the new source in the Create wizard.')
+        plan['recipe']=recipe
         ident=uuid.uuid4().hex
         with self.m.db() as con: con.execute('INSERT INTO plans VALUES (?,?,?)',(ident,time.time(),self.m.encode(plan)))
         diagnostics.event('plan.ready',plan_id=ident,platform=os,source_kind=configs[0].get('source_kind'),machine_count=count)
@@ -372,16 +391,20 @@ class SimpleFlow:
         jobs=[]
         with self.m.db() as con:
             con.execute('BEGIN IMMEDIATE')
+            reserved_ids,reserved_names=reserved_targets(con,self.m.decode)
             for i,cfg in enumerate(plan['configs']):
                 ident=hashlib.sha256((d['plan_id']+':'+str(i)).encode()).hexdigest()[:32]
                 jobs.append({'id':ident,'name':cfg['name'],'url':'/api/jobs/'+ident})
                 if con.execute('SELECT 1 FROM jobs WHERE id=?', (ident,)).fetchone():
                     continue
+                if cfg['vmid'] in reserved_ids or cfg['name'].lower() in reserved_names:
+                    raise ValueError('Another job reserved this machine name or VM ID. Review the build again.')
                 require_unbound_target(con,cfg)
                 # A still-open review may have been generated before the ISO letter reservation.
                 if cfg['kind'] == 'windows' and cfg.get('source_kind') != 'template':
                     windows_build.check_iso_disk_letters(cfg.get('data_disks', []))
                 execution={k:plan[k] for k in ('tasks','purpose','source','media_identity')};execution.update(operation='build '+cfg['name'],config=cfg,edition=plan.get('edition'))
+                if plan.get('recipe'): execution['recipe']=plan['recipe']
                 payload=dict(action='simple',server_id=operations.connection_provider.current()['id'],plan=execution,name=cfg['name'],node=cfg['node'],vmid=cfg['vmid'])
                 con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',(ident,'simple','queued',time.time(),time.time(),self.m.encode(payload),'Queued: create, prepare remote access, install software.'))
             if not con.execute('SELECT 1 FROM records WHERE kind=? AND id=?', ('credentials', credential['id'])).fetchone():
@@ -434,14 +457,28 @@ class SimpleFlow:
         if tasks:
             taskplan=self.life.verified_task_plan(cfg,tasks,job_id)
             self.assert_owned(cfg,job_id)
+            if plan['purpose']=='template': taskplan['template_build']=job_id
             with diagnostics.stage('guest_tasks',count=len(tasks)):
-                self.m.execute(taskplan,log)
+                self.m.execute(taskplan,log,job_id)
             self.life.record_tasks(taskplan,job_id)
         if plan['purpose']=='template':
-            from template_finish import finish
-            with diagnostics.stage('generalize_template'):
-                finish(cfg,self.m,log,self.m.get('builds',job_id)['machine_identity'])
+            self.finish_template(cfg,job_id,log)
         log('Ready: '+cfg['name']+(' template.' if plan['purpose']=='template' else '. Run more scripts from Operations whenever you need them.'))
+
+    def finish_template(self,cfg,job_id,log):
+        from template_finish import finish
+        with diagnostics.stage('generalize_template'):
+            finish(cfg,self.m,log,self.m.get('builds',job_id)['machine_identity'])
+
+    def finish_recovered_template(self,build_id,recovery_job,log):
+        with self.m.db() as con:
+            row=con.execute("SELECT payload FROM jobs WHERE id=? AND action='simple'",(build_id,)).fetchone()
+        source=self.m.decode(row['payload'])
+        if source['server_id']!=operations.connection_provider.current()['id'] or source['plan']['purpose']!='template':
+            raise ValueError('The original template build is unavailable on this server.')
+        self.finish_template(source['plan']['config'],build_id,log)
+        build=self.m.get('builds',build_id)
+        self.m.put('builds',dict(build,template_finished_by=recovery_job))
 
     def assert_owned(self,cfg,job_id):
         from lifecycle import machine_identity
@@ -452,6 +489,7 @@ class SimpleFlow:
 
 def register(app,manager,lifecycle):
     flow=SimpleFlow(manager,lifecycle)
+    flow.recipes.register(app)
     reviews=Reviews()
     @app.route('/api/simple/software', methods=['GET','POST'])
     def software():

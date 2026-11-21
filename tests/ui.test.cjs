@@ -759,13 +759,14 @@ async function fixture(initialServer={},startAtHome=false){
     else if(url==='/api/state')value={resources,nodes:[{node:'pve',status:'online'}],details:{pve:{storage:[{storage:'local-lvm',active:1,content:'images'},{storage:'local',active:1,content:'iso,backup'}],network:[{iface:'vmbr0',type:'bridge'}],isos:[],backups:[]}},local_isos:[],next_id:202};
     else if(url==='/api/jobs?summary=1')value=[];
     else if(url==='/api/simple/resources')value=[...resources,{type:'node',node:'pve',status:'online'}];
+    else if(url==='/api/simple/recipes')value=[];
     else if(url==='/api/lifecycle/state')value={families:[],versions:[],builds:[],policies:[],reports:[]};
     else if(url==='/api/lifecycle/plan')value={id:'recovery-plan',operation:'backup-restore',node:'pve',vmid:202,name:'restore-test',archive:'local:backup/vzdump-qemu-201-test.vma.zst',boot_test:true,disconnected:true,notes:[],dangerous:false};
     else if(url==='/api/lifecycle/run')value={id:'recovery-job'};
     else if(url.startsWith('/api/simple/software'))value={platforms:{'pve:201':'windows'},features:[{id:'Web-Server',name:'Web server (IIS)'}]};
     else if(url==='/api/simple/options')value={iso_setup_letters:['D','E','F'],destinations:[{node:'pve',storage:'local-lvm',iso_storage:'local',bridge:'vmbr0',management_cidr:'192.0.2.0/24',agent_iso:'local:iso/virtio.iso',storage_choices:['local-lvm'],iso_storages:['local'],bridges:['vmbr0'],driver_isos:['local:iso/virtio.iso'],isos:[{id:'local:iso/server.iso',label:'Windows Server 2025.iso'}]}],local_isos:[],profiles:{'ubuntu-24.04':'Ubuntu 24.04 LTS'},features:[{id:'Web-Server',name:'Web server (IIS)'}]};
     else if(url==='/api/simple/editions')value={identity:'media-v1',editions:[{index:7,name:'Windows Server Standard',label:'Standard (Desktop Experience)',desktop:true,language:'en-US'}]};
-    else if(url==='/api/simple/plan'){const d=JSON.parse(opts.body);value={id:'simple-plan',machines:Array.from({length:Number(d.count)},(_,i)=>({vmid:202+i,name:d.name+'-0'+(i+1),node:'pve',memory:4096,cores:2,disk:64,storage:'local-lvm',bridge:'vmbr0'})),edition:'Standard (Desktop Experience)',purpose:d.purpose,tasks:[{name:'Install Chocolatey',params:{}}],remote_access:'HTTPS WinRM',notes:[],dangerous:false};}
+    else if(url==='/api/simple/plan'){const d=JSON.parse(opts.body);value={id:'simple-plan',machines:Array.from({length:Number(d.count||1)},(_,i)=>({vmid:202+i,name:d.name+'-0'+(i+1),node:'pve',memory:4096,cores:2,disk:64,storage:'local-lvm',bridge:'vmbr0'})),edition:'Standard (Desktop Experience)',purpose:d.purpose,tasks:[{name:'Install Chocolatey',params:{}}],remote_access:'HTTPS WinRM',notes:[],dangerous:false};}
     else if(url==='/api/simple/run')value={jobs:[{id:'new-job'}]};
     else if(url==='/api/catalog')value=catalog;
     else if(url==='/api/provision/plan')value={steps:['Prepare VM'],notes:[]};
@@ -773,7 +774,7 @@ async function fixture(initialServer={},startAtHome=false){
     else if(url.startsWith('/api/manage/')){const kind=url.split('/').at(-1);value=records[kind]||{id:'job'};}
     return {ok:true,status:200,json:async()=>value};
   };
-  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple-help.js','simple.js','guest-operations.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
+  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple-help.js','simple.js','build-followups.js','guest-operations.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
   const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
   await settle();
   if(server.connected&&!startAtHome){w.eval("view='overview';render()");await settle();}
@@ -1163,6 +1164,52 @@ test('completed build shortcuts resolve the original job again before exporting 
     assert.deepEqual(details,{node:'pve',vmid:201,job_id:'done'});assert.equal(filename,'demo.rdp');
     const text=await new Promise(resolve=>{const reader=new w.FileReader();reader.onload=()=>resolve(reader.result);reader.readAsText(blob)});
     assert.match(text,/full address:s:\[2001:db8::9\]:3391\r\n/);assert.doesNotMatch(text,/password|username/i);
+  }finally{f.close()}
+});
+
+test('a saved build asks for fresh credentials and reviews before it queues',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document,fetch=w.fetch;
+  const recipe={name:'Lab Windows',id:'saved',os:'windows',purpose:'vm',source_kind:'iso',password_login:true};
+  w.fetch=async(url,opts)=>url==='/api/simple/recipes'?{ok:true,json:async()=>[recipe]}:fetch(url,opts);
+  try{
+    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    doc.querySelector('#saved-builds button').click();
+    const fields=doc.querySelector('#manage-form').elements;
+    assert.equal(fields.password.value,'');assert.equal(fields.name.value,'');
+    fields.password.value='Fresh-Password#123';fields.name.value='win-copy';
+    doc.querySelector('#manage-submit').click();await f.settle();
+    assert.equal(doc.querySelector('#manage-title').textContent,'Review new VM');
+    assert.deepEqual(f.calls.find(([url])=>url==='/api/simple/plan')[1],{
+      name:'win-copy',password:'Fresh-Password#123',reuse:{recipe_id:'saved'}});
+    assert.equal(f.calls.some(([url])=>url==='/api/simple/run'),false);
+    fields.confirmed.checked=true;doc.querySelector('#manage-submit').click();await f.settle();
+    assert.equal(f.calls.filter(([url])=>url==='/api/simple/run').length,1);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('failed job offers the frozen remainder and warns before retrying a started task',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document,fetch=w.fetch;
+  w.fetch=async(url,opts)=>{
+    if(url==='/api/jobs/failed')return {ok:true,json:async()=>({id:'failed',status:'failed',action:'manage',log:'Failed',
+      task_recovery:{server_id:'selected-server',targets:[{name:'ci-box',target:'pve:201',completed:1,remaining:2,next_task:'Configure tools',started:true}]}})};
+    if(url==='/api/simple/recovery/plan')return {ok:true,json:async()=>({id:'retry-plan',dangerous:true,
+      recovery:{started:true},targets:[{name:'ci-box',guest_host:'192.0.2.8',credential_name:'VM login'}],
+      tasks:[{name:'Configure tools',params:{}},{name:'Check service',params:{}}]})};
+    return fetch(url,opts);
+  };
+  try{
+    w.eval("openJobLog('failed')");await f.settle();
+    assert.match(doc.querySelector('.job-followups').textContent,/1 completed · 2 remaining/);
+    doc.querySelector('.job-followups button').click();await f.settle();
+    assert.match(doc.querySelector('#manage-fields').textContent,/may have changed the guest/);
+    assert.deepEqual([...doc.querySelectorAll('#manage-fields li')].map(el=>el.textContent.trim()),['Configure tools','Check service']);
+    assert.equal(f.calls.some(([url])=>url==='/api/manage/run'),false);
+    const fields=doc.querySelector('#manage-form').elements;
+    fields.confirmed.checked=true;fields.risk_confirmed.checked=true;
+    doc.querySelector('#manage-submit').click();await f.settle();
+    assert.deepEqual(f.calls.find(([url])=>url==='/api/manage/run')[1],{plan_id:'retry-plan',confirmed:true,risk_confirmed:true});
+    assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
 

@@ -2,6 +2,12 @@
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
+## Guided saved builds and guest task recovery
+
+Create now lists saved Windows and Ubuntu builds. A guided review or job can supply the settings for a named build. The next review checks the source, allocates available IDs and asks for fresh login secrets. Activity offers a reviewed continuation from per-VM guest task checkpoints. Completed tasks stay complete and competing recovery reviews can claim the same remaining work only once.
+
+Live verification on `nuc` used a saved build to create `pm-retry-qa` (142), a linked clone of `noble-base` (128). The first guest task succeeded and the second encountered an intentionally missing test service. After its transient unit was added to the test VM, the dashboard verified SSH and offered the remaining two tasks. Recovery job `68aaffe8d9c949a7a66020a851164d31` completed both on VM 142. The test VM was gracefully stopped and the temporary saved build removed. Historical Windows Server 2025 and Ubuntu 24.04 ISO jobs both produced fresh reviews.
+
 ## Ubuntu console and firmware
 
 New Ubuntu ISO installs use the default Proxmox firmware, machine type and display. The generated BIOS boot disc carries the installer kernel and initial RAM disk so GRUB can start before the Linux installer discovers the original DVD. Guided clones of earlier UEFI templates preserve the firmware and select VirtIO-GPU when the template uses the default display.

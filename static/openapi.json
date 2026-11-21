@@ -416,6 +416,22 @@
               "log": {
                 "type": "string"
               },
+              "reusable_build": {"$ref": "#/components/schemas/GuidedBuildDescription"},
+              "recovery_of": {"type": "string", "description": "Preceding job ID for a manual recovery on the selected server."},
+              "task_recovery": {
+                "type": "object",
+                "properties": {
+                  "server_id": {"type": "string"},
+                  "targets": {"type": "array", "items": {
+                    "type": "object", "properties": {
+                      "target": {"type": "string", "example": "pve:202"}, "name": {"type": "string"},
+                      "completed": {"type": "integer"}, "remaining": {"type": "integer"},
+                      "next_task": {"type": "string"}, "started": {"type": "boolean"},
+                      "successor": {"type": "string", "nullable": true}
+                    }
+                  }}
+                }
+              },
               "connection_recovery": {
                 "type": "object",
                 "description": "Returned by the single-job endpoint for a failed task or readiness check with a saved address mismatch on the connected server.",
@@ -452,6 +468,22 @@
               }
             }
           }
+        ]
+      },
+      "GuidedBuildDescription": {
+        "type": "object",
+        "properties": {
+          "os": {"type": "string", "enum": ["windows","ubuntu"]},
+          "purpose": {"type": "string", "enum": ["vm","template"]},
+          "source_kind": {"type": "string", "enum": ["cloud","iso","template"]},
+          "edition": {"type": "string"}, "password_login": {"type": "boolean"},
+          "needs_key_source": {"type": "boolean","description":"For older Ubuntu builds, supply github_username or ssh_public_key again."}
+        }
+      },
+      "SavedGuidedBuild": {
+        "allOf": [
+          {"$ref": "#/components/schemas/GuidedBuildDescription"},
+          {"type": "object", "properties": {"id": {"type":"string"}, "name": {"type":"string"}}}
         ]
       },
       "Target": {
@@ -2826,6 +2858,43 @@
         }
       }
     },
+    "/api/simple/recipes": {
+      "get": {
+        "summary": "List saved guided builds for Create",
+        "responses": {"200": {"description": "Named shortcuts", "content": {"application/json": {"schema": {
+          "type": "array", "items": {"$ref": "#/components/schemas/SavedGuidedBuild"}
+        }}}}}
+      },
+      "post": {
+        "summary": "Save a guided review or build job as a named shortcut",
+        "parameters": [{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "required": ["name"], "oneOf": [{"required":["plan_id"]},{"required":["job_id"]}],
+          "properties": {"name":{"type":"string","maxLength":100},"plan_id":{"type":"string"},"job_id":{"type":"string"}}
+        }}}},
+        "responses": {"201":{"description":"Saved build", "content":{"application/json":{"schema":{"$ref":"#/components/schemas/SavedGuidedBuild"}}}},
+          "400":{"description":"Invalid name, review or job"},"409":{"description":"Disconnected or stale server selection"}}
+      }
+    },
+    "/api/simple/recipes/{id}/delete": {
+      "post": {
+        "summary": "Remove a saved guided build",
+        "parameters": [{"name":"id","in":"path","required":true,"schema":{"type":"string"}},
+          {"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}},
+        "responses":{"200":{"description":"Shortcut removed"},"400":{"description":"Unknown shortcut"},"409":{"description":"Disconnected or stale server selection"}}
+      }
+    },
+    "/api/simple/recovery/plan": {
+      "post": {
+        "summary": "Review a manual continuation of one VM's unfinished guest tasks",
+        "description": "Use a target from task_recovery on the failed or interrupted job. Rechecks the original VM, disks and saved binding. Returns a management plan with id, targets, ordered tasks, snapshot_before, dangerous, recovery (job_id, completed, started) and finish_template. Inspect a previously started task before approving it. Submit once through /api/manage/run.",
+        "parameters": [{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["job_id","target"],
+          "properties":{"job_id":{"type":"string"},"target":{"type":"string","example":"pve:202"}}}}}},
+        "responses":{"200":{"description":"Fresh reviewed plan, no guest tasks executed"},"400":{"description":"Unavailable checkpoint, claimed recovery or changed target"},"409":{"description":"Disconnected or stale server selection"}}
+      }
+    },
     "/api/simple/plan": {
       "post": {
         "summary": "Review a batch of new Windows Server or Ubuntu machines and software",
@@ -2877,6 +2946,12 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "reuse": {
+                    "type": "object", "additionalProperties": false,
+                    "oneOf": [{"required":["recipe_id"]},{"required":["job_id"]}],
+                    "properties": {"recipe_id":{"type":"string"},"job_id":{"type":"string"}},
+                    "description": "Reuse a guided configuration. Provide a new name, optional quantity, fresh required guest password and renewed Windows template confirmation."
+                  },
                   "os": {
                     "type": "string",
                     "enum": [
@@ -3091,6 +3166,7 @@
                   "name"
                 ],
                 "oneOf": [
+                  {"title": "Repeat a guided build", "required": ["reuse"]},
                   {
                     "title": "Windows ISO install",
                     "required": [

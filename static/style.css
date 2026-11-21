@@ -365,3 +365,7 @@ nav :focus-visible { outline-offset: -3px; }
   #software-apps .choice-grid { grid-template-columns:repeat(2,minmax(0,1fr)) }
   .build-specs { gap:7px;padding:10px }
 }
+.saved-build{display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;padding:.7rem 0;border-bottom:1px solid var(--line)}
+.saved-build>span{flex:1 1 14rem;font-weight:600}
+.saved-build small{display:block;font-weight:400;color:var(--muted)}
+.job-followups{margin:.7rem 0}

@@ -16,6 +16,7 @@ from flask import jsonify, request
 import operations
 from guest_tasks import BUILTINS, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters
 from script_library import check_script, ScriptDiagnostic
+from task_recovery import TaskProgress
 
 KINDS = {'credentials', 'connections', 'tasks', 'groups', 'recipes', 'schedules'}
 OPS = {'tasks', 'readiness', 'start', 'shutdown', 'stop', 'resize', 'backup', 'snapshot', 'restore'}
@@ -129,9 +130,30 @@ def check_saved_trust(previous, trust, identity):
             raise TrustChanged('Guest transport identity changed. Verify its identity in the console and update the saved trust.')
 
 
+def verify_guest_access(client, guest, binding, credential, log, *, recovering=False):
+    label = target_id(guest)
+    resolved = endpoint_addresses(binding)
+    reported = set()
+    try:
+        interfaces = client.call('GET',f"nodes/{guest['node']}/qemu/{guest['vmid']}/agent/network-get-interfaces")
+        addresses = (ipaddress.ip_address(a['ip-address']) for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]))
+        reported = {ip for ip in addresses if not ip.is_loopback and not ip.is_link_local}
+        log(label+' guest agent available; reported IPs: '+(', '.join(sorted(map(str,reported))) or 'none'))
+    except Exception:
+        log(label+' guest agent unavailable; checking configured address instead.')
+    if recovering and binding['platform']=='windows' and not binding['verify_tls'] and not reported:
+        raise ValueError('Restore guest-agent address discovery or verify the WinRM certificate before recovering tasks.')
+    if reported and not resolved & reported:
+        raise ValueError(ADDRESS_MISMATCH + '. Choose Refresh connection, then test and save the current address.')
+    with socket.create_connection((binding['host'],binding['port']),timeout=10): pass
+    log(label+' configured transport port reachable.')
+    run_guest(binding,credential,[],log,readiness=True)
+
+
 class Manager:
     def __init__(self, db, encode, decode):
         self.db, self.encode, self.decode = db, encode, decode
+        self.progress = TaskProgress(self)
         with db() as con:
             con.execute('CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, value TEXT, PRIMARY KEY(kind,id))')
             con.execute('CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, created REAL, value TEXT)')
@@ -275,6 +297,7 @@ class Manager:
                 if value['credential_id']: self.get('credentials', value['credential_id'])
             if kind == 'schedules':
                 plan = self.load_plan(d['plan_id']) if d.get('plan_id') else old.get('plan')
+                if plan and plan.get('recovery'): raise ValueError('Recovery applies once to the original machine.')
                 if not plan or plan['operation'] not in ('tasks', 'backup', 'shutdown', 'start', 'readiness'): raise ValueError('Review a task, backup, start, shutdown or readiness plan first')
                 if d.get('confirmed') is not True: raise ValueError('Confirm the exact scheduled targets and operation')
                 if plan['dangerous'] and d.get('risk_confirmed') is not True: raise ValueError('Confirm risky tasks explicitly')
@@ -298,7 +321,7 @@ class Manager:
                 if ident in json.dumps(record): raise ValueError('Record is referenced by a connection, group, recipe or schedule; update those first')
         with self.db() as con: con.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, ident))
 
-    def create_plan(self, d, *, selections=None, discovered=None):
+    def create_plan(self, d, *, selections=None, discovered=None, recovery=None):
         if not isinstance(d, dict): raise ValueError('Plan must be a JSON object')
         op = d.get('operation')
         if op not in OPS: raise ValueError('Unknown management operation')
@@ -322,6 +345,10 @@ class Manager:
         resources = p.resources()
         plan = {'operation': op, 'targets': [], 'tasks': selections, 'snapshot_before': boolean(d.get('snapshot_before', False)),
                 'dangerous': op in ('stop', 'restore') or any(t['item'].get('dangerous') for t in selections)}
+        if recovery:
+            plan.update(recovery=recovery, template_build=recovery['template_build'])
+            plan['dangerous'] |= bool(recovery['started'] or recovery['template_build'] or
+                                      any(s['item']['id']=='prepare-created-volume' for s in selections))
         if op=='resize': plan.update(cores=number(d.get('cores'),1,128), memory=number(d.get('memory'),512,1048576))
         if op=='backup': plan['backup_storage'] = word(d.get('backup_storage'), 'backup storage')
         if op=='restore': plan['snapshot'] = word(d.get('snapshot'), 'snapshot name')
@@ -331,6 +358,11 @@ class Manager:
             if not guest: raise ValueError('Choose existing QEMU VMs, not templates or containers: ' + target_id(t))
             cfg = p.call('GET', f'nodes/{t["node"]}/qemu/{t["vmid"]}/config')
             t.update(name=guest.get('name',''), identity=self.identity(cfg))
+            if recovery:
+                if not (cfg.get('smbios1') or cfg.get('vmgenid')) or t['identity'] != recovery['identity']:
+                    raise ValueError('The original VM identity or attached disks changed. Inspect the machine before running new tasks.')
+                if guest.get('status') != 'running':
+                    raise ValueError('Start the original machine before reviewing its remaining tasks.')
             if op=='resize' and guest.get('status')!='stopped': raise ValueError('Shut down VMs before changing CPU/RAM; new values apply on next start')
             if op=='restore' and guest.get('status')!='stopped': raise ValueError('Shut down VMs before restoring a snapshot')
             if op in ('tasks', 'readiness'):
@@ -343,6 +375,7 @@ class Manager:
                 credential = discovered.get(('credentials', binding['credential_id'])) or self.get('credentials', binding['credential_id'])
                 if credential['platform'] != binding['platform']: raise ValueError('Group credential does not match guest platform')
                 if any(s['item']['platform'] != binding['platform'] for s in selections): raise ValueError('All selected tasks must match each guest platform')
+                if recovery: verify_guest_access(p,t,binding,credential,lambda message: None,recovering=True)
                 if drive_letters:
                     from winrm_setup import check_letters, used_drive_letters
                     check_letters(drive_letters,used_drive_letters(p,t,cfg))
@@ -367,11 +400,20 @@ class Manager:
 
     @staticmethod
     def summary(plan):
+        tasks=[]
+        for selection in plan['tasks']:
+            item=selection['item']
+            summary=dict(name=item['name'],params=selection['params'])
+            if plan.get('recovery') and item['id']=='prepare-created-volume':
+                summary['data_disk']={key:item['disk'][key] for key in ('size','label','letter')}
+            tasks.append(summary)
         return dict(operation=plan['operation'], targets=[dict({k:t[k] for k in ('node','vmid','name')},
                     **({'guest_host':t['connection']['host'],'port':t['connection']['port'],'platform':t['connection']['platform'],
                         'credential_name':t.get('credential_name',''),'verify_tls':t['connection']['verify_tls']} if 'connection' in t else {})) for t in plan['targets']],
-                    tasks=[{'name': t['item']['name'], 'params': t['params']} for t in plan['tasks']],
+                    tasks=tasks,
                     snapshot_before=plan['snapshot_before'], dangerous=plan['dangerous'],
+                    **({'recovery': {k:plan['recovery'][k] for k in ('job_id','completed','started')},
+                        'finish_template':bool(plan.get('template_build'))} if plan.get('recovery') else {}),
                     settings={k:plan[k] for k in ('cores','memory','backup_storage','snapshot') if k in plan},
                     notes=['CPU/RAM changes require stopped guests and apply on next start.', 'Snapshots are retained; restoration is a separate reviewed action.',
                            'Guest scripts are trusted administrator code. Script output is withheld from logs.', 'Failures are reported per VM; no automatic rollback or force shutdown.'])
@@ -382,9 +424,15 @@ class Manager:
         return self.decode(row['value'])
 
     def enqueue(self, plan, job_id):
-        payload = {'action': 'manage', 'plan': plan}
+        if plan.get('operation') not in OPS: raise ValueError('Choose a management operation plan')
+        server_id = operations.connection_provider.current()['id']
+        payload = {'action': 'manage', 'plan': plan, 'server_id':server_id}
         with self.db() as con:
-            con.execute('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,?)', (job_id,'manage','queued',time.time(),time.time(),self.encode(payload),'Queued reviewed '+plan['operation']+' operation.'))
+            con.execute('BEGIN IMMEDIATE')
+            inserted=con.execute('INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,?)', (job_id,'manage','queued',time.time(),time.time(),self.encode(payload),'Queued reviewed '+plan['operation']+' operation.'))
+            if inserted.rowcount and plan['operation']=='tasks':
+                if plan.get('recovery'): self.progress.claim(con,job_id,plan,server_id)
+                self.progress.initialize(con,job_id,plan,server_id)
         return {'id': job_id, 'url': '/api/jobs/'+job_id}
 
     def tick(self, now=None):
@@ -409,7 +457,11 @@ class Manager:
                     s['last_job'] = ident; s['last_report'] = 'Queued. See job for per-VM results.'
                 con.execute('UPDATE records SET value=? WHERE kind=? AND id=?',(self.encode(s),'schedules',s['id']))
 
-    def execute(self, plan, log):
+    def execute(self, plan, log, job_id=None):
+        track = job_id and plan['operation']=='tasks'
+        if track:
+            with self.db() as con:
+                self.progress.initialize(con,job_id,plan,operations.connection_provider.current()['id'])
         p = operations.Proxmox()
         failures = 0
         for t in plan['targets']:
@@ -428,34 +480,26 @@ class Manager:
                 def task(path, **args): p.wait(t['node'],p.call('POST',prefix+path,**args),log)
                 if op in ('tasks','readiness'):
                     b = t['connection']; cred = self.get('credentials',b['credential_id'])
+                    if plan.get('recovery') and self.get('connections',label)['updated'] != b['updated']:
+                        raise ValueError('Guest connection changed since recovery review. Review the remaining tasks again.')
                     if cred['updated'] != t['credential_revision']: raise ValueError('Credential changed since review; review again')
                     if resource.get('status')!='running': raise ValueError('Guest is not running')
-                    resolved = endpoint_addresses(b)
-                    reported = set()
-                    try:
-                        interfaces = p.call('GET',prefix+'/agent/network-get-interfaces')
-                        reported = {ipaddress.ip_address(a['ip-address']) for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[])}
-                        reported = {ip for ip in reported if not ip.is_loopback and not ip.is_link_local}
-                        log(label+' guest agent available; reported IPs: '+(', '.join(sorted(map(str,reported))) or 'none'))
-                    except Exception: log(label+' guest agent unavailable; checking configured address instead.')
-                    if reported and not resolved & reported:
-                        raise ValueError(ADDRESS_MISMATCH + '. Choose Refresh connection, then test and save the current address.')
-                    # No port scanning or discovery: only the configured guest endpoint.
-                    with socket.create_connection((b['host'],b['port']),timeout=10): pass
-                    log(label+' configured transport port reachable.')
-                    run_guest(b,cred,[],log,readiness=True)
+                    verify_guest_access(p,t,b,cred,log,recovering=bool(plan.get('recovery')))
                     if op=='tasks':
                         if plan['snapshot_before']:
                             snap = 'proxmate-'+uuid.uuid4().hex[:16]
                             task('/snapshot',snapname=snap,description='Proxmate pre-task snapshot',vmstate=0)
                             log(label+' retained pre-task snapshot: '+snap)
-                        for selection in plan['tasks']:
+                        for index, selection in enumerate(plan['tasks']):
                             log(label+' running: '+selection['item']['name'])
                             letters=selected_drive_letters([selection])
                             if letters:
                                 from winrm_setup import check_letters, used_drive_letters
                                 check_letters(letters,used_drive_letters(p,t,cfg))
-                            run_guest(b,cred,compile_task(selection['item'],selection['params']),log)
+                            steps=compile_task(selection['item'],selection['params'])
+                            if track: self.progress.mark(job_id,label,index,completed=False)
+                            run_guest(b,cred,steps,log)
+                            if track: self.progress.mark(job_id,label,index,completed=True)
                 elif op in ('start','shutdown','stop'):
                     task('/status/'+op, **({'timeout':120,'forceStop':0} if op=='shutdown' else {}))
                 elif op=='resize':
@@ -483,6 +527,7 @@ class Manager:
 
 def register(app, db, encode, decode):
     manager = Manager(db,encode,decode)
+    manager.progress.register(app)
 
     @app.get('/api/manage/<kind>')
     def list_records(kind):

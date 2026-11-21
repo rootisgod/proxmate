@@ -115,7 +115,8 @@ function simpleRender(){
     $('#content').innerHTML=title('Create','Choose what to build.')+'<div class="build-choices">'+choices.map(([purpose,name,description])=>
       '<section class="panel"><h2>'+name+'</h2><p>'+description+'</p><div class="row-actions">'+
       '<button data-simple="windows" data-purpose="'+purpose+'">Windows Server</button><button data-simple="ubuntu" data-purpose="'+purpose+'">Ubuntu</button></div></section>').join('')+'</div>'+
-      '<h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
+      '<section id="saved-builds" aria-label="Saved builds"></section><h2>Available templates</h2>'+(templates.length?table(['Name','Status','Node','Resources','Actions'],guestRows(templates,true)):'<p>No templates discovered.</p>');
+    loadGuidedRecipes($('#saved-builds'));
   }else{
     if(!mg){$('#content').innerHTML=title('Script library','Loading your saved scripts…');if(!mgLoading){mgLoading=true;loadManagement().then(render).catch(e=>notice(e.message)).finally(()=>mgLoading=false)}return true}
     $('#content').innerHTML=scriptLibrary();
@@ -453,6 +454,9 @@ function drawSimple(){
   if(simpleStep===1)bindSoftware($('#simple-fields'),d);
   if(simpleStep===2){
     for(const input of $('#simple-fields').querySelectorAll('[type=checkbox]'))input.required=true;
+    const save=document.createElement('button');save.type='button';save.textContent='Save this build';
+    save.onclick=()=>saveGuidedRecipe({plan_id:simplePlan.id},d.name);
+    $('#simple-fields .build-review').append(save);
   }
   if(simpleStep===0){
     const fields=$('#simple-form').elements;
@@ -540,26 +544,29 @@ function reviewProgress(message){
   const el=$('#simple-progress');el.hidden=!message;el.textContent=message;
 }
 async function reviewBuild(draft){
-  reviewProgress('Checking storage and build settings…');
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
   delete settings.ubuntu_password_enabled;
   if(!draft.ubuntu_password_enabled)delete settings.ubuntu_password;
+  return requestBuildReview(settings,()=>simpleDraft===draft,reviewProgress);
+}
+async function requestBuildReview(settings,active,progress){
+  progress('Checking storage and build settings…');
   const ticket=await api('simple/plan',settings,{Prefer:'respond-async'});
   if(!ticket.review_id)return ticket;
   const stages={inventory:'Checking available storage and machine IDs…',editions:'Checking the selected Windows edition…',drivers:'Checking guest drivers and installer integrity…',
     ubuntu_media:'Checking the Ubuntu Server ISO…',github_keys:'Reading public SSH keys from GitHub…'};
   let failures=0;
-  while(simpleDraft===draft){
+  while(active()){
     let result;
     try{result=await api('simple/reviews/'+encodeURIComponent(ticket.review_id));failures=0}
     catch(error){
       if(!error.transport||++failures>5)throw Error(error.message+' · Review '+ticket.request_id);
-      if(simpleDraft===draft)reviewProgress('Reconnecting to your build review…');
+      if(active())progress('Reconnecting to your build review…');
     }
-    if(simpleDraft!==draft)return;
+    if(!active())return;
     if(result?.state==='ready')return result.plan;
     if(result?.state==='failed')throw Error(result.error+' · Request '+result.request_id);
-    if(result)reviewProgress(stages[result.stage]||'Preparing your build review…');
+    if(result)progress(stages[result.stage]||'Preparing your build review…');
     await new Promise(resolve=>setTimeout(resolve,failures?1500:700));
   }
 }

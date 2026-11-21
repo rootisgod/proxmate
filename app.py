@@ -202,6 +202,18 @@ def job_view(row, detail_db=None):
     result = dict(row)
     if 'has_answer' in result: result['has_answer']=bool(result['has_answer'])
     payload = decode_payload(result.pop('payload'))
+    if detail_db is not None:
+        from guided_recipes import from_job, description
+        selected=server.read()
+        if selected.get('connected'):
+            if payload.get('server_id')==selected['id']:
+                recipe=from_job(payload)
+                if recipe: result['reusable_build']=description(recipe)
+                if payload.get('plan',{}).get('recovery'):
+                    result['recovery_of']=payload['plan']['recovery']['job_id']
+            if result['status'] in ('failed','interrupted'):
+                remaining=manager.progress.report(detail_db,result['id'],selected['id'])
+                if remaining: result['task_recovery']=dict(server_id=selected['id'],targets=remaining)
     result['target'] = {k: payload[k] for k in ('node', 'vmid', 'source', 'name', 'filename') if k in payload}
     if payload['action']=='simple': result['server_id']=payload.get('server_id')
     if payload['action'] in ('manage','lifecycle','simple'):
@@ -363,8 +375,10 @@ def run_next_job():
             if not resume_guest(row,wait,payload,log): return True
         elif payload['action']=='winrm-setup': winrm_setup.execute(manager,payload,log)
         elif payload['action']=='manage':
-            manager.execute(payload['plan'],log)
+            manager.execute(payload['plan'],log,row['id'])
             if payload['plan']['operation']=='tasks': lifecycle.record_tasks(payload['plan'],row['id'])
+            if payload['plan'].get('template_build'):
+                simple.finish_recovered_template(payload['plan']['template_build'],row['id'],log)
         elif payload['action'] in ('lifecycle','simple'):
             (simple if payload['action']=='simple' else lifecycle).execute(payload['plan'],log,row['id'])
         else:
@@ -487,7 +501,7 @@ def connection_boundary():
 
     # A guided login may take a transport timeout. Keep the selected server pinned
     # while allowing unrelated inventory, job and record requests to proceed.
-    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
+    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
         server.machine_requests += 1
         g.machine_request = True
         g.connection_locked = False

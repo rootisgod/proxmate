@@ -120,7 +120,8 @@ def test_clone_to_verified_software_and_exact_archived_media(clone_lab,monkeypat
     monkeypatch.setattr(winrm_setup,'agent_script',lambda *args:'{"optical":[],"used":["C"]}')
     fake.hostname='files-01'
     applied=[]
-    def execute(plan,log):
+    def execute(plan,log,job_id):
+        assert job_id==job
         applied.extend(guest_tasks.compile_task(t['item'],t['params']) for t in plan['tasks'])
     monkeypatch.setattr(app.manager,'execute',execute)
     with app.db() as con: con.execute('UPDATE job_waits SET next_check=0')

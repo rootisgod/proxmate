@@ -114,6 +114,7 @@ async function readJobLog(log){
     log.textContent=job.log;
     if(typeof jobConnectionActions==='function')jobConnectionActions(job,log);
     if(typeof jobWindowsActions==='function')jobWindowsActions(job,log);
+    jobFollowupActions(job,log);
     log.dataset.updated=String(job.updated);
     log.dataset.status=job.status;
     $('#form-title').textContent=job.action+' · '+job.status;
