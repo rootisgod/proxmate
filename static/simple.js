@@ -126,7 +126,7 @@ function simpleRender(){
 async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=null){
   if(!state){view='server';render();return notice('Connect your Proxmox server first.')}
   try{
-    if(!serverInfo.ssh_fingerprint&&!(os==='windows'&&purpose==='vm'&&!filename&&windowsTemplates().length)){
+    if(!serverInfo.ssh_fingerprint&&!sourceTemplate&&!(os==='windows'&&purpose==='vm'&&!filename&&windowsTemplates().length)){
       view='server';render();
       $('.server-advanced').open=true;
       $('#server-form [name=ssh_fingerprint]').focus();
@@ -145,9 +145,10 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
     const prefix=os==='windows'?'win-server':'ubuntu';
     let name=prefix;
     for(let index=2;used.has(name);index++)name=prefix.slice(0,11-String(index).length)+'-'+index;
-    simpleDraft={os,purpose,source_kind:defaultClone?'template':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:'ubuntu-24.04',username:'ubuntu',password:'',
+    const ubuntuIso=os==='ubuntu'&&dest.ubuntu_isos?.length;
+    simpleDraft={os,purpose,source_kind:defaultClone?'template':os==='ubuntu'&&!ubuntuIso?'cloud':'iso',template_id:defaultClone?.vmid,data_disks:[],count:1,name,profile:'ubuntu-24.04',username:'ubuntu',password:'',
       node:dest.node,storage:dest.storage,iso_storage:dest.iso_storage,bridge:dest.bridge,management_cidr:dest.management_cidr,agent_iso:dest.agent_iso,
-      cores:2,memory_gb:os==='windows'?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scripts:[],script_params:{}};
+      cores:2,memory_gb:os==='windows'||ubuntuIso?4:2,disk:os==='windows'?64:32,locale:'en-GB',timezone:'GMT Standard Time',packages:'',chocolatey:false,features:[],scripts:[],script_params:{}};
     simpleStep=0;simplePlan=null;simpleBusy=false;$('#simple-fields').inert=false;$('#simple-back').disabled=false;
     if(filename){simpleDraft.source='library:'+filename;simpleDraft.all_media=!mediaCategory({label:filename})}
     $('#simple-next').disabled=false;
@@ -159,6 +160,26 @@ function simpleSources(){
   const dest=simpleOptions.destinations.find(n=>n.node===simpleDraft.node);
   const priority=iso=>/server/i.test(iso.label)&&!/sql/i.test(iso.label)?(/2025/.test(iso.label)?2:1):0;
   return [...dest.isos,...simpleOptions.local_isos].sort((a,b)=>priority(b)-priority(a)||a.label.localeCompare(b.label));
+}
+
+function ubuntuSourceFields(d,dest){
+  const isos=dest.ubuntu_isos||[];
+  const templates=simpleOptions.ubuntu_templates||[];
+  const sources=[['iso','Ubuntu Server 24.04 ISO'],['cloud','Ubuntu cloud image']];
+  if(d.purpose==='vm'&&templates.length)sources.push(['template','Ubuntu template']);
+  const fields=ws('source_kind','Install from',sources,d.source_kind);
+  if(d.source_kind==='template'){
+    const selected=templates.find(t=>t.vmid===Number(d.template_id))||templates[0];
+    if(!selected)return fields+'<p>No Ubuntu templates are available.</p>';
+    d.template_id=selected.vmid;
+    return fields+ws('template_id','Source template',templates.map(t=>[t.vmid,t.name+' · '+t.node+' / '+t.vmid]),d.template_id)+
+      ws('clone_mode','Copy type',[['full','Full copy'],['linked','Linked copy']],d.clone_mode||'full');
+  }
+  if(d.source_kind==='cloud')
+    return fields+ws('profile','Ubuntu version',Object.entries(simpleOptions.profiles),d.profile);
+  if(!isos.some(iso=>iso.id===d.source))d.source=isos[0]?.id||'';
+  if(!isos.length)return fields+'<p>Add an Ubuntu Server 24.04 amd64 live installer ISO or choose the cloud image.</p>';
+  return fields+ws('source','Installer ISO',isos.map(iso=>[iso.id,iso.label]),d.source);
 }
 
 function collectSimple(){
@@ -226,7 +247,13 @@ function bulkChoices(label, options) {
 function softwareFields(d){
   const windows=d.os==='windows', platform=windows?'windows':'linux';
   const saved=(mg?.tasks||[]).filter(t=>t.kind&&t.platform===platform);
-  const fresh=windows?freshWindowsSettings(d):{};
+  const ubuntu=simpleOptions.ubuntu;
+  const fresh=windows?freshWindowsSettings(d):ubuntu?{
+    settings:'<h3>Ubuntu settings</h3>'+ws('ubuntu_firewall','Firewall',Object.entries(ubuntu.firewall),d.ubuntu_firewall||'default')+
+      ws('ubuntu_updates','Updates after installation',Object.entries(ubuntu.updates),d.ubuntu_updates||'default'),
+    apps:'<h3>Common packages</h3><div class="choice-grid">'+ubuntu.packages.map(p=>
+      '<label class="check"><input type="checkbox" name="common_program" value="'+esc(p.id)+'" '+((d.common_programs||[]).includes(p.id)?'checked':'')+'>'+esc(p.name)+'</label>').join('')+'</div>'
+  }:{};
   const sections=[];
   if(fresh.settings) sections.push(['settings','Customisations',fresh.settings]);
   sections.push(['apps','Packages',(fresh.apps||'')+
@@ -310,7 +337,7 @@ function enabledPackageText(d){
 
 function selectedSoftware(d){
   const tasks=[];const windows=d.os==='windows';const entered=enabledPackageText(d).split(/[\s,]+/).filter(Boolean);
-  const packages=windows?[...new Set([...(d.common_programs||[]),...entered].map(p=>p.toLowerCase()))]:entered;
+  const packages=[...new Set([...(d.common_programs||[]),...entered].map(p=>windows?p.toLowerCase():p))];
   if(windows&&d.features?.includes('NET-Framework-Core'))tasks.push({id:'windows-feature',params:{feature:'NET-Framework-Core'}});
   if(windows&&(d.chocolatey||packages.length))tasks.push({id:'install-chocolatey',params:{}});
   packages.forEach(p=>tasks.push({id:windows?'chocolatey-package':'linux-package',params:{package:p}}));
@@ -341,6 +368,8 @@ function buildReview(p,windows){
     (p.purpose==='template'?'<p>Generalize, shut down and convert to a reusable template.</p>':'')+
     (tasks?'<details'+(p.tasks.length<=4?' open':'')+'><summary>Software and settings ('+p.tasks.length+')</summary><ol>'+tasks+'</ol></details>':'')+
     '<details><summary>Installation details</summary><ul><li>Save the verified guest login and connection.</li>'+
+    (p.ssh_key_fingerprints?.length?'<li>Workstation SSH keys'+(p.github_username?' · GitHub account '+esc(p.github_username):'')+
+      '<ul>'+p.ssh_key_fingerprints.map(key=>'<li><code>'+esc(key)+'</code></li>').join('')+'</ul></li>':'')+
     p.notes.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul></details>'+
     wc('confirmed',windows?'Create these machines with the reviewed settings. I am authorised to use this Windows image and accept its licence.':'Create these machines with the reviewed settings.')+
     (p.dangerous?wc('risk_confirmed','I approve '+(risks.length?esc(risks.join(', ')):'the sensitive settings and custom scripts')+'.'):'')+'</div>';
@@ -366,19 +395,19 @@ function redrawMachineFields(focusName){
 
 function machineConfigFields(d,dest){
   const windows=d.os==='windows',clone=d.source_kind==='template';
+  const ubuntuIso=!windows&&d.source_kind==='iso';
   function group(title,fields,kind=''){
     return '<fieldset class="config-group '+kind+'"><legend>'+title+'</legend><div class="config-controls">'+fields.join('')+'</div></fieldset>';
   }
-  const destination=[
-    ws('node','Proxmox node',simpleOptions.destinations.map(n=>[n.node,n.node]),d.node),
-    ws('storage',clone&&d.clone_mode==='linked'?'New data disk storage':'VM disk storage',dest.storage_choices.map(s=>[s,s]),d.storage)
-  ];
+  const destination=[ws('node','Proxmox node',simpleOptions.destinations.map(n=>[n.node,n.node]),d.node)];
+  if(!windows&&clone&&d.clone_mode==='linked')destination.push('<p class="subtle">The linked copy uses the template’s disk storage.</p>');
+  else destination.push(ws('storage',clone&&d.clone_mode==='linked'?'New data disk storage':'VM disk storage',dest.storage_choices.map(s=>[s,s]),d.storage));
   if(!clone)destination.push(ws('bridge','Network bridge',dest.bridges.map(b=>[b,b]),d.bridge));
   const hardware=[
     wf('cores','CPU cores',d.cores,'number','min="1" max="128" required'),
-    wf('memory_gb','Memory (GiB)',d.memory_gb,'number','min="'+(windows?4:1)+'" max="1024" required')
+    wf('memory_gb','Memory (GiB)',d.memory_gb,'number','min="'+(windows?4:ubuntuIso?3:1)+'" max="1024" required')
   ];
-  if(!clone)hardware.push(wf('disk','System disk (GiB)',d.disk,'number','min="'+(windows?64:8)+'" max="4096" required'));
+  if(!clone)hardware.push(wf('disk','System disk (GiB)',d.disk,'number','min="'+(windows?64:ubuntuIso?16:8)+'" max="4096" required'));
   const media=[ws('iso_storage','Setup media storage',dest.iso_storages.map(s=>[s,s]),d.iso_storage)];
   if(windows&&!clone)media.push(ws('agent_iso','Guest tools ISO',dest.driver_isos.map(s=>[s,s.split('/').pop()]),d.agent_iso));
   const guest=windows?group('Windows guest',[
@@ -406,14 +435,20 @@ function drawSimple(){
       (d.purpose==='vm'?wf('count','Quantity',d.count,'number','required min="1" max="20"'):'')+'</div><small id="batch-names" hidden></small>'+
       (d.os==='windows'?wf('password','Administrator password',d.password,'password','required minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"'):
         wf('username','SSH login name',d.username,'text','required pattern="[a-z_][a-z0-9_\\-]{0,31}"')+
-        wf('ssh_public_key','Your SSH public key (optional)',d.ssh_public_key||'','text','maxlength="8192" placeholder="ssh-ed25519 …"'))+
+        wf('github_username','GitHub username for SSH keys (optional)',d.github_username||'','text','maxlength="39" autocomplete="off"')+
+        wf('ssh_public_key','Paste an SSH public key (optional)',d.ssh_public_key||'','text','maxlength="8192" placeholder="ssh-ed25519 …"')+
+        (d.purpose==='vm'?wc('ubuntu_password_enabled','Allow password sign-in',d.ubuntu_password_enabled)+
+          (d.ubuntu_password_enabled?wf('ubuntu_password','Ubuntu login password',d.ubuntu_password||'','password',
+            'required minlength="12" maxlength="128" autocomplete="new-password"'):''):''))+
       '</section><section aria-labelledby="machine-source"><h3 id="machine-source">Installation source</h3>'+
       (d.os==='windows'?windowsSourceFields(d):
-        ws('profile','Ubuntu version',Object.entries(simpleOptions.profiles),d.profile)+'<p class="subtle">Proxmate uses the official Ubuntu cloud image and generates an SSH key for this login.</p>')+'</section>';
+        ubuntuSourceFields(d,dest))+'</section>';
     html+='</div><div class="machine-options">'+machineConfigFields(d,dest)+(d.os==='windows'?dataDiskFields(d):'')+'</div>';
   }else if(simpleStep===1)html=softwareFields(d);
   else html=buildReview(simplePlan,d.os==='windows');
+  guidedHelp.close();
   $('#simple-fields').innerHTML=html;
+  guidedHelp.attach(d);
   $('#simple-fields').scrollTop=0;
   if(simpleStep===1)bindSoftware($('#simple-fields'),d);
   if(simpleStep===2){
@@ -438,10 +473,29 @@ function drawSimple(){
       updateNames();
     }
     if(d.os==='windows')bindWindowsFields(d);
+    if(fields.ubuntu_password_enabled)fields.ubuntu_password_enabled.onchange=()=>{
+      collectSimple();
+      if(!d.ubuntu_password_enabled)delete d.ubuntu_password;
+      redrawMachineFields('ubuntu_password_enabled');
+      if(d.ubuntu_password_enabled)$('#simple-form').elements.ubuntu_password.focus();
+    };
     if(d.source_kind==='template')$('#simple-form').elements.node.disabled=true;
     const driver=$('#simple-form [name=agent_iso]');if(driver)driver.onchange=()=>{collectSimple();d.agent_manual=true};
-    for(const name of ['purpose','node','source','clone_mode']){const field=$(`#simple-form [name=${name}]`);if(field)field.onchange=async()=>{
-      collectSimple();if(name==='purpose'&&d.purpose==='template'){d.count=1;d.source_kind='iso'}
+    const changes=['purpose','node','source','clone_mode',...(d.os==='ubuntu'?['source_kind','template_id']:[])];
+    for(const name of changes){const field=$(`#simple-form [name=${name}]`);if(field)field.onchange=async()=>{
+      collectSimple();if(name==='purpose'&&d.purpose==='template'){
+        d.count=1;if(d.source_kind==='template')d.source_kind='iso';
+        delete d.ubuntu_password;delete d.ubuntu_password_enabled;
+      }
+      if(name==='source_kind'&&d.source_kind==='iso'){d.profile='ubuntu-24.04';d.memory_gb=Math.max(4,d.memory_gb);d.disk=Math.max(16,d.disk)}
+      if(d.os==='ubuntu'&&d.source_kind==='template'){
+        const templates=simpleOptions.ubuntu_templates||[];
+        const selected=templates.find(t=>t.vmid===Number(d.template_id))||templates[0];
+        if(selected&&selected.node!==d.node){
+          const dest=simpleOptions.destinations.find(n=>n.node===selected.node);
+          if(dest)for(const k of ['node','storage','iso_storage','bridge'])d[k]=dest[k];
+        }
+      }
       if(name==='node'){const dest=simpleOptions.destinations.find(n=>n.node===d.node);for(const k of ['storage','iso_storage','bridge','management_cidr','agent_iso'])d[k]=dest[k];d.agent_manual=false;d.scope_edited=false;d.source='';}
       if(name==='node'||name==='source'){d.editions=[];delete d.edition;}redrawMachineFields(name);if(d.os==='windows'&&(!d.edition||name!=='purpose'))await loadEditions();
     }}
@@ -458,6 +512,7 @@ document.addEventListener('click',async e=>{
       const hint=await api('simple/software',{targets:[{node:src.node,vmid:src.vmid}]});
       if(view!==fromView)return;
       if(hint.platforms[machineKey(src)]==='windows')await openSimple('windows','vm','',src);
+      else if(hint.ubuntu_templates?.includes(machineKey(src)))await openSimple('ubuntu','vm','',src);
       else{
         const inventory=state.details?state:await api('state');
         if(view!==fromView)return;
@@ -487,9 +542,12 @@ function reviewProgress(message){
 async function reviewBuild(draft){
   reviewProgress('Checking storage and build settings…');
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
+  delete settings.ubuntu_password_enabled;
+  if(!draft.ubuntu_password_enabled)delete settings.ubuntu_password;
   const ticket=await api('simple/plan',settings,{Prefer:'respond-async'});
   if(!ticket.review_id)return ticket;
-  const stages={inventory:'Checking available storage and machine IDs…',editions:'Checking the selected Windows edition…',drivers:'Checking guest drivers and installer integrity…'};
+  const stages={inventory:'Checking available storage and machine IDs…',editions:'Checking the selected Windows edition…',drivers:'Checking guest drivers and installer integrity…',
+    ubuntu_media:'Checking the Ubuntu Server ISO…',github_keys:'Reading public SSH keys from GitHub…'};
   let failures=0;
   while(simpleDraft===draft){
     let result;
@@ -510,7 +568,7 @@ $('#simple-form').onsubmit=async e=>{
   $('#simple-next').disabled=true;$('#simple-error').textContent='';
   try{
     collectSimple();
-    if(simpleStep===0){if(draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');simpleStep=1;drawSimple();focusSimpleStep()}
+    if(simpleStep===0){if(draft.os==='windows'&&draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');if(draft.os==='ubuntu'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose an Ubuntu Server 24.04 ISO or the cloud image.');simpleStep=1;drawSimple();focusSimpleStep()}
     else if(simpleStep===1){$('#simple-back').disabled=true;$('#simple-next').textContent='Preparing review…';$('#simple-fields').inert=true;const plan=await reviewBuild(draft);if(simpleDraft!==draft)return;simplePlan=plan;simpleStep=2;drawSimple();focusSimpleStep()}
     else{if(!draft.confirmed)throw Error('Confirm the machines and software before creating.');const result=await api('simple/run',{plan_id:simplePlan.id,confirmed:true,risk_confirmed:!!draft.risk_confirmed});submittedBuilds(result.jobs);if(simpleDraft===draft)$('#simple-dialog').close();await refresh();}
   }catch(err){if(simpleDraft===draft)$('#simple-error').textContent=err.message}

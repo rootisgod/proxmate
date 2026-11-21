@@ -2,6 +2,15 @@
 
 The [everyday Windows workflows](docs/windows-workflows.md) describe the intended template, clone and ISO experience, acceptance criteria and disposable-guest validation.
 
+## Ubuntu Server 24.04 ISO provisioning
+
+1. Discover Ubuntu Server 24.04 amd64 ISOs in Proxmox and the local library. Verify the selected media before review and again before boot. Keep the existing cloud image path available and focus installer support on Ubuntu 24.04. Debian, Fedora and Rocky installer workflows are future milestones.
+2. Generate a small NoCloud boot ISO for Subiquity autoinstall. Allocate one new VM and system disk, put the system disk first in the boot order, and use the selected Ubuntu ISO for the installer. Install OpenSSH and the guest agent. Freeze validated GitHub public keys and any pasted public key into the review alongside Proxmate's automation key. Archive a reusable installer configuration with the build.
+3. Reuse the authenticated guest-readiness queue and script library. Offer common Ubuntu packages and optional UFW and unattended-update settings. Keep Ubuntu's defaults unless the operator chooses a setting. Use the ordinary working VM flow for temporary machines. Generalize reusable templates after software finishes, remove build keys and media, and prepare clones for Proxmox cloud-init.
+4. Update the wizard, API docs and agent guide. Verify the generated config and boot image, queue and confirmation behavior, and the wizard. Deploy when the queue is idle, then install disposable VMs on `nuc` and verify SSH, software, job artifacts and template cloning. Retain failed builds for inspection. Application rollback uses the previous image with the queue idle.
+
+Completed on 2026-11-20. The working ISO VM, reusable ISO template and linked clone passed live validation on `nuc`. See the [Ubuntu release checks](STATUS.md#ubuntu-server-2404-release).
+
 ## Completed on 2026-11-20
 
 - **Connect after provisioning.** Successful guided VM builds offer **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Ubuntu. The same actions are available from a running machine's page. Both resolve the current guest address when selected. Guided Ubuntu builds accept an optional workstation public key.

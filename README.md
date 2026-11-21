@@ -24,6 +24,20 @@ Upgrade from environment-based configuration: retain the existing `.env` and `.e
 
 For a guided Ubuntu VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Ubuntu in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
 
+### Ubuntu Server 24.04 ISO
+
+Choose **Create → Virtual machine → Ubuntu** for a working VM, or **Create → Reusable template → Ubuntu**. Proxmate discovers Ubuntu Server 24.04 amd64 live-server ISOs on the selected node and in the local library. **Install from** also offers the official cloud image. Verify the Proxmox SSH connection under **Server** to make the ISO available for inspection. ISO builds use Proxmox's default firmware (SeaBIOS), machine type and display. They default to DHCP, 2 vCPUs, 4 GiB RAM and a 32 GiB system disk.
+
+Enter a GitHub username to import that account's public SSH keys, paste one public key, or leave both fields empty for dashboard-managed access. Check the key fingerprints under **Installation details** in the review. The installer uses Ubuntu's virtual kernel, enables key-only OpenSSH and installs Python and the QEMU Guest Agent. The verified Proxmate SSH login makes the machine available to Operations.
+
+For a working Ubuntu VM or template clone, tick **Allow password sign-in** under **Machine details**. After setup, use the Ubuntu account and password on the Proxmox console or at the SSH prompt. Proxmate continues to use its automation key. Set a password when building or cloning the VM that will use it.
+
+Under **Software**, choose common Ubuntu packages, enter additional APT package names, or select Linux scripts from the library. The firewall and updates start with Ubuntu defaults. You can enable UFW with TCP 22 allowed, disable UFW, or choose automatic security updates or manual updates after installation. The review asks for separate confirmation before disabling the firewall or selecting manual updates.
+
+Follow install and SSH verification in the job log. Use **Open console** for Subiquity progress or **Download Ubuntu autoinstall YAML** for a reusable copy of the installer configuration. The copy has an empty key list and a placeholder for the system disk serial. Check the disk path in both the early validation command and the storage layout when adapting the YAML.
+
+A template runs its selected software, clears the build's SSH keys and guest identity, and shuts down with a Proxmox cloud-init drive. Select **Clone** under **Create → Available templates**, or choose **Ubuntu template** under **Install from**. Choose a full copy or a linked copy. Clones keep the template's boot firmware. Copies of older UEFI templates with the default display use VirtIO-GPU for a readable console. On the first boot Proxmate verifies the new hostname and SSH login before applying selected software.
+
 After connecting, **Operations** lists the discovered VMs across the cluster. Search by name, node or VM ID, or filter by power state. While the inventory is open, Proxmate refreshes cluster resources about once a minute. **Create** offers Windows Server and Ubuntu wizards for working VMs and reusable templates. On a multi-node cluster, the wizard prefers the node reached through the verified SSH connection.
 
 1. Choose **Working machines** or **A reusable template**, then enter the name and quantity. When cloning a Windows machine, choose a stopped, Sysprep-generalized Windows Server template with the QEMU guest agent installed. Set the new Administrator password. The **Clone** action under **Create → Available templates** also opens this wizard for Windows guests. A full copy is independent. A linked copy uses its template’s base disks. Proxmate applies the chosen name inside Windows on first boot.

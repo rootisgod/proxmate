@@ -54,7 +54,7 @@ function openWinRMSetup(page){
 function jobWindowsActions(job,log){
   let bar=log.parentElement.querySelector('.job-downloads');
   if(bar)bar.remove();
-  if(!job.has_answer&&!job.server_id)return;
+  if(!job.has_answer&&!job.has_autoinstall&&!job.server_id)return;
   bar=document.createElement('div');bar.className='row-actions job-downloads';
   if(job.server_id&&job.server_id===serverInfo?.id&&state?.resources.some(r=>r.type==='qemu'&&!r.template&&r.node===job.target.node&&r.vmid===job.target.vmid&&r.name===job.target.name)){
     const link=document.createElement('a');
@@ -74,6 +74,11 @@ function jobWindowsActions(job,log){
     };
     bar.append(original);
   }
+  if(job.has_autoinstall){
+    const link=document.createElement('a');
+    link.href='/api/jobs/'+encodeURIComponent(job.id)+'/autoinstall';
+    link.download='';link.textContent='Download Ubuntu autoinstall YAML';bar.append(link);
+  }
   log.before(bar);
 }
 
@@ -83,7 +88,7 @@ function windowsTemplates(){
 
 function mediaCategory(iso){
   const name=iso.label.replace(/ \(ISO library\)$/,'');
-  if(/virtio|driver|guest.tools|sql|exchange|visual.studio|ubuntu|debian|fedora|rocky|darwin|proxmate-(unattend|clone|seed)/i.test(name))return '';
+  if(/virtio|driver|guest.tools|sql|exchange|visual.studio|ubuntu|debian|fedora|rocky|darwin|proxmate-(unattend|clone|seed|ubuntu)/i.test(name))return '';
   const year=name.match(/(?:2016|2019|2022|2025)/)?.[0];
   if(!year&&!/windows|(?:^|[^a-z])win(?:srv|server|\d|[^a-z]|$)|server/i.test(name))return '';
   const client=name.match(/(?:windows|win)[ _.-]*(10|11)(?!\d)/i);

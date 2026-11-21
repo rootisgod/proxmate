@@ -18,8 +18,9 @@ import job_queue
 import windows_artifacts
 import winrm_setup
 from provisioning import answer_recorder
+import ubuntu_build
 from lifecycle import BootstrapPending, WaitForGuest
-from flask import Flask, jsonify, request, session, send_from_directory, render_template, g
+from flask import Flask, Response, jsonify, request, session, send_from_directory, render_template, g
 from werkzeug.exceptions import HTTPException
 from cryptography.fernet import Fernet
 from operations import ACTIONS, execute, inventory, secret, validate
@@ -208,8 +209,10 @@ def job_view(row, detail_db=None):
         result['operation']=plan.get('operation',payload['action'])
         target=plan.get('config',plan)
         result['target']={k:target[k] for k in ('node','vmid','name','label','archive') if k in target}
+        if payload['action']=='simple' and target.get('kind')=='ubuntu-iso':
+            result['has_autoinstall']=True
         if payload['action']=='simple' and result['status']=='succeeded' and plan.get('purpose')=='vm':
-            if target.get('kind')=='linux-cloud': result['remote_kind']='ssh'
+            if target.get('kind') in ubuntu_build.KINDS: result['remote_kind']='ssh'
             elif target.get('windows',{}).get('rdp') or any(t.get('item',{}).get('id')=='enable-rdp' for t in plan.get('tasks',[])):
                 result['remote_kind']='rdp'
         if detail_db is not None and payload['action']=='manage' and result['status']=='failed':
@@ -258,6 +261,19 @@ def job_answer(job_id):
     if original and (request.get_json() or {}).get('include_secrets') is not True:
         raise ValueError('Confirm the download includes original setup credentials')
     return windows_artifacts.download(db,decode_payload,job_id,original)
+
+
+@app.get('/api/jobs/<job_id>/autoinstall')
+def job_autoinstall(job_id):
+    with db() as con:
+        row=con.execute('SELECT payload FROM jobs WHERE id=?',(job_id,)).fetchone()
+    payload=decode_payload(row['payload']) if row else {}
+    cfg=payload.get('plan',{}).get('config',{})
+    if payload.get('action')!='simple' or cfg.get('kind')!='ubuntu-iso':
+        return jsonify(error='No Ubuntu autoinstall configuration for this job.'),404
+    yaml_text=cfg.get('reusable_autoinstall') or ubuntu_build.user_data(cfg,reusable=True)
+    return Response(yaml_text,mimetype='application/yaml',headers={
+        'Content-Disposition':'attachment; filename="ubuntu-'+job_id+'-user-data.yaml"'})
 
 
 @app.post('/api/jobs')
@@ -453,7 +469,7 @@ def connection_boundary():
         return
     # These authenticated local reads are valid across server replacements.
     # Host-bound plans, inventory and writes still serialize with connection changes.
-    if request.endpoint in ('job_answer','check_guest_script') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
+    if request.endpoint in ('job_answer','job_autoinstall','check_guest_script') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
         return
     started=time.monotonic()
     server.lock.acquire()

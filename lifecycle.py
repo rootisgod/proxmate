@@ -52,7 +52,8 @@ def source_vmid(a):
 
 def safe_guest_config(config):
     for key,value in config.items():
-        if 'proxmate-unattend-' in str(value): raise ValueError('Remove generated answer media before backup recovery or template tests')
+        if any(prefix in str(value) for prefix in ('proxmate-unattend-', 'proxmate-ubuntu-')):
+            raise ValueError('Remove generated setup media before backup recovery or template tests')
         if key in ('args','hookscript','ivshmem') or re.fullmatch(r'(hostpci|usb|virtiofs)\d+',key):
             raise ValueError('Remove passthrough, hooks and custom QEMU arguments before using this recovery/test workflow')
         if '/dev/' in str(value): raise ValueError('Host device paths are not allowed in recovery/test guests')
@@ -385,8 +386,13 @@ class Lifecycle:
                         'retry-winrm':'Guest tools running; retrying HTTPS WinRM setup', 'retry-winrm-and-guest-tools':'Retrying HTTPS WinRM and guest-tool setup'}
                 if stage in stages: raise ValueError(stages[stage])
             waiting='Guest agent is running; waiting for completed remote-access setup'
-            marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
-            if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
+            if d['kind']!='ubuntu-clone':
+                marker=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\bootstrap-ready' if platform=='windows' else '/var/lib/proxmate/bootstrap-ready')
+                if marker.get('content','').strip()!='ready': raise ValueError('Bootstrap marker is not ready')
+            if d['kind'] in ('ubuntu-iso','ubuntu-clone'):
+                hostinfo=p.call('GET',path+'/agent/get-host-name').get('result',{})
+                if hostinfo.get('host-name','').split('.')[0].casefold()!=d['name'].casefold():
+                    raise ValueError('Waiting for Ubuntu to report its reviewed hostname')
             if opts.get('clone_token'):
                 proof=p.call('GET',path+'/agent/file-read',file=r'C:\ProgramData\Proxmate\clone-ready')
                 if proof.get('content','').strip().casefold()!=(opts['clone_token']+'|'+d['name']).casefold():

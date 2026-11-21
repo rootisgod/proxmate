@@ -90,7 +90,7 @@ def compile_task(item, params):
     if item['id'] in ('linux-service','windows-service') and 'state' in params and params['state'] not in ('started', 'stopped', 'restarted'):
         raise ValueError('Service state must be started, stopped or restarted')
     ident = item['id']
-    if item.get('kind')=='windows-setup': return copy.deepcopy(item['steps'])
+    if item.get('kind') in ('windows-setup','ubuntu-setup'): return copy.deepcopy(item['steps'])
     if ident == 'install-chocolatey': return [{'chocolatey.chocolatey.win_chocolatey': {'name': 'chocolatey', 'state': 'present'}}]
     if ident == 'chocolatey-package': return [{'chocolatey.chocolatey.win_chocolatey': {'name': params['package'], 'state': 'present'}}]
     if ident == 'windows-feature':

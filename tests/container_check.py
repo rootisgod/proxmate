@@ -77,6 +77,36 @@ with tempfile.TemporaryDirectory() as tmp:
             custom=dict(id='fixture',name='Create a share directory',kind='ansible',parameters={'share':'Share name'},
                         body='- ansible.windows.win_file:\n    path: "C:/Shares/{{ proxmate_inputs.share }}"\n    state: directory')
             tasks.extend(compile_task(custom,{'share':'Lab'}))
+        else:
+            import pycdlib
+            import ubuntu_build
+            selection=ubuntu_build.password_login('ubuntu','Fixture password 123!')
+            tasks.extend(compile_task(selection['item'],selection['params']))
+            for option in ('ssh','off'):
+                for selection in ubuntu_build.setting_tasks(dict(ubuntu_firewall=option,ubuntu_updates='manual')):
+                    tasks.extend(compile_task(selection['item'],selection['params']))
+            import io
+            source=pycdlib.PyCdlib()
+            source.new(rock_ridge='1.09')
+            source.add_directory('/CASPER',rr_name='casper')
+            for name in ('vmlinuz','initrd'):
+                data=('test '+name).encode()
+                source.add_fp(io.BytesIO(data),len(data),iso_path='/CASPER/'+name.upper()+';1',rr_name=name)
+            source.write(str(root/'noble.iso'))
+            source.close()
+            os.environ['ISO_DIR']=str(root)
+            seed=root/'ubuntu-test.iso'
+            cfg=dict(node='lab',username='ubuntu',name='noble',disk_serial='pm0123',ssh_key='')
+            ubuntu_build.boot_iso(seed,cfg,'qa','library:noble.iso')
+            image=pycdlib.PyCdlib()
+            image.open(str(seed))
+            try:
+                assert image.pvd.volume_identifier.decode().strip()=='CIDATA'
+                assert image.eltorito_boot_catalog.validation_entry.platform_id == 0
+                for entry in ('/boot/grub/grub.cfg','/boot/proxmate/vmlinuz','/boot/proxmate/initrd','/user-data','/meta-data'):
+                    assert ubuntu_build.media.image_entry(image,entry),entry
+            finally:
+                image.close()
         playbook=root/(platform+'.yml')
         playbook.write_text(yaml.safe_dump([{'hosts':'all','gather_facts':False,'tasks':tasks}]))
         result=subprocess.run(['ansible-playbook','--syntax-check','-i','192.0.2.20,',str(playbook)],capture_output=True,text=True)

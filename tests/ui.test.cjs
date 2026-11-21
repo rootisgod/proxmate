@@ -333,6 +333,78 @@ test('browsing media and editing disks preserve the chosen edition and machine d
   }finally{f.close()}
 });
 
+test('guided field help explains Ubuntu setup media and is safe to open with keyboard or tap',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document,fetch=w.fetch;
+  w.fetch=async(url,opts)=>{
+    const response=await fetch(url,opts);
+    if(url==='/api/simple/options')(await response.json()).destinations[0].ubuntu_isos=[
+      {id:'local:iso/ubuntu-24.04-live-server-amd64.iso',label:'Ubuntu Server ISO'}
+    ];
+    return response;
+  };
+  try{
+    await f.build('ubuntu');
+    const dialog=doc.querySelector('#simple-dialog');
+    doc.querySelector('#installation-details').open=true;
+    const storage=dialog.querySelector('[name=iso_storage]');
+    const button=dialog.querySelector('[aria-label="Help for Setup media storage"]');
+    const popup=dialog.querySelector('#guided-help-popup');
+    assert.equal(storage.labels[0].textContent,'Setup media storage');
+    assert.match(doc.getElementById(storage.getAttribute('aria-describedby')).textContent,/removes it after it verifies SSH/);
+    button.dispatchEvent(new w.MouseEvent('pointerover',{bubbles:true}));
+    assert.equal(popup.hidden,true);
+    const hover=new w.MouseEvent('pointerover',{bubbles:true});
+    Object.defineProperty(hover,'pointerType',{value:'mouse'});
+    button.dispatchEvent(hover);
+    assert.match(popup.textContent,/installer already on Proxmox stays where it is/);
+    assert.equal(popup.hidden,false);
+    button.focus();
+    button.click();
+    assert.equal(popup.hidden,false);
+    button.click();
+    assert.equal(popup.hidden,true);
+    storage.focus();button.focus();
+    assert.equal(popup.hidden,false);
+    assert.equal(button.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})),false);
+    assert.equal(popup.hidden,true);
+    assert.equal(dialog.open,true);
+    assert.equal(f.calls.some(([url])=>url==='/api/simple/plan'),false);
+    const sourceKind=dialog.querySelector('[name=source_kind]');
+    sourceKind.value='cloud';
+    sourceKind.dispatchEvent(new w.Event('change',{bubbles:true}));
+    const cloudHelp=dialog.querySelector('[aria-label="Help for Setup media storage"]');
+    cloudHelp.click();
+    assert.match(popup.textContent,/generated cloud-init ISO/);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('Ubuntu password sign-in is opt-in and clears when unchecked or switching to a template',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    await f.build('ubuntu');
+    const form=doc.querySelector('#simple-form');
+    assert.equal(form.elements.ubuntu_password_enabled.checked,false);
+    assert.equal(form.elements.ubuntu_password,undefined);
+    form.elements.ubuntu_password_enabled.click();
+    assert.equal(form.elements.ubuntu_password.type,'password');
+    assert.equal(form.elements.ubuntu_password.required,true);
+    form.elements.ubuntu_password.value='Fixture password 123!';
+    form.elements.ubuntu_password_enabled.click();
+    form.elements.ubuntu_password_enabled.click();
+    assert.equal(form.elements.ubuntu_password.value,'');
+    form.elements.ubuntu_password.value='Fixture password 123!';
+    form.elements.purpose.value='template';
+    form.elements.purpose.dispatchEvent(new w.Event('change',{bubbles:true}));
+    assert.equal(form.elements.ubuntu_password_enabled,undefined);
+    form.elements.purpose.value='vm';
+    form.elements.purpose.dispatchEvent(new w.Event('change',{bubbles:true}));
+    assert.equal(form.elements.ubuntu_password_enabled.checked,false);
+    assert.equal(form.elements.ubuntu_password,undefined);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('machine settings group related controls and surface a missing WinRM network',async()=>{
   const f=await fixture({},true),{w}=f,doc=w.document,fetch=w.fetch;
   w.fetch=async(url,opts)=>{
@@ -701,7 +773,7 @@ async function fixture(initialServer={},startAtHome=false){
     else if(url.startsWith('/api/manage/')){const kind=url.split('/').at(-1);value=records[kind]||{id:'job'};}
     return {ok:true,status:200,json:async()=>value};
   };
-  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple.js','guest-operations.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
+  for(const file of ['notifications.js','app.js','wizard.js','script-editor.js','manage.js','lifecycle.js','server.js','windows.js','simple-help.js','simple.js','guest-operations.js','machine.js']){const s=w.document.createElement('script');s.textContent=fs.readFileSync('static/'+file,'utf8');w.document.head.append(s)}
   const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
   await settle();
   if(server.connected&&!startAtHome){w.eval("view='overview';render()");await settle();}

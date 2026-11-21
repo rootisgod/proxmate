@@ -12,7 +12,11 @@ ADD --checksum=sha256:924829e54c983648f6f1419a2dc7f9433c861b2fb5bd57736ff096c24f
 FROM pwsh-${TARGETARCH} AS pwsh-files
 
 FROM python:3.12-slim-trixie
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client sshpass && rm -rf /var/lib/apt/lists/*
+RUN dpkg --add-architecture amd64 && apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client sshpass xorriso grub-common \
+    && cd /tmp && apt-get download grub-pc-bin:amd64 \
+    && dpkg-deb --fsys-tarfile grub-pc-bin_*.deb | tar -x -C / ./usr/lib/grub/i386-pc \
+    && rm -rf grub-pc-bin_*.deb /var/lib/apt/lists/*
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt ansible-core==2.19.9
@@ -24,6 +28,7 @@ RUN --mount=type=bind,from=pwsh-files,source=/pwsh.tar.gz,target=/tmp/pwsh.tar.g
     && chmod 755 /opt/powershell/pwsh && ln -s /opt/powershell/pwsh /usr/local/bin/pwsh
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 COPY script_library.py windows_setup.py diagnostics.py reviews.py windows_artifacts.py windows_build.py winrm_setup.py app.py job_queue.py machine.py operations.py provisioning.py management.py guest_tasks.py bootstrap.py lifecycle.py server_connection.py simple_flow.py media.py template_finish.py windows_volume.ps1 windows_bootstrap.ps1 ./
+COPY ubuntu_build.py ./
 COPY static ./static
 COPY --from=editor /build/static/editor-assets ./static/editor-assets
 RUN useradd --uid 10001 --create-home proxmate && mkdir /data && chown proxmate /data

@@ -6,7 +6,7 @@
     "description": "Single-admin LAN API. Configuration writes are immediate; infrastructure actions run in a serialized durable queue. Guest management requires reviewing a frozen plan, then confirming its ID. No automatic retries or rollback."
   },
   "externalDocs": {
-    "description": "Windows provisioning guide for agents",
+    "description": "Windows and Ubuntu provisioning guide for agents",
     "url": "/static/llms.txt"
   },
   "servers": [
@@ -1401,6 +1401,10 @@
             "type": "object",
             "description": "Non-secret target identifiers. Request playbooks and inventory are omitted."
           },
+          "has_autoinstall": {
+            "type": "boolean",
+            "description": "True for reviewed Ubuntu ISO jobs with reusable NoCloud YAML available."
+          },
           "remote_kind": {
             "type": "string",
             "enum": [
@@ -2666,7 +2670,7 @@
     "/api/simple/options": {
       "get": {
         "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
-        "description": "Discovers build destinations, ISO media and Ubuntu releases. Includes iso_setup_letters reserved by Windows ISO builds, Windows Server features, common_programs with Chocolatey package IDs, and windows_settings with desktop, vm_only and advanced flags where applicable.",
+        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 24.04 amd64 installer IDs. The ubuntu object lists suggested packages and firewall/update policies. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. Also includes Windows media, programs and settings.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2825,7 +2829,7 @@
     "/api/simple/plan": {
       "post": {
         "summary": "Review a batch of new Windows Server or Ubuntu machines and software",
-        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu accepts profile and username. Optional placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, task bodies and inputs for 30 minutes. The response omits credentials.",
+        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu ISO installs support Ubuntu Server 24.04 amd64 and require a discovered source from simple/options. The cloud image remains available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -2934,7 +2938,7 @@
                   },
                   "source": {
                     "type": "string",
-                    "description": "Windows ISO id from discovery."
+                    "description": "Windows or Ubuntu ISO ID from discovery."
                   },
                   "edition": {
                     "type": "integer",
@@ -2976,7 +2980,8 @@
                     "type": "string",
                     "enum": [
                       "iso",
-                      "template"
+                      "template",
+                      "cloud"
                     ]
                   },
                   "template_id": {
@@ -3055,6 +3060,31 @@
                     "type": "string",
                     "maxLength": 8192,
                     "description": "Optional workstation OpenSSH public key for a guided Ubuntu guest. Installed alongside the generated automation key."
+                  },
+                  "github_username": {
+                    "type": "string",
+                    "maxLength": 39,
+                    "description": "Optional GitHub account with public SSH keys. Keys are frozen at review, which returns github_username and ssh_key_fingerprints."
+                  },
+                  "ubuntu_password": {
+                    "type": "string",
+                    "format": "password",
+                    "writeOnly": true,
+                    "minLength": 12,
+                    "maxLength": 128,
+                    "description": "Optional console and SSH password for the guided Ubuntu account on a working VM or clone. The review returns password_login. Templates reject this option."
+                  },
+                  "ubuntu_firewall": {
+                    "type": "string",
+                    "enum": ["default", "ssh", "off"],
+                    "default": "default",
+                    "description": "Preserve Ubuntu defaults, enable UFW with TCP 22 allowed, or disable UFW."
+                  },
+                  "ubuntu_updates": {
+                    "type": "string",
+                    "enum": ["default", "security", "manual"],
+                    "default": "default",
+                    "description": "Policy for automatic updates after installation."
                   }
                 },
                 "required": [
@@ -3108,6 +3138,26 @@
                     }
                   },
                   {
+                    "title": "Ubuntu Server 24.04 ISO",
+                    "description": "Uses the Proxmox default firmware (SeaBIOS), machine type and display.",
+                    "required": ["os", "source_kind", "source"],
+                    "properties": {
+                      "os": {"enum": ["ubuntu"]},
+                      "source_kind": {"enum": ["iso"]},
+                      "profile": {"enum": ["ubuntu-24.04"]}
+                    }
+                  },
+                  {
+                    "title": "Ubuntu ISO template clone",
+                    "description": "Keeps the template's boot firmware. An older UEFI template using the default display gets a VirtIO-GPU display in its clone.",
+                    "required": ["os", "source_kind", "template_id"],
+                    "properties": {
+                      "os": {"enum": ["ubuntu"]},
+                      "source_kind": {"enum": ["template"]},
+                      "purpose": {"enum": ["vm"]}
+                    }
+                  },
+                  {
                     "title": "Ubuntu cloud image",
                     "required": [
                       "os"
@@ -3117,7 +3167,8 @@
                         "enum": [
                           "ubuntu"
                         ]
-                      }
+                      },
+                      "source_kind": {"enum": ["cloud"]}
                     }
                   }
                 ]
@@ -3130,7 +3181,7 @@
     "/api/simple/run": {
       "post": {
         "summary": "Queue the reviewed batch once, with one tracked job per machine",
-        "description": "Supply plan_id and confirmed=true, plus risk_confirmed=true for advanced Windows settings or trusted custom scripts when the plan is flagged dangerous. Confirmation covers starting the listed new guests, guest setup/software and Windows licensing. Returns jobs=[{id,name,url}]. Repeated submissions return the same jobs. Poll each job for actual installation, authenticated bootstrap, software and optional template generalization results. No failed guest is deleted.",
+        "description": "Supply plan_id and confirmed=true, plus risk_confirmed=true when the plan flags sensitive settings or trusted custom scripts. Confirmation covers starting the listed new guests, guest setup/software and Windows licensing where applicable. Returns jobs=[{id,name,url}]. Repeated submissions return the same jobs. Poll each job for actual installation, authenticated bootstrap, software and optional template generalization results. Failed guests are retained.",
         "responses": {
           "202": {
             "description": "Successful; passwords/private keys omitted"
@@ -3668,6 +3719,18 @@
               }
             }
           }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/autoinstall": {
+      "get": {
+        "summary": "Download reusable Ubuntu NoCloud autoinstall YAML",
+        "description": "Use the job ID returned by simple/run. The authorized key list is empty and the disk serial is a placeholder.",
+        "parameters": [{"name": "job_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Reusable NoCloud user-data", "content": {"application/yaml": {"schema": {"type": "string"}}}},
+          "401": {"description": "Authentication required"},
+          "404": {"description": "No Ubuntu ISO configuration for this job"}
         }
       }
     },

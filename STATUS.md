@@ -1,8 +1,30 @@
-# Proxmate status — 2026-11-20
+# Proxmate status — 2026-11-21
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
-## Current release
+## Ubuntu console and firmware
+
+New Ubuntu ISO installs use the default Proxmox firmware, machine type and display. The generated BIOS boot disc carries the installer kernel and initial RAM disk so GRUB can start before the Linux installer discovers the original DVD. Guided clones of earlier UEFI templates preserve the firmware and select VirtIO-GPU when the template uses the default display.
+
+On `nuc`, `ubuntu-pm` (133) displayed a readable login prompt with VirtIO-GPU and its original UEFI boot. It was returned to its stopped state. `noble-std` (140) completed from ISO under SeaBIOS, verified SSH and displayed a readable login prompt after reboot with the default display. The earlier failed BIOS test `noble-bios` (134) is retained stopped. 261 backend tests, 47 UI tests and the isolated image check passed.
+
+## Ubuntu password sign-in
+
+**Allow password sign-in** adds console and SSH password access to the selected Ubuntu account on a working VM or clone. The review describes the change, and Proxmate continues to use its SSH key for automation. A disposable linked clone on `nuc` accepted password-only SSH for its guest account and completed a separate Ansible run with its saved key. Browser review, 262 backend tests, 48 UI tests and the isolated image check passed.
+
+## Ubuntu Server 24.04 release
+
+The live dashboard supports Ubuntu Server 24.04 ISO autoinstall for working VMs and reusable templates. It discovers media, reviews optional GitHub or pasted SSH keys by fingerprint, and applies selected settings, packages and Ansible scripts after authenticated SSH. The job log offers reusable NoCloud YAML. The installer uses Ubuntu's virtual kernel. The firewall and background update settings keep the Ubuntu defaults unless selected.
+
+| Check | Live result on `nuc` |
+| --- | --- |
+| Working VM `pm-noble` (126) | Finished unattended. A separate SSH client verified key-only login, `jq`, UFW, manual background updates and the Ansible-created directory. A later one-off script ran through Operations using the saved login. |
+| Template `noble-base` (128) | Finished from the Ubuntu Server ISO with the virtual kernel. Installed `jq` and `ripgrep`, ran an Ansible library task, removed its installer media and shut down as a reusable Proxmox cloud-init template. |
+| Linked clone `noble-link` (130) | Booted with its own hostname and separate SSH login and key. Verified inherited packages and directory, absence of the source account's authorized keys, and successful post-clone software. |
+
+The final dashboard image was deployed with the queue idle. The real browser confirmed ISO selection, software review and discovery of the finished template. GitHub lookup was checked against the public API and frozen-key handling in the automated tests. 260 backend tests, 46 UI tests and network-isolated image checks passed. Earlier failed installer fixtures 116, 117, 120, 123 and 127 are stopped and retained for inspection.
+
+## Connection shortcuts and typed inputs
 
 The connection shortcuts and typed Ansible inputs are complete and deployed. The dashboard container was recreated with the job queue idle. The deployed application revision is [4a77803](https://github.com/rootisgod/proxmate/commit/4a77803a75f94c6b743da0c3b201878d94dcccb1).
 

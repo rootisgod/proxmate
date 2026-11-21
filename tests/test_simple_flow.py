@@ -14,6 +14,7 @@ import media
 import operations
 import simple_flow
 import template_finish
+import ubuntu_build
 from test_api import service
 
 
@@ -42,6 +43,168 @@ def simple_lab(service,monkeypatch):
 
 def settings(**changes):
     return dict(os='windows',name='demo',count=3,purpose='vm',source='local:iso/server.iso',edition=7,password='Secret-Setup#123',tasks=[{'id':'install-chocolatey','params':{}},{'id':'chocolatey-package','params':{'package':'7zip'}},{'id':'windows-feature','params':{'feature':'Web-Server'}}],**changes)
+
+
+def test_ubuntu_iso_review_freezes_keys_and_downloads_reusable_config(simple_lab,monkeypatch):
+    app,client,headers,inv = simple_lab
+    source = 'local:iso/ubuntu-24.04-live-server-amd64.iso'
+    inv['details']['lab']['isos'].extend([{'volid':source},{'volid':'local:iso/ubuntu-24.04-desktop-amd64.iso'}])
+    options = client.get('/api/simple/options',headers=headers).json
+    assert [item['id'] for item in options['destinations'][0]['ubuntu_isos']] == [source]
+    assert options['ubuntu']['firewall']['default'] == 'Ubuntu default'
+    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:dict(release='Ubuntu 24.04',identity='ubuntu-v1'))
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat
+    key = Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.OpenSSH,PublicFormat.OpenSSH).decode()
+    monkeypatch.setattr(ubuntu_build,'github_keys',lambda handle: [key] if handle=='operator' else [])
+    draft = dict(os='ubuntu',source_kind='iso',source=source,name='noble',github_username='operator',ssh_public_key=key,
+                 ubuntu_firewall='ssh',ubuntu_updates='manual')
+    response = client.post('/api/simple/plan',json=draft,headers=headers)
+    assert response.status_code == 200,response.json
+    plan = response.json
+    assert plan['ssh_key_fingerprints'] == [ubuntu_build.fingerprint(key)]
+    assert plan['machines'][0]['memory'] == 4096 and plan['dangerous']
+    assert client.get('/api/jobs',headers=headers).json==[]
+    run = dict(plan_id=plan['id'],confirmed=True)
+    assert client.post('/api/simple/run',json=run,headers=headers).status_code==400
+    run['risk_confirmed'] = True
+    job = client.post('/api/simple/run',json=run,headers=headers).json['jobs'][0]
+    assert client.post('/api/simple/run',json=run,headers=headers).json['jobs']==[job]
+    assert client.get(job['url'],headers=headers).json['has_autoinstall'] is True
+    with app.db() as con:
+        payload = app.decode_payload(con.execute('SELECT payload FROM jobs').fetchone()[0])
+    cfg = payload['plan']['config']
+    assert cfg['kind']=='ubuntu-iso' and cfg['ssh_key'].splitlines()[1:]==[key]
+    setup = yaml.safe_load(cfg['autoinstall'])['autoinstall']
+    assert setup['ssh']['allow-pw'] is False
+    assert cfg['disk_serial'] in setup['early-commands'][0][-1]
+    assert setup['storage']['layout']['match']=={'path':'/dev/sda'}
+    assert setup['kernel']=={'package':'linux-virtual'}
+    download = client.get(job['url']+'/autoinstall',headers=headers)
+    assert download.status_code==200 and download.text==cfg['reusable_autoinstall'] and key not in download.text
+    assert 'REPLACE_WITH_SYSTEM_DISK_SERIAL' in download.text
+    assert yaml.safe_load(download.text)['autoinstall']['ssh']['authorized-keys']==[]
+
+
+def test_ubuntu_password_is_optional_and_kept_out_of_review_and_installer(simple_lab,monkeypatch):
+    app,client,headers,inv = simple_lab
+    from passlib.hash import sha512_crypt
+
+    source='local:iso/ubuntu-24.04-live-server-amd64.iso'
+    inv['details']['lab']['isos'].append({'volid':source})
+    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:dict(release='Ubuntu 24.04',identity='ubuntu-v1'))
+    draft=dict(os='ubuntu',source_kind='iso',source=source,name='noble',username='labadmin')
+    none=client.post('/api/simple/plan',json=draft,headers=headers).json
+    assert none['password_login'] is False and none['tasks']==[]
+    password='Lab-Passphrase 02:good!'
+    response=client.post('/api/simple/plan',json=dict(draft,ubuntu_password=password),headers=headers)
+    assert response.status_code==200,response.json
+    assert response.json['password_login'] is True and password not in response.text
+    assert 'sha512' not in response.text and '$6$' not in response.text
+    plan=app.manager.load_plan(response.json['id'])
+    assert password not in repr(plan)
+    item=plan['tasks'][-1]['item']
+    user=item['steps'][0]['ansible.builtin.user']
+    assert user['name']=='labadmin' and sha512_crypt.verify(password,user['password'])
+    assert 'Match User labadmin' in item['steps'][1]['ansible.builtin.blockinfile']['block']
+    assert plan['credential']['password']=='' and plan['credential']['private_key']
+    setup=yaml.safe_load(plan['configs'][0]['autoinstall'])['autoinstall']
+    assert setup['identity']['password']=='!' and setup['ssh']['allow-pw'] is False
+    assert client.post('/api/simple/plan',json=dict(draft,purpose='template',ubuntu_password=password),headers=headers).status_code==400
+    assert client.post('/api/simple/plan',json=dict(draft,ubuntu_password='short'),headers=headers).status_code==400
+
+
+def test_ubuntu_clone_reviews_only_a_recorded_template_identity(simple_lab,monkeypatch):
+    app,client,headers,inv=simple_lab
+    source=dict(type='qemu',node='lab',vmid=201,name='ubuntu-base',status='stopped',template=1,maxdisk=32*2**30)
+    inv['resources'][1]=source
+    config=dict(name='ubuntu-base',template=1,ostype='l26',net0='virtio=02:00:00:00:00:01,bridge=vmbr0',
+                scsi0='disks:base-201-disk-0',ide2='disks:vm-201-cloudinit,media=cdrom',vmgenid='base-id')
+
+    class Host:
+        def resources(self): return inv['resources']
+        def call(self,method,path):
+            assert method=='GET' and path=='nodes/lab/qemu/201/config'
+            return config
+
+    monkeypatch.setattr(operations,'Proxmox',Host)
+    from lifecycle import machine_identity
+    app.manager.put('builds',dict(id='base',node='lab',vmid=201,machine_identity=machine_identity(config),
+                                 config={'kind':'ubuntu-iso'},bootstrap_verified=True))
+    request=dict(os='ubuntu',source_kind='template',name='noble-clone',template_id=201,node='lab',clone_mode='linked')
+    assert client.post('/api/simple/plan',json=request,headers=headers).status_code==400
+    with app.db() as con:
+        payload=app.encode_payload(dict(action='simple',plan={'purpose':'template'}))
+        con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',('base','simple','succeeded',1,1,payload,'done'))
+    review=client.post('/api/simple/plan',json=request,headers=headers)
+    assert review.status_code==200,review.json
+    assert review.json['clone_mode']=='linked' and review.json['machines'][0]['disk']==32
+    config['vmgenid']='replacement'
+    assert client.post('/api/simple/plan',json=request,headers=headers).status_code==400
+
+
+def test_ubuntu_iso_uses_proxmox_firmware_and_display_defaults(monkeypatch):
+    cfg=dict(node='lab',vmid=202,name='ubuntu-test',memory=4096,cores=2,storage='disks',
+             disk=32,bridge='vmbr0',iso_storage='local',install_uuid='vm-uuid',disk_serial='test-serial')
+    source='local:iso/ubuntu-24.04-live-server-amd64.iso'
+    boot='local:iso/proxmate-ubuntu-202-job.iso'
+
+    class Host:
+        def call(self,method,path,**params):
+            if path=='nodes/lab/qemu':
+                assert method=='POST'
+                assert not {'bios','machine','vga','efidisk0','serial0'}.intersection(params)
+                assert params['boot']=='order=scsi0;ide2;sata1'
+            elif path.endswith('/config'):
+                return {'smbios1':'uuid=vm-uuid','ide2':boot+',media=cdrom','sata1':source+',media=cdrom',
+                        'scsi0':'disks:vm-202-disk-0,serial=test-serial'}
+            else:
+                assert path.endswith('/status/start') and method=='POST'
+
+        def wait(self,node,task,log): pass
+
+    monkeypatch.setattr(operations,'Proxmox',Host)
+    monkeypatch.setattr(ubuntu_build,'preflight',lambda *a:None)
+    monkeypatch.setattr(ubuntu_build,'inspect',lambda *a:{'identity':'iso'})
+    monkeypatch.setattr(ubuntu_build,'boot_iso',lambda *a:None)
+    monkeypatch.setattr(operations,'upload_generated',lambda *a:boot)
+    assert ubuntu_build.install(cfg,source,'iso','job',lambda line:None)['boot_volume']==boot
+
+
+def test_ubuntu_template_writes_cloud_init_with_post_shutdown_digest(simple_lab,monkeypatch):
+    from lifecycle import machine_identity
+
+    app,*_=simple_lab
+    state={'digest':'running','status':'running'}
+    configuration={'vmgenid':'new-ubuntu','scsi0':'disks:vm-202-disk-0'}
+
+    class Host:
+        def call(self,method,path,**args):
+            endpoint=path.rsplit('/',1)[-1]
+            if endpoint=='config' and method=='GET':
+                return dict(configuration,digest=state['digest'])
+            if endpoint=='exec':
+                assert 'cloud-init clean --logs --machine-id --seed' in args['command'][-1]
+                return {'pid':1}
+            if endpoint=='exec-status':
+                return {'exited':True,'exitcode':0}
+            if endpoint=='shutdown':
+                state.update(status='stopped',digest='after-shutdown')
+            elif endpoint=='current':
+                return {'status':state['status']}
+            elif endpoint=='config' and method=='PUT':
+                assert args['digest']=='after-shutdown' and args['ide2']=='disks:cloudinit'
+                state['cloud_init']=True
+            else:
+                raise AssertionError(path)
+
+        def wait(self,node,task,log): pass
+
+    monkeypatch.setattr(operations,'Proxmox',Host)
+    monkeypatch.setattr(operations,'execute',lambda cfg,log: state.update(converted=cfg['action']=='convert-template'))
+    template_finish.finish(dict(kind='ubuntu-iso',node='lab',vmid=202,username='ubuntu',storage='disks'),
+                           app.manager,lambda message:None,machine_identity(configuration))
+    assert state['cloud_init'] and state['converted']
 
 
 def test_agent_guide_example_reviews_without_creating_a_job(simple_lab):

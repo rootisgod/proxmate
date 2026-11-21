@@ -51,7 +51,14 @@ def finish(cfg,manager,log,expected_identity):
     else:
         user=cfg['username']
         if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',user): raise ValueError('Invalid Ubuntu username')
-        script='set -eu\ncloud-init clean --logs --machine-id\nrm -f /etc/ssh/ssh_host_* /var/lib/proxmate/bootstrap-ready '+shlex.quote('/home/'+user+'/.ssh/authorized_keys')+'\n'
+        clean='cloud-init clean --logs --machine-id'
+        if cfg['kind']=='ubuntu-iso':
+            clean+=' --seed'
+        script='set -eu\n'+clean+'\nrm -f /etc/ssh/ssh_host_* /var/lib/proxmate/bootstrap-ready '+shlex.quote('/home/'+user+'/.ssh/authorized_keys')+'\n'
+        if cfg['kind']=='ubuntu-iso':
+            script+=('rm -f /etc/cloud/cloud.cfg.d/99-installer.cfg '
+                     '/etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg '
+                     '/etc/netplan/00-installer-config.yaml /etc/netplan/50-cloud-init.yaml\n')
         command=['/bin/sh','-c',script]
     log('Preparing reusable template: cleaning guest identity and setup secrets.')
     pid=p.call('POST',base+'/agent/exec',command=command)['pid']
@@ -66,10 +73,15 @@ def finish(cfg,manager,log,expected_identity):
     owned_config()
     p.wait(node,p.call('POST',base+'/status/shutdown',timeout=120,forceStop=0),log)
     if p.call('GET',base+'/status/current').get('status')!='stopped': raise ValueError('VM did not shut down; no template conversion performed')
-    owned_config()
+    current=owned_config()
     if cfg['kind']=='windows':
         operations.execute(dict(action='finish-setup',node=node,vmid=vmid,prepared=True),log)
         p.call('PUT',base+'/config',delete='ide2,sata2',boot='order=sata0',onboot=0)
+    elif cfg['kind']=='ubuntu-iso':
+        if current.get('ide2') or current.get('sata1'):
+            raise ValueError('Ubuntu installation media is still attached. Inspect the guest before converting.')
+        p.call('PUT',base+'/config',ide2=cfg['storage']+':cloudinit',ipconfig0='ip=dhcp',
+               ciuser=cfg['username'],onboot=0,digest=current['digest'])
     else:
         seed=current.get('ide2','').split(',')[0]
         if not re.fullmatch(r'[A-Za-z0-9_.-]+:iso/proxmate-seed-'+str(vmid)+r'-[a-f0-9]{32}\.iso',seed): raise ValueError('Unexpected seed media; no template conversion performed')

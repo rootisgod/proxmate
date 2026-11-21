@@ -330,8 +330,11 @@ def execute(d, log):
     elif a == 'convert-template':
         if guests[vmid]['status'] != 'stopped' or guests[vmid].get('template'):
             raise ValueError('Guest must be stopped and not already a template')
-        if 'proxmate-unattend-' in str(p.call('GET', f'{base}/{vmid}/config').get('sata1', '')):
+        current=p.call('GET', f'{base}/{vmid}/config')
+        if 'proxmate-unattend-' in str(current.get('sata1', '')):
             raise ValueError('Use Finish setup to remove answer media before converting')
+        if 'proxmate-ubuntu-' in str(current.get('ide2', '')):
+            raise ValueError('Detach Ubuntu setup media before converting')
         task(f'{base}/{vmid}/template')
     elif a == 'finish-setup':
         if guests[vmid]['status'] != 'stopped': raise ValueError('Shut down the VM before removing setup media')
