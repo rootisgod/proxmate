@@ -138,7 +138,9 @@ def compile_task(item, params):
                 {'ansible.windows.win_regedit': {'path': r'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp', 'name': 'UserAuthentication', 'data': 1, 'type': 'dword'}},
                 {'ansible.windows.win_powershell': {'script': "Get-NetFirewallRule -Name 'RemoteDesktop-UserMode-In-TCP','RemoteDesktop-UserMode-In-UDP' | Set-NetFirewallRule -Enabled True -Profile Domain,Private"}}]
     if ident in ('disable-firewall', 'enable-firewall'):
-        return [{'ansible.windows.win_powershell': {'script': 'Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled $' + ('false' if ident == 'disable-firewall' else 'true')}}]
+        # NetSecurity binds enum names here. A PowerShell Boolean fails parameter conversion.
+        enabled = 'True' if ident == 'enable-firewall' else 'False'
+        return [{'ansible.windows.win_powershell': {'script': f'Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled {enabled}'}}]
     if ident == 'windows-manual-updates':
         return [{'ansible.windows.win_regedit':{'path':r'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU','name':'NoAutoUpdate','type':'dword','data':1}}]
     if ident == 'prepare-created-volume':

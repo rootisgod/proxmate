@@ -299,6 +299,14 @@ def test_builtins_parameter_validation_and_firewall_separation():
     with pytest.raises(ValueError):guest_tasks.compile_task(next(t for t in guest_tasks.BUILTINS if t['id']=='chocolatey-package'),{'package':'a; evil'})
 
 
+@pytest.mark.parametrize(('ident','enabled'), [('disable-firewall','False'),('enable-firewall','True')])
+def test_windows_firewall_uses_netsecurity_enum_names(ident,enabled):
+    item=next(t for t in guest_tasks.BUILTINS if t['id']==ident)
+    step,=guest_tasks.compile_task(item,{})
+    assert step['ansible.windows.win_powershell']['script'].split()==[
+        'Set-NetFirewallProfile','-Profile','Domain,Private,Public','-Enabled',enabled]
+
+
 def test_ansible_runner_temporary_secrets_no_output_or_proxmox_environment(monkeypatch):
     seen={}
     monkeypatch.setenv('PROXMOX_PASSWORD','must-not-inherit')
