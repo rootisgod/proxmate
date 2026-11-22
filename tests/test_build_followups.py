@@ -137,7 +137,6 @@ def test_recovery_resumes_original_frozen_suffix_once_and_only_for_failed_vm(lab
 
 
 def test_interrupted_task_stays_uncertain_across_a_second_restart(lab):
-    import job_queue
     app,client,h,_,_=lab
     setup_guest(app,'linux')
     review=app.manager.create_plan(dict(operation='tasks',targets=[dict(node='pve',vmid=201)],
@@ -148,13 +147,13 @@ def test_interrupted_task_stays_uncertain_across_a_second_restart(lab):
     app.manager.progress.mark(job['id'],'pve:201',0,completed=False)
     app.manager.progress.mark(job['id'],'pve:201',0,completed=True)
     app.manager.progress.mark(job['id'],'pve:201',1,completed=False)
-    with app.db() as con: job_queue.initialize(con)
+    app.recover_worker_state()
     def remainder(job):
         return client.post('/api/simple/recovery/plan',json=dict(job_id=job['id'],target='pve:201'),headers=h).json
     first=remainder(job)
     assert first['recovery']['started'] and first['recovery']['completed']==1
     child=submit(first)
-    with app.db() as con: job_queue.initialize(con)
+    app.recover_worker_state()
     second=remainder(child)
     assert second['recovery']['started'] and second['dangerous']
     assert second['tasks']==first['tasks']==[review['tasks'][1]]

@@ -96,6 +96,7 @@
                   ]
                 },
                 "status": {
+                  "description": "Portable comparison includes the effective deployment order of lab roles. A difference in that order is a name conflict for same-named labs.",
                   "enum": [
                     "new",
                     "already present",

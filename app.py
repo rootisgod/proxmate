@@ -79,7 +79,7 @@ def db():
 
 with db() as con:
     con.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT, status TEXT, created REAL, updated REAL, payload TEXT, log TEXT)')
-    job_queue.initialize(con)
+    job_queue.initialize_schema(con)
     windows_artifacts.initialize(con)
 
 login_attempts = {}
@@ -594,6 +594,16 @@ def server_connect(): return jsonify(server.change(request.get_json()))
 def server_disconnect(): return jsonify(server.change(request.get_json(),disconnect=True))
 
 
+def recover_worker_state():
+    """Reconcile the previous run before either the worker or scheduler can claim work."""
+    with db() as con:
+        con.execute('BEGIN IMMEDIATE')
+        now = time.time()
+        job_queue.recover_interrupted(con, now)
+        manager.recover_schedules(con, now)
+        lifecycle.recover_policies(con, now)
+
+
 def scheduler():
     while True:
         try:
@@ -609,6 +619,7 @@ def scheduler():
 if __name__ == '__main__':
     from waitress import serve
     admin_password()
+    recover_worker_state()
     diagnostics.event('service.started',workers=1,http_threads=8)
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=scheduler, daemon=True).start()

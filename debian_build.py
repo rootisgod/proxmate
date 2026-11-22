@@ -11,6 +11,7 @@ import media
 
 
 LABEL = 'Debian 13'
+DEFAULT_PROFILE = 'debian-13'
 ISO_NAME = re.compile(r'debian-(13(?:\.\d+){0,2})-amd64-(DVD-1|netinst)\.iso', re.I)
 ISO_INFO = re.compile(r'Debian GNU/Linux 13(?:\.\d+)* "Trixie" - Official amd64 (?:DVD Binary-1|NETINST)\b', re.I)
 BOOT_FILES = ('/install.amd/vmlinuz', '/install.amd/initrd.gz')
@@ -53,6 +54,12 @@ def inspect(source, node):
         raise ValueError(media.ssh_error(exc)) from None
     except (OSError, pycdlib.pycdlibexception.PyCdlibException):
         raise ValueError('Cannot read the Debian installer. Check the ISO and Server connection.') from None
+
+
+def review_iso(source, node, draft):
+    media_info = inspect(source, node)
+    return linux_install.ReviewedISO(profile=DEFAULT_PROFILE, edition=media_info['release'],
+                                     identity=media_info['identity'], answer_key='preseed', render_answer=preseed)
 
 
 def preseed(cfg, *, reusable=False):

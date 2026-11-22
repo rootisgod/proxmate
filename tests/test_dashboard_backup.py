@@ -1,8 +1,11 @@
 import base64
+import io
 import json
+import zipfile
 
 import dashboard_backup
 from test_api import service
+from test_lab_runs import import_pack, linux
 from test_simple_flow import simple_lab, settings
 
 
@@ -114,6 +117,30 @@ def test_portable_selective_merge_two_servers(simple_lab,tmp_path,monkeypatch):
     assert next(i for i in conflict['items'] if i['name']=='System report')['status']=='name conflict'
     r=target.post(PREFIX+'restore',headers=headers,json={**args,'review':conflict['review']})
     assert r.status_code==400 and app.manager.get('tasks',local['id'])['body']=='uname'
+
+
+def test_portable_preview_compares_deployment_order_across_dashboards(simple_lab, tmp_path, monkeypatch):
+    _, source, headers, _ = simple_lab
+    roles = {'web': linux(), 'db': linux()}
+    pack = import_pack(source, headers, roles)
+    upload = export(source, headers, 'portable')
+    archive = source.get('/api/simple/labs/packs/' + pack + '/export', headers=headers).data
+
+    _, target, headers = destination(tmp_path, monkeypatch)
+    import_pack(target, headers, {'db': linux(), 'web': linux()})
+    conflict, = preview(target, headers, upload)['items']
+    assert conflict['status'] == 'name conflict'
+
+    # A ZIP comment changes archive bytes without changing the deployed lab.
+    repacked = io.BytesIO(archive)
+    with zipfile.ZipFile(repacked, 'a') as z:
+        z.comment = b'Copy for the second dashboard'
+    imported = target.post('/api/simple/labs/import', headers=headers,
+                           json={'archive': base64.b64encode(repacked.getvalue()).decode()})
+    assert imported.status_code == 200, imported.json
+    match, = preview(target, headers, upload)['items']
+    assert match['status'] == 'already present'
+    assert target.get('/api/jobs', headers=headers).json == []
 
 
 def test_auth_tampering_and_active_restore_rollback(service):

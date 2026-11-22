@@ -16,6 +16,7 @@ import management
 import build_credentials
 import media
 import diagnostics
+import guest_review
 from guided_recipes import GuidedRecipes, specification
 from reviews import Reviews
 import operations
@@ -28,10 +29,9 @@ import windows_build
 import windows_setup
 from provisioning import PROFILES,windows_setup_key,windows_options
 from guest_tasks import DOMAIN_CONTROLLER, public_params, selected_drive_letters
-from vm_config import lab_machine_identity, machine_identity, vm_path
+from vm_config import machine_identity, vm_path
 
 LINUX_INSTALLERS = {'ubuntu': ubuntu_build, 'debian': debian_build, 'rocky': rocky_build}
-ISO_PROFILES = {'ubuntu': 'ubuntu-24.04', 'debian': 'debian-13', 'rocky': 'rocky-10'}
 
 
 FEATURES=[('Web-Server','Web server (IIS)'),('NET-Framework-45-Features','.NET Framework 4.x'),
@@ -93,7 +93,7 @@ def discovery(inv):
         for distro, installer in LINUX_INSTALLERS.items():
             dest[distro+'_isos'] = installer.candidates(dest['isos'] + local)
     return dict(destinations=candidates,local_isos=local,windows_settings=windows_setup.OPTIONS,
-                rocky=dict(release=rocky_build.LABEL,profile=ISO_PROFILES['rocky'],packages=[dict(id=k,name=n) for k,n in rocky_build.PACKAGES]),
+                rocky=dict(release=rocky_build.LABEL,profile=rocky_build.DEFAULT_PROFILE,packages=[dict(id=k,name=n) for k,n in rocky_build.PACKAGES]),
                 debian=dict(release=debian_build.LABEL,packages=[dict(id=k,name=n) for k,n in ubuntu_build.PACKAGES]),
                 ubuntu=dict(release=ubuntu_build.LABEL,install_sources=ubuntu_build.INSTALL_SOURCES,firewall=ubuntu_build.FIREWALL,updates=ubuntu_build.UPDATES,
                             packages=[dict(id=key,name=name) for key,name in ubuntu_build.PACKAGES]),
@@ -156,8 +156,7 @@ class SimpleFlow:
             selections=[self.m.select_task(item,draft.get('params',{}))]
         else:
             selections=self.m.task_selection(d.get('tasks'))
-        discovered=self.discover_connections(targets,selections,d)
-        reviewed=self.m.create_plan(dict(operation='tasks',targets=targets),selections=selections,discovered=discovered)
+        reviewed=guest_review.save_standalone(self.m,targets,selections,d)
         # Return the library text frozen into this review. One-off text already belongs
         # to the caller; generated setup and recovery steps can contain credentials.
         if 'tasks' in d:
@@ -165,49 +164,6 @@ class SimpleFlow:
                 if 'body' in selection['item']:
                     task['source']=selection['item']['body']
         return reviewed
-
-    def discover_connections(self,targets,selections,d,*,lab=False):
-        """Prepare missing guest logins without publishing them before the caller commits."""
-        bindings={r['id']:r for r in self.m.all('connections')}
-        missing=[t for t in targets if management.target_id(t) not in bindings]
-        if lab and not missing and ('credential_id' in d or 'credential' in d):
-            raise ValueError('This machine already has a saved guest connection. Use its configured login.')
-        discovered={}
-        if missing:
-            if d.get('credential_id'): credential=self.m.get('credentials',d['credential_id'])
-            elif isinstance(d.get('credential'),dict):
-                fields={k:d['credential'].get(k) for k in ('platform','username','password','private_key','become_password','ca_pem')}
-                credential=self.m.prepare('credentials',dict(fields,name='Guest login '+time.strftime('%Y-%m-%d %H:%M')))
-                discovered['credentials',credential['id']]=credential
-            else: raise ValueError('Choose a saved login or enter a username and password for these machines')
-            p=operations.Proxmox();resources=p.resources()
-            for t in missing:
-                guest=next((r for r in resources if r.get('node')==t['node'] and r.get('vmid')==t['vmid']
-                            and r.get('type')=='qemu' and not r.get('template')),None)
-                if not guest: raise ValueError('Choose existing virtual machines')
-                if any(s['item']['platform']!=credential['platform'] for s in selections): raise ValueError('The login and scripts must use the same operating system')
-                path=f'nodes/{t["node"]}/qemu/{t["vmid"]}/agent/'
-                if lab:
-                    if guest.get('status')!='running': raise ValueError('Choose a running guest for existing-machine tasks.')
-                    config=p.call('GET',vm_path(t)+'/config')
-                    identity=lab_machine_identity(config)
-                    if config.get('template') or not identity: raise ValueError('Choose a non-template QEMU VM with a stable UUID.')
-                try:
-                    interfaces=p.call('GET',path+'network-get-interfaces')
-                    hosts={a['ip-address'] for i in interfaces.get('result',[]) for a in i.get('ip-addresses',[]) if a.get('ip-address-type')=='ipv4' and not ipaddress.ip_address(a['ip-address']).is_loopback and not ipaddress.ip_address(a['ip-address']).is_link_local}
-                    if len(hosts)!=1: raise ValueError('More than one address')
-                    binding=dict(t,host=management.address(next(iter(hosts))),credential_id=credential['id'],platform=credential['platform'],verify_tls=True,become=True)
-                    if credential['platform']=='linux' or not credential.get('ca_pem'):
-                        try: binding.update(management.agent_trust(p,path.removesuffix('/agent/'),credential['platform']))
-                        except RuntimeError:
-                            if credential['platform']=='linux': raise
-                            # Existing Windows listeners may chain to a system-trusted CA.
-                    record=self.m.prepare('connections',binding,credential)
-                    if lab: record['machine_identity']=identity
-                    discovered['connections',record['id']]=record
-                except Exception as exc:
-                    raise ValueError('Could not detect the connection for VM '+str(t['vmid'])+'. Check its guest agent or use Inventory > Refresh connection to verify its address and login.') from exc
-        return discovered
 
     def plan(self,d,progress=lambda stage:None):
         plan,summary=self.review_build(d,progress)
@@ -278,8 +234,9 @@ class SimpleFlow:
         else:
             credential=dict(id=uuid.uuid4().hex,name=prefix+' login',platform=platform)
             public_key=''
-        inspected=None;edition=None;personal_keys=[];password_task=None
+        media_identity=None;edition=None;personal_keys=[];password_task=None
         if os=='windows':
+            source=d.get('source','')
             if management.boolean(d.get('manual_updates',False)):
                 selections=[{'item':self.m.task('windows-manual-updates'),'params':{}}]+selections
             if not saved_id: credential.update(username='Administrator',password=d.get('password',''))
@@ -287,16 +244,18 @@ class SimpleFlow:
             if cloning:
                 template=windows_build.review_template(self.life,dest,d)
                 dest.update(management_cidr=template['management_cidr'],bridge=template['bridge'])
+                edition_label=template['name']
             else:
-                source=d.get('source','')
                 if not isinstance(source,str): raise ValueError('Choose a Windows ISO')
                 revisions={i['id']:i.get('revision') for i in options['local_isos']+dest['isos']}
                 progress('editions')
                 with diagnostics.stage('editions'):
                     inspected=self.reviewed_media(source,dest['node'],revisions.get(source))
+                media_identity=inspected['identity']
                 if d.get('edition_identity') and d['edition_identity']!=inspected['identity']: raise ValueError('ISO editions changed. Refresh the source before reviewing.')
                 edition=next((e for e in inspected['editions'] if str(e['index'])==str(d.get('edition'))),None)
                 if not edition: raise ValueError('Choose a Windows Server edition from this ISO')
+                edition_label=edition['label']
                 issue=media.windows_edition_issue(edition)
                 if issue: raise ValueError(issue)
                 agent=d.get('agent_iso') or dest['agent_iso']
@@ -313,8 +272,8 @@ class SimpleFlow:
         else:
             distro=os.capitalize()
             installer=LINUX_INSTALLERS[os]
-            profile=d.get('profile',ISO_PROFILES[os])
-            if profile not in (options['profiles'] if os=='ubuntu' else (ISO_PROFILES[os],)):
+            profile=d.get('profile',installer.DEFAULT_PROFILE)
+            if profile not in (options['profiles'] if os=='ubuntu' else (installer.DEFAULT_PROFILE,)):
                 raise ValueError('Choose a supported '+distro+' release.')
             if not linux_clone: media.verify_ssh_node(dest['node'])
             if os=='rocky': rocky_build.check_cpu(operations.Proxmox(),dest['node'])
@@ -333,14 +292,13 @@ class SimpleFlow:
                     raise ValueError('Choose a discovered '+installer.LABEL+' installer ISO.')
                 progress(os+'_media')
                 with diagnostics.stage(os+'_media'):
-                    inspected=installer.inspect(source,dest['node'])
-                if os=='ubuntu':
-                    profile=inspected['profile']
-                    if d.get('profile',profile)!=profile:
-                        raise ValueError('The requested Ubuntu release does not match the selected ISO.')
-                    install_source=d.get('ubuntu_install_source','ubuntu-server')
-                    if not isinstance(install_source,str) or install_source not in inspected['install_sources']:
-                        raise ValueError('Choose a Server installation image available on the selected Ubuntu ISO.')
+                    reviewed_iso=installer.review_iso(source,dest['node'],d)
+                profile=reviewed_iso.profile
+                media_identity=reviewed_iso.identity
+                edition_label=reviewed_iso.edition
+            else:
+                source=profile
+                edition_label=template['name'] if linux_clone else PROFILES[profile]['label']
             username=credential['username'] if saved_id else build_credentials.linux_username(d.get('username',os))
             password=linux_access.requested_password(d,os)
             if password != '':
@@ -431,19 +389,7 @@ class SimpleFlow:
                     raise ValueError(distro+' ISO installation requires at least 3 GiB RAM and 16 GiB disk.')
                 cfg.update(kind=os+'-iso',source_kind='iso',iso_storage=dest['iso_storage'],
                            install_uuid=str(uuid.uuid4()),disk_serial='pm'+uuid.uuid4().hex[:16])
-                if os=='debian':
-                    cfg['preseed']=debian_build.preseed(cfg)
-                    cfg['reusable_preseed']=debian_build.preseed(cfg,reusable=True)
-                elif os=='rocky':
-                    cfg['dvd_label']=inspected['label']
-                    cfg.update(media_kind=inspected['kind'],rocky_version=inspected['version'])
-                    cfg['kickstart']=rocky_build.kickstart(cfg)
-                    cfg['reusable_kickstart']=rocky_build.kickstart(cfg,reusable=True)
-                else:
-                    cfg.update(ubuntu_install_source=install_source,
-                               ubuntu_source_record=list(inspected['install_sources'][install_source]))
-                    cfg['autoinstall']=ubuntu_build.user_data(cfg)
-                    cfg['reusable_autoinstall']=ubuntu_build.user_data(cfg,reusable=True)
+                reviewed_iso.freeze_answers(cfg)
             elif linux_clone:
                 cfg.update(kind=os+'-clone',source_kind='template',iso_storage=dest['iso_storage'],
                            disk=template['disk_gib'],template=template)
@@ -457,10 +403,8 @@ class SimpleFlow:
         if available is not None and needed*1073741824>available:
             raise ValueError('Not enough free disk space for this batch. Reduce the quantity or choose a storage with more space under Placement and hardware.')
         plan=dict(operation='simple-build',configs=configs,credential={k:credential[k] for k in ('id','updated')} if saved_id else credential,tasks=selections,purpose=purpose,
-            source=source if linux_iso else d.get('source','') if os=='windows' else profile,media_identity=inspected['identity'] if inspected else None,
-            edition=template['name'] if cloning or linux_clone else edition['label'] if edition else inspected['release'] if linux_iso else PROFILES[profile]['label'],dangerous=any(t['item'].get('dangerous') for t in selections))
-        if os=='ubuntu' and linux_iso:
-            plan['edition']+=' · '+ubuntu_build.INSTALL_SOURCES[install_source]
+            source=source,media_identity=media_identity,edition=edition_label,
+            dangerous=any(t['item'].get('dangerous') for t in selections))
         recipe=specification(plan,configs[0],dict(d,tasks=requested_tasks))
         if reused and any(reused[k]!=recipe[k] for k in ('media_identity','template_identity')):
             raise ValueError('The saved installation source changed. Review the new source in the Create wizard.')

@@ -2,7 +2,7 @@
 import time
 
 
-def initialize(con):
+def initialize_schema(con):
     con.execute('CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status,created,id)')
     con.execute('CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created)')
     con.execute('CREATE TABLE IF NOT EXISTS lab_jobs (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL)')
@@ -14,9 +14,11 @@ def initialize(con):
         job_id TEXT PRIMARY KEY, server_id TEXT NOT NULL, node TEXT NOT NULL, vmid INTEGER NOT NULL,
         identity TEXT NOT NULL, credential_revision REAL NOT NULL, connection_revision REAL,
         deadline REAL NOT NULL, next_check REAL NOT NULL, last_report REAL NOT NULL, reason TEXT NOT NULL)''')
+
+
+def recover_interrupted(con, now):
     # A confirmed lab job still queued has never been claimed. Its approval, prerequisite
     # edges, reservations and credentials were committed together and remain valid.
-    now=time.time()
     con.execute("""UPDATE jobs SET status='interrupted', updated=?,
         log=log || char(10) || 'Service restarted. Inspect Proxmox before retrying.'
         WHERE status='running' OR (status='queued' AND id NOT IN (SELECT job_id FROM lab_jobs))

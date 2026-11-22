@@ -140,6 +140,7 @@ def test_pending_lab_rolls_back_on_destination_conflict_and_never_replays_on_res
         claimed,_=app.job_queue.claim(con,app.decode_payload,time.time(),False)
         assert claimed['id']==run['machines'][0]['job_id']
     importlib.reload(app)
+    app.recover_worker_state()
     result=client.get(LAB+'/runs/'+run['id'],headers=h).json
     assert result['status']=='interrupted'
     assert [(m['vmid'],m['status']) for m in result['machines']]==[(202,'interrupted'),(204,'blocked')]
@@ -153,7 +154,7 @@ def test_restart_preserves_only_unclaimed_lab_jobs(simple_lab,monkeypatch):
     run=deploy(client,h,review['id'])
     regular=client.post('/api/simple/plan',json=dict(os='ubuntu',name='ordinary'),headers=h).json
     ordinary=client.post('/api/simple/run',json={'plan_id':regular['id'],'confirmed':True},headers=h).json['jobs'][0]
-    importlib.reload(app)
+    app.recover_worker_state()
     reloaded=client.get(LAB+'/runs/'+run['id'],headers=h).json
     assert [m['status'] for m in reloaded['machines']]==['queued','pending','queued']
     assert client.get(ordinary['url'],headers=h).json['status']=='interrupted'
@@ -172,7 +173,7 @@ def test_restarted_worker_rejects_changed_host_before_mutation(simple_lab,monkey
     run=deploy(client,h,review['id'])
     with app.db() as con:
         app.server.write(con,dict(app.server.read(),id='a-different-server'))
-    importlib.reload(app)
+    app.recover_worker_state()
     monkeypatch.setattr(app.simple,'execute',lambda *args:pytest.fail('Old approval executed against another server'))
     assert app.run_next_job() and not app.run_next_job()
     assert client.get(LAB+'/runs/'+run['id'],headers=h).status_code==404
@@ -225,7 +226,7 @@ def test_lab_wait_survives_restart_and_unlocks_approved_child(simple_lab,monkeyp
                                     deadline=time.time()+600))
     monkeypatch.setattr(app.simple,'execute',create)
     assert app.run_next_job()
-    importlib.reload(app)
+    app.recover_worker_state()
     status=lambda: client.get(LAB+'/runs/'+run['id'],headers=h).json
     assert [m['status'] for m in status()['machines']]==['waiting','pending']
     def verified(cfg,identity,credential,previous,log):
