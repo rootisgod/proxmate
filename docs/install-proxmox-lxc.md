@@ -102,24 +102,12 @@ Start with installer media already on Proxmox storage. **ISO Library** discovers
 
 ## Upgrade or roll back
 
-On dashboard versions with **Resources → Backup & restore**, a **Complete dashboard** download gives you a separate application-level recovery copy. A **Portable configuration** download moves definitions to another cluster. Keep your CT backup for the installation files, dashboard access keys, Docker settings and local ISO media.
+Follow [Update an existing install](https://github.com/rootisgod/proxmate#update-an-existing-install) for backup, staging the new image, switching releases, checking your data and rolling back. Use the existing CT throughout.
 
-1. Check **Activity** for queued, running and waiting jobs. Let them finish and pause recurring schedules and policies during maintenance. Back up the CT root disk, including the Docker data volume, `.env.admin` and the current Compose file. The database and its encryption key belong together. Include any separately mounted storage in your backup plan.
-2. From `/opt/proxmate`, download the new Compose asset and pull its image. These commands leave the running service available during the download.
+If you already use an authenticated GitHub CLI inside the CT, you can stage the latest stable release directly after the backup in step 1.
 
-   ```sh
-   gh release download --repo rootisgod/proxmate --pattern compose.yaml --output compose.next.yaml
-   docker compose -f compose.next.yaml config --images
-   docker compose -f compose.next.yaml pull
-   ```
+```sh
+cd /opt/proxmate && gh release download --repo rootisgod/proxmate --pattern compose.yaml --output compose.next.yaml
+```
 
-3. With the queue idle, switch the file in the same directory, preserving the project name and volume. Verify health, sign in, check **Inventory**, then resume schedules.
-
-   ```sh
-   cp -p compose.yaml compose.previous.yaml
-   mv compose.next.yaml compose.yaml
-   docker compose up -d --wait
-   docker compose ps
-   ```
-
-4. For an image rollback with a compatible database, copy `compose.previous.yaml` back to `compose.yaml` and run `docker compose up -d --wait`. If the earlier version requires its earlier data format, restore the matching backup first. Preserve the volume throughout. For startup errors use `docker compose logs --tail=100 proxmate`. A GHCR access error usually means the account needs package read permission or a refreshed registry login.
+To choose a specific release, add its tag immediately after `download`. Continue at step 4 in the README to check the image and pull it. GitHub CLI authenticates the release download. Docker uses its own GHCR login for the image. [GitHub CLI release downloads](https://cli.github.com/manual/gh_release_download)
