@@ -132,7 +132,7 @@
         </article>
         <article id="lab-cleanup">
           <h3>Which VMs did this deployment create?</h3>
-          <p>Open <strong>Labs → Deployments</strong>, choose a deployment and select <strong>Preview cleanup</strong>. Each role shows the current guest at its recorded node and VM ID, its power state and the reason it is a candidate or protected.</p>
+          <p>Open <strong>Labs → Deployments</strong>, choose a deployment and select <strong>Preview cleanup</strong>. Each role shows the guest currently using its VM ID, the observed node and power state, and the reason it is a candidate or protected. A VM found on a different node stays protected.</p>
           <p>For example, a web server created by the deployment can be a candidate while a management VM used for scripts stays protected. A reused VM ID loses candidate status when its identity differs. All guest credentials are retained. Choose <strong>Refresh preview</strong> to recheck the current guests.</p>
         </article>
         <article id="domain-lab">

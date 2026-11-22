@@ -622,18 +622,18 @@ async function openCleanupPreview(run) {
     panel.innerHTML = '<p><strong>' + count + ' cleanup candidate' + (count === 1 ? '' : 's') +
       '</strong> · Read-only preview. All saved credentials are retained.</p>' +
       preview.machines.map(machine => {
-        const ownership = machine.mode === 'existing' ? 'Existing VM' :
-          machine.creation_recorded ? 'Created by this deployment' : 'Creation unconfirmed';
+        const ownership = machine.mode === 'existing' ? 'Existing VM role' : !machine.creation_recorded ? 'Creation unconfirmed' :
+          machine.identity_matches ? 'Created by this deployment' : 'Current VM does not match a verified build';
         const login = machine.credential;
-        const consoleLink = machine.identity_matches && serverInfo?.id === preview.server_id ?
-          '<a target="_blank" rel="noopener noreferrer" href="' + esc(machineConsoleUrl(serverInfo.url, machine, machine.current_name)) +
-          '">Open console ↗</a>' : '';
+        const consoleLink = machine.console && serverInfo?.id === preview.server_id ?
+          '<a target="_blank" rel="noopener noreferrer" href="' + esc(machine.console) + '">Open console ↗</a>' : '';
         return '<section class="lab-job"><div><h3>' + esc(machine.key) + '</h3><small>' +
-          esc(machine.node) + ' / VM ' + esc(machine.vmid) + ' · ' + esc(machine.current_name || machine.name) +
+          esc(machine.current_node || machine.node) + ' / VM ' + esc(machine.vmid) + ' · ' + esc(machine.current_name || machine.name) +
+          (machine.current_node && machine.current_node !== machine.node ? ' · Originally on ' + esc(machine.node) : '') +
           ' · ' + esc(machine.power || 'Power unknown') + ' · ' + ownership + '</small><p><strong>' +
           (machine.candidate ? 'Cleanup candidate' : 'Protected') + '</strong> · ' + esc(machine.reason) + '</p>' +
           (login ? '<p>Protected credential · ' + esc(login.name) + ' · ' + esc(login.reason) + '</p>' : '') +
-          (machine.verified_at ? '<small>Last verified login · ' + esc(new Date(machine.verified_at * 1000).toLocaleString()) + '</small>' : '') +
+          (login ? '<small>Last confirmed login · ' + (machine.verified_at ? esc(new Date(machine.verified_at * 1000).toLocaleString()) : 'No recorded check') + '</small>' : '') +
           '</div>' + consoleLink + '</section>';
       }).join('');
   } catch (error) {

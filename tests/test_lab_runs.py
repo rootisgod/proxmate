@@ -327,11 +327,14 @@ def test_cleanup_preview_checks_current_ownership_and_keeps_shared_logins(existi
     class Inventory:
         def resources(self):
             return resources
-        def call(self, method, path):
+        def call(self, method, path, **params):
             assert method == 'GET'
             if path in unreadable:
                 raise RuntimeError('upstream failure with private diagnostics')
-            return {f"nodes/lab/qemu/{web['vmid']}/config": web_config,
+            # The default Proxmox response can already contain a staged identity change.
+            effective_web = web_config if params == {'current': 1} else dict(web_config, vmgenid='')
+            return {f"nodes/lab/qemu/{web['vmid']}/config": effective_web,
+                    f"nodes/other/qemu/{web['vmid']}/config": effective_web,
                     'nodes/lab/qemu/201/config': existing_config}[path]
     monkeypatch.setattr(operations, 'Proxmox', Inventory)
     url = LAB+'/runs/'+run['id']+'/cleanup-preview'
@@ -346,6 +349,18 @@ def test_cleanup_preview_checks_current_ownership_and_keeps_shared_logins(existi
     assert (created['key'], created['current_name'], created['power'], created['candidate']) == ('web', 'renamed-web', 'stopped', True)
     assert existing['key'] == tools['key'] and not existing['candidate'] and 'existing' in existing['reason'].lower()
     assert existing['credential']['protected'] and 'another VM' in existing['credential']['reason']
+    assert existing['verified_at'] and existing['identity_matches']
+    assert client.get(created['console'], headers=headers).status_code == 302
+    assert client.get(existing['console'], headers=headers).status_code == 302
+    original_uuid = existing_config['vmgenid']
+    existing_config['vmgenid'] = 'b924679d-6c75-4e88-a6b8-31876778d121'
+    assert client.get(existing['console'], headers=headers).status_code == 400
+    existing_config['vmgenid'] = original_uuid
+    resources[-1]['node'] = 'other'
+    migrated, _ = preview()
+    assert (migrated['current_node'], migrated['current_name'], migrated['power']) == ('other', 'renamed-web', 'stopped')
+    assert migrated['identity_matches'] and not migrated['candidate'] and migrated['console'] is None
+    resources[-1]['node'] = 'lab'
     config_path = f"nodes/lab/qemu/{web['vmid']}/config"
     unreadable.add(config_path)
     unavailable, existing = preview()
@@ -359,6 +374,7 @@ def test_cleanup_preview_checks_current_ownership_and_keeps_shared_logins(existi
     web_config['vmgenid'] = '1d15bac0-2bba-4b5b-b00b-b87b67eee555'
     replaced, _ = preview()
     assert not replaced['candidate'] and 'identity' in replaced['reason'].lower()
+    assert replaced['console'] is None and client.get(created['console'], headers=headers).status_code == 400
     resources.pop()
     missing, _ = preview()
     assert not missing['candidate'] and missing['power'] is None
@@ -376,8 +392,8 @@ def test_cleanup_preview_protects_unproven_and_unfinished_builds(simple_lab, mon
     class Reader:
         def resources(self):
             return [dict(type='qemu', node=role['node'], vmid=role['vmid'], status='running')]
-        def call(self, method, path):
-            assert method == 'GET'
+        def call(self, method, path, **params):
+            assert method == 'GET' and params == {'current': 1}
             return config
     monkeypatch.setattr(operations, 'Proxmox', Reader)
     url = LAB+'/runs/'+run['id']+'/cleanup-preview'

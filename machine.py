@@ -67,8 +67,8 @@ def discover(p, target, resource, config):
     return dict(addresses=ips, os=reported.get('pretty-name') or reported.get('name'), platform=platform)
 
 
-def verify_identity(p, target, expected):
-    config=p.call('GET',vm_path(target)+'/config')
+def verify_identity(p, target, expected, *, effective=False):
+    config=p.call('GET',vm_path(target)+'/config', **({'current':1} if effective else {}))
     if not expected or config.get('template') or stable_identity(config)!=expected:
         raise ValueError('Machine identity changed or is unavailable. Refresh and review this machine.')
 

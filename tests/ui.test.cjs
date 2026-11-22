@@ -1835,7 +1835,7 @@ test('deployment cleanup preview refreshes live ownership and clears candidates 
     {key:'web',mode:'create',node:'lab',vmid:202,name:'web',status:'succeeded',owned:true,after:[]},
     {key:'tools',mode:'existing',node:'lab',vmid:201,name:'tools',status:'succeeded',owned:false,after:[]}]};
   const machines=run.machines.map((m,i)=>({...m,current_name:m.name,power:'running',creation_recorded:!i,
-    identity_matches:true,candidate:!i,reason:i?'Existing VM.':'Recorded build identity matches.',
+    identity_matches:true,console:'/api/jobs/job-'+i+'/console',candidate:!i,reason:i?'Existing VM.':'Recorded build identity matches.',
     credential:{name:'Shared login',protected:true,reason:'Also assigned to another VM.'},verified_at:1000}));
   let previews=0;
   w.fetch=async(url,opts={})=>{
@@ -1853,10 +1853,13 @@ test('deployment cleanup preview refreshes live ownership and clears candidates 
     doc.querySelector('#lab-preview-cleanup').click();await f.settle();
     assert.match(doc.querySelector('#lab-fields').textContent,/1 cleanup candidate/);
     assert.match(doc.querySelector('#lab-fields').textContent,/Shared login.*another VM/);
-    machines[0]={...machines[0],candidate:false,identity_matches:false,current_name:'replacement',reason:'VM identity changed.'};
+    assert.ok(doc.querySelector('#lab-fields a[href="/api/jobs/job-0/console"]'));
+    machines[0]={...machines[0],candidate:false,identity_matches:false,console:null,current_name:'replacement',reason:'VM identity changed.'};
     doc.querySelector('#lab-next').click();await f.settle();
     assert.match(doc.querySelector('#lab-fields').textContent,/0 cleanup candidates/);
     assert.match(doc.querySelector('#lab-fields').textContent,/replacement/);
+    assert.doesNotMatch(doc.querySelector('#lab-fields').textContent,/Created by this deployment/);
+    assert.equal(doc.querySelector('#lab-fields a[href="/api/jobs/job-0/console"]'),null);
     doc.querySelector('#lab-next').click();await f.settle();
     assert.match(doc.querySelector('#lab-error').textContent,/Inventory unavailable/);
     assert.doesNotMatch(doc.querySelector('#lab-fields').textContent,/cleanup candidates|Shared login/);

@@ -275,15 +275,22 @@ def build_console(job_id):
     from flask import redirect
     from urllib.parse import urlencode
     from machine import verify_identity
+    from lab_cleanup import existing_task_target
     with db() as con: row=con.execute('SELECT payload FROM jobs WHERE id=?',(job_id,)).fetchone()
     if not row: return jsonify(error='Job not found'),404
     payload=decode_payload(row['payload'])
     selected=server.current()
-    build=manager.find('builds',job_id)
-    if payload.get('action')!='simple' or payload.get('server_id')!=selected['id'] or not build:
-        return jsonify(error='No recorded machine on this server for this build'),404
-    verify_identity(operations.Proxmox(),build,build['machine_identity'])
-    query=urlencode(dict(console='kvm',novnc=1,node=build['node'],vmid=build['vmid']))
+    if payload.get('server_id')!=selected['id']:
+        return jsonify(error='No recorded machine on this server for this job'),404
+    if payload.get('action')=='simple':
+        target=manager.find('builds',job_id)
+        expected=(target or {}).get('machine_identity')
+    else:
+        target=existing_task_target(payload)
+        expected=(target or {}).get('connection',{}).get('machine_identity')
+    if not target: return jsonify(error='No recorded machine on this server for this job'),404
+    verify_identity(operations.Proxmox(),target,expected,effective=True)
+    query=urlencode(dict(console='kvm',novnc=1,node=target['node'],vmid=target['vmid']))
     return redirect(selected['url'].rstrip('/')+'/?'+query)
 
 

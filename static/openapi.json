@@ -181,18 +181,19 @@
           "id":{"type":"string"}, "name":{"type":"string"}, "server_id":{"type":"string"},
           "machines":{"type":"array","items":{
             "type":"object",
-            "required":["key","mode","name","node","vmid","current_name","power","creation_recorded","identity_matches","candidate","reason","credential","verified_at"],
+            "required":["key","mode","name","node","vmid","current_name","current_node","power","creation_recorded","identity_matches","candidate","reason","credential","verified_at","console"],
             "properties":{
               "key":{"type":"string"}, "mode":{"type":"string","enum":["create","existing"]},
               "name":{"type":"string","description":"Name recorded at deployment."}, "node":{"type":"string"}, "vmid":{"type":"integer"},
-              "current_name":{"type":"string","nullable":true}, "power":{"type":"string","nullable":true},
+              "current_name":{"type":"string","nullable":true}, "current_node":{"type":"string","nullable":true}, "power":{"type":"string","nullable":true},
+              "console":{"type":"string","nullable":true,"description":"Local job console URL. Opening it rechecks the guest identity before redirecting."},
               "creation_recorded":{"type":"boolean"}, "identity_matches":{"type":"boolean"},
               "candidate":{"type":"boolean","description":"VM ownership candidate at the time of this read. No removal is approved."},
               "reason":{"type":"string"},
               "credential":{"type":"object","nullable":true,"required":["name","protected","reason"],"properties":{
                 "name":{"type":"string"},"protected":{"type":"boolean","enum":[true]},"reason":{"type":"string"}
               }},
-              "verified_at":{"type":"number","nullable":true,"description":"Unix time of the last verified deployment login when its saved binding, credential revision and live VM identity still match."}
+              "verified_at":{"type":"number","nullable":true,"description":"Latest Unix time from a verified saved login or completion of this role's authenticated tasks, with matching guest identity, connection and credential revision."}
             }
           }}
         }
@@ -4247,7 +4248,7 @@
     },
     "/api/jobs/{job_id}/console": {
       "get": {
-        "summary": "Open the recorded build VM console after validating its current identity",
+        "summary": "Open a recorded build or existing lab role's VM console after validating its current identity",
         "parameters": [
           {
             "name": "job_id",
