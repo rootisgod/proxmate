@@ -554,7 +554,7 @@ def connection_boundary():
 
     # A guided login may take a transport timeout. Keep the selected server pinned
     # while allowing unrelated inventory, job and record requests to proceed.
-    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan','lab_plan','lab_import','lab_export','lab_create_pack','lab_machine_source','media_inventory','media_verify') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
+    if request.endpoint in ('machine_details','machine_connect','machine_backup','machine_remote_access','discover_drive_letters','winrm_review','editions','options','guest_recovery_plan','lab_plan','lab_import','lab_export','lab_create_pack','lab_machine_source','lab_cleanup_preview','media_inventory','media_verify') or (request.endpoint=='simple_plan' and request.headers.get('Prefer')!='respond-async'):
         server.machine_requests += 1
         g.machine_request = True
         g.connection_locked = False

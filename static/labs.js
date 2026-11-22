@@ -599,10 +599,51 @@ async function openLabRun(id) {
 }
 
 function showLabRun(run) {
-  const fields = labStep(run.name + ' deployment','<div id="lab-run"></div>', 'Refresh status', '', () => updateLabRun($('#lab-run')));
+  const fields = labStep(run.name + ' deployment',
+    '<div id="lab-run"></div><button type="button" id="lab-preview-cleanup">Preview cleanup</button>',
+    'Refresh status', '', () => updateLabRun($('#lab-run')));
+  fields.querySelector('#lab-preview-cleanup').onclick = () => openCleanupPreview(run);
   const panel = fields.querySelector('#lab-run');
   panel.dataset.id = run.id;
   drawLabRun(panel,run);
+}
+
+async function openCleanupPreview(run) {
+  const fields = labStep(run.name + ' cleanup preview',
+    '<button type="button" id="lab-back-to-run">Back to deployment</button><div class="lab-cleanup" aria-live="polite">Checking current VMs…</div>',
+    'Refresh preview', '', () => openCleanupPreview(run));
+  fields.querySelector('#lab-back-to-run').onclick = () => openLabRun(run.id);
+  setButtonBusy($('#lab-next'), true);
+  const panel = fields.querySelector('.lab-cleanup');
+  try {
+    const preview = await api('simple/labs/runs/' + encodeURIComponent(run.id) + '/cleanup-preview');
+    if (!labActive(fields)) return;
+    const count = preview.machines.filter(machine => machine.candidate).length;
+    panel.innerHTML = '<p><strong>' + count + ' cleanup candidate' + (count === 1 ? '' : 's') +
+      '</strong> · Read-only preview. All saved credentials are retained.</p>' +
+      preview.machines.map(machine => {
+        const ownership = machine.mode === 'existing' ? 'Existing VM' :
+          machine.creation_recorded ? 'Created by this deployment' : 'Creation unconfirmed';
+        const login = machine.credential;
+        const consoleLink = machine.identity_matches && serverInfo?.id === preview.server_id ?
+          '<a target="_blank" rel="noopener noreferrer" href="' + esc(machineConsoleUrl(serverInfo.url, machine, machine.current_name)) +
+          '">Open console ↗</a>' : '';
+        return '<section class="lab-job"><div><h3>' + esc(machine.key) + '</h3><small>' +
+          esc(machine.node) + ' / VM ' + esc(machine.vmid) + ' · ' + esc(machine.current_name || machine.name) +
+          ' · ' + esc(machine.power || 'Power unknown') + ' · ' + ownership + '</small><p><strong>' +
+          (machine.candidate ? 'Cleanup candidate' : 'Protected') + '</strong> · ' + esc(machine.reason) + '</p>' +
+          (login ? '<p>Protected credential · ' + esc(login.name) + ' · ' + esc(login.reason) + '</p>' : '') +
+          (machine.verified_at ? '<small>Last verified login · ' + esc(new Date(machine.verified_at * 1000).toLocaleString()) + '</small>' : '') +
+          '</div>' + consoleLink + '</section>';
+      }).join('');
+  } catch (error) {
+    if (labActive(fields)) {
+      panel.replaceChildren();
+      $('#lab-error').textContent = error.message;
+    }
+  } finally {
+    if (labActive(fields)) setButtonBusy($('#lab-next'), false);
+  }
 }
 
 function drawLabRun(panel, run) {

@@ -1829,6 +1829,43 @@ test('exporting guided and saved lab builds downloads the reviewed sources and c
   }finally{f.close()}
 });
 
+test('deployment cleanup preview refreshes live ownership and clears candidates on failure',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document,original=w.fetch;
+  const run={id:'training',server_id:f.server.id,name:'Training lab',status:'succeeded',machines:[
+    {key:'web',mode:'create',node:'lab',vmid:202,name:'web',status:'succeeded',owned:true,after:[]},
+    {key:'tools',mode:'existing',node:'lab',vmid:201,name:'tools',status:'succeeded',owned:false,after:[]}]};
+  const machines=run.machines.map((m,i)=>({...m,current_name:m.name,power:'running',creation_recorded:!i,
+    identity_matches:true,candidate:!i,reason:i?'Existing VM.':'Recorded build identity matches.',
+    credential:{name:'Shared login',protected:true,reason:'Also assigned to another VM.'},verified_at:1000}));
+  let previews=0;
+  w.fetch=async(url,opts={})=>{
+    if(url==='/api/simple/labs/runs/training')return {ok:true,json:async()=>run};
+    if(url.endsWith('/training/cleanup-preview')){
+      assert.equal(opts.method||'GET','GET');previews++;
+      if(previews===3)return {ok:false,status:502,json:async()=>({error:'Inventory unavailable'})};
+      return {ok:true,json:async()=>({...run,machines})};
+    }
+    return original(url,opts);
+  };
+  try{
+    await w.eval("openLabRun('training')");
+    assert.equal(previews,0);
+    doc.querySelector('#lab-preview-cleanup').click();await f.settle();
+    assert.match(doc.querySelector('#lab-fields').textContent,/1 cleanup candidate/);
+    assert.match(doc.querySelector('#lab-fields').textContent,/Shared login.*another VM/);
+    machines[0]={...machines[0],candidate:false,identity_matches:false,current_name:'replacement',reason:'VM identity changed.'};
+    doc.querySelector('#lab-next').click();await f.settle();
+    assert.match(doc.querySelector('#lab-fields').textContent,/0 cleanup candidates/);
+    assert.match(doc.querySelector('#lab-fields').textContent,/replacement/);
+    doc.querySelector('#lab-next').click();await f.settle();
+    assert.match(doc.querySelector('#lab-error').textContent,/Inventory unavailable/);
+    assert.doesNotMatch(doc.querySelector('#lab-fields').textContent,/cleanup candidates|Shared login/);
+    doc.querySelector('#lab-back-to-run').click();await f.settle();
+    assert.match(doc.querySelector('#lab-title').textContent,/Training lab deployment/);
+    assert.equal(previews,3);assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('import inspects scripts, maps local media and secrets, then confirms one frozen lab and follows its jobs',async()=>{
   const f=await fixture({},true),{w}=f,doc=w.document,original=w.fetch,requests=[];
   const script='- name: <img src=x>\n  ansible.builtin.file:\n    path: /opt/tools\n    state: directory\n';

@@ -6,6 +6,7 @@ from flask import jsonify, request
 
 import diagnostics
 import guest_review
+import lab_cleanup
 import lab_pack
 import management
 import operations
@@ -242,3 +243,10 @@ def register(app, manager, simple):
         if not result:
             return jsonify(error='Lab deployment not found on the selected server.'), 404
         return jsonify(result[0])
+
+    @app.get('/api/simple/labs/runs/<ident>/cleanup-preview')
+    def lab_cleanup_preview(ident):
+        result = labs.history(ident)
+        if not result:
+            return jsonify(error='Lab deployment not found on the selected server.'), 404
+        return jsonify(lab_cleanup.preview(manager, result[0], operations.Proxmox()))

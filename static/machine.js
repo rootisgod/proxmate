@@ -101,6 +101,12 @@ window.addEventListener('hashchange',()=>{
   if(!restoreMachineLocation()&&view==='machine'){view='machines';machinePage=null;render()}
 });
 
+function machineConsoleUrl(serverUrl, machine, name){
+  const url=new URL(serverUrl);
+  url.search=new URLSearchParams({console:'kvm',novnc:'1',node:machine.node,vmid:String(machine.vmid),vmname:name||'VM '+machine.vmid});
+  return url.href;
+}
+
 function renderMachine(){
   const page=machinePage;
   if(!page||page.server!==serverInfo?.id){view='machines';render();return}
@@ -112,8 +118,7 @@ function renderMachine(){
     return;
   }
   const guestName=d.name||'VM '+d.vmid;
-  const url=new URL(serverInfo.url);
-  url.search=new URLSearchParams({console:'kvm',novnc:'1',node:d.node,vmid:String(d.vmid),vmname:guestName});
+  const consoleUrl=machineConsoleUrl(serverInfo.url,d,guestName);
   const connection=d.connection;
   const savedIP=connection.host&&(/^\d+(\.\d+){3}$/.test(connection.host)||connection.host.includes(':'));
   const addressChanged=savedIP&&d.addresses.length>0&&!d.addresses.some(a=>a.host===connection.host);
@@ -129,7 +134,7 @@ function renderMachine(){
   const rows=d.jobs.map(j=>`<li><button data-log="${esc(j.id)}"><span>${esc(j.operation)}</span><span class="pill ${esc(j.status)}">${esc(j.status)}</span></button></li>`).join('');
   const hosts=d.addresses.map(i=>`<li><span>${esc(i.host)} <small>${esc(i.interface)}</small></span><button data-copy-ip="${esc(i.host)}" aria-label="Copy ${esc(i.host)}">Copy IP</button></li>`).join('');
   $('#content').innerHTML=back+title(esc(guestName),esc(d.node)+' · VM '+esc(d.vmid),
-    `<div class="row-actions machine-controls">${powerButton(d)} <span id="machine-remote"></span><a class="console-link" target="_blank" rel="noopener noreferrer" href="${esc(url.href)}">Open console ↗</a></div>`)+
+    `<div class="row-actions machine-controls">${powerButton(d)} <span id="machine-remote"></span><a class="console-link" target="_blank" rel="noopener noreferrer" href="${esc(consoleUrl)}">Open console ↗</a></div>`)+
     `<section class="panel machine-facts" aria-label="Machine details"><div>Status<strong><span class="pill ${esc(d.status)}">${esc(d.status)}</span></strong></div><div>Operating system<strong>${esc(os)}</strong></div><div>Processors<strong>${esc(d.cores??'—')} vCPU</strong></div><div>Memory<strong>${d.memory?(d.memory/1073741824).toLocaleString()+' GiB':'—'}</strong></div></section>
     <div class="machine-panels"><section class="panel machine-card"><h2>Guest connection</h2><p>${esc(guidance)}</p>${connection.host?`<p>${esc(connection.platform==='windows'?'HTTPS WinRM':'SSH')} · ${esc(connection.host)} · port ${esc(connection.port)}</p>`:''}
     <div class="row-actions">${connectable?`<button id="machine-connect" class="${d.verified_at&&!addressChanged?'':'primary'}">${addressChanged?'Verify new address':d.verified_at?'Retest login':connection.host?'Verify login':'Connect this machine'}</button>`:''}

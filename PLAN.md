@@ -4,7 +4,7 @@ The [everyday Windows workflows](docs/windows-workflows.md) describe the intende
 
 ## Future features
 
-1. **Manage a deployed lab.** Give each deployment a page showing its roles, current VM identities, power state, last verified login and console links. Start with a read-only cleanup preview. Later add dependency-aware start and shutdown, followed by explicitly reviewed removal of owned machines and unused credentials. Existing VMs used for scripts, shared credentials and guests whose identity has changed must be protected. Test with a reused VM ID and a credential shared outside the lab.
+1. **Manage a deployed lab.** The read-only cleanup preview in **Labs → Deployments** compares recorded roles with current VM identities and power states. Next add dependency-aware start and shutdown, followed by explicitly reviewed removal of owned machines and unused credentials. Preserve protection for existing VMs used for scripts, shared credentials and guests whose identity has changed.
 2. **Pass discovered values between machines.** Let a script input select a prerequisite role's verified IPv4 address or hostname. Resolve the value from the correct deployment and guest identity after readiness. Start with a Windows domain lab that obtains the controller's address, configures member DNS, uses a delegated join credential and verifies domain membership after reboot. Keep credentials local to deployment and check the portable pack on a second dashboard.
 
 Dashboard recovery and portable configuration migration are implemented. See the [specification, implementation plan and operator guide](docs/dashboard-backups.md).

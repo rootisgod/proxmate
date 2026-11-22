@@ -174,6 +174,29 @@
         "required": ["id","name","pack_id","machines","status"],
         "properties": {"id":{"type":"string"},"name":{"type":"string"},"pack_id":{"type":"string"},"server_id":{"type":"string"},"created":{"type":"number"},"status":{"type":"string"},"machines":{"type":"array","items":{"type":"object","required":["key","after","name","node","vmid","job_id","url","status","owned"],"properties":{"key":{"type":"string"},"after":{"type":"array","items":{"type":"string"}},"name":{"type":"string"},"node":{"type":"string"},"vmid":{"type":"integer"},"job_id":{"type":"string"},"url":{"type":"string"},"status":{"type":"string","description":"Per-machine guided job status, including pending while awaiting a prerequisite and blocked when a prerequisite failed."},"owned":{"type":"boolean","description":"Creation has been recorded for a provisioned machine. Existing targets always report false."},"mode":{"type":"string","enum":["create","existing"]}}}},"existing":{"type":"boolean","description":"Contains one or more in-place Operations jobs."}}
       },
+      "LabCleanupPreview": {
+        "type": "object",
+        "required": ["id","name","server_id","machines"],
+        "properties": {
+          "id":{"type":"string"}, "name":{"type":"string"}, "server_id":{"type":"string"},
+          "machines":{"type":"array","items":{
+            "type":"object",
+            "required":["key","mode","name","node","vmid","current_name","power","creation_recorded","identity_matches","candidate","reason","credential","verified_at"],
+            "properties":{
+              "key":{"type":"string"}, "mode":{"type":"string","enum":["create","existing"]},
+              "name":{"type":"string","description":"Name recorded at deployment."}, "node":{"type":"string"}, "vmid":{"type":"integer"},
+              "current_name":{"type":"string","nullable":true}, "power":{"type":"string","nullable":true},
+              "creation_recorded":{"type":"boolean"}, "identity_matches":{"type":"boolean"},
+              "candidate":{"type":"boolean","description":"VM ownership candidate at the time of this read. No removal is approved."},
+              "reason":{"type":"string"},
+              "credential":{"type":"object","nullable":true,"required":["name","protected","reason"],"properties":{
+                "name":{"type":"string"},"protected":{"type":"boolean","enum":[true]},"reason":{"type":"string"}
+              }},
+              "verified_at":{"type":"number","nullable":true,"description":"Unix time of the last verified deployment login when its saved binding, credential revision and live VM identity still match."}
+            }
+          }}
+        }
+      },
       "linux-template": {
         "type": "object",
         "required": [
@@ -1781,6 +1804,18 @@
     },
     "/api/simple/labs/runs/{id}": {
       "get": {"summary":"Read lab deployment status","description":"Follow each job URL for installation and guest task results.","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Read lab deployment status","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabRun"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"404":{"description":"Deployment unavailable on this server"}}}
+    },
+    "/api/simple/labs/runs/{id}/cleanup-preview": {
+      "get": {
+        "summary":"Preview cleanup of a deployed lab",
+        "description":"Read current QEMU inventory and compare each role with its recorded identity on the selected server. All credentials are protected. Refresh to recheck. This read creates no jobs or approvals.",
+        "parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],
+        "responses":{
+          "200":{"description":"Per-role ownership, current power state and reason","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabCleanupPreview"}}}},
+          "400":{"description":"Server unavailable or invalid input"},"401":{"description":"Administrator authentication required"},
+          "404":{"description":"Deployment unavailable on this server"},"502":{"description":"Current inventory unavailable"}
+        }
+      }
     },
     "/api/state": {
       "get": {

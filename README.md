@@ -107,6 +107,8 @@ Choose **Download ZIP** to share the saved lab. Each pack includes a readable `l
 
 On another dashboard, import the pack, inspect the scripts, choose local media or templates and select guest logins for that destination. Review the destination names, VM IDs and software together before you deploy. Open the lab run to follow each machine. Saved imports can be downloaded again or reviewed for another deployment. The [lab pack specification and example](static/lab-packs.md) cover the file format, supported guest tasks and execution rules.
 
+Under **Labs → Deployments**, open a run and choose **Preview cleanup** to compare its role records with the current VMs. The preview shows the power state and explains each decision. An existing guest used for scripts stays protected, as does a replacement guest at a reused VM ID. All saved logins are retained. **Refresh preview** checks Proxmox again.
+
 ### Saved builds and recovery
 
 Choose **Save this build** at the review step to give a Windows, Ubuntu, Debian or Rocky configuration a name. Find it under **Create machine → Saved builds → Use build**. In **Activity**, a guided build's job log also offers **Create another like this** and **Save this build** when its settings are available. Enter a new machine name and any required guest password. Review the newly allocated VM ID, installation source, current library tasks and inputs before creating it. Removing a saved build only removes that shortcut.

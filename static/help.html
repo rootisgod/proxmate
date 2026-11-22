@@ -38,6 +38,7 @@
       </ul></div>
       <div><h3>Recreate labs</h3><ul>
         <li><a href="#repeatable-lab">Build and share a lab pack</a></li>
+        <li><a href="#lab-cleanup">Preview deployment cleanup</a></li>
         <li><a href="#domain-lab">Domain controller and member</a></li>
       </ul></div>
       <div><h3>Maintain machines</h3><ul>
@@ -128,6 +129,11 @@
           <p class="result"><strong>Recreate it elsewhere.</strong> Choose <strong>Download ZIP</strong> on the saved pack, then <strong>Labs → Import ZIP</strong> on the receiving dashboard. Bundled custom scripts travel with the pack. The receiving dashboard supplies the referenced built-ins, installation media or templates and fresh credentials. Check custom scripts for embedded secrets before sharing.</p>
           <p><strong>Start with what you have.</strong> <strong>Saved build</strong> reuses a reviewed build. <strong>VM blueprint</strong> copies settings for a new machine. <strong>Existing VM</strong> runs the role’s steps on the actual guest you select during deployment, with a separate confirmation.</p>
           <p><strong>Try a smaller pack first.</strong> In <strong>Labs → Import ZIP</strong>, choose <strong>Download example pack</strong>. It defines one Ubuntu cloud VM with <code>curl</code> and a bundled directory-creation task. Import the ZIP and inspect the roles and steps before choosing whether to deploy.</p>
+        </article>
+        <article id="lab-cleanup">
+          <h3>Which VMs did this deployment create?</h3>
+          <p>Open <strong>Labs → Deployments</strong>, choose a deployment and select <strong>Preview cleanup</strong>. Each role shows the current guest at its recorded node and VM ID, its power state and the reason it is a candidate or protected.</p>
+          <p>For example, a web server created by the deployment can be a candidate while a management VM used for scripts stays protected. A reused VM ID loses candidate status when its identity differs. All guest credentials are retained. Choose <strong>Refresh preview</strong> to recheck the current guests.</p>
         </article>
         <article id="domain-lab">
           <h3>How do I build a Windows domain controller and join a member server?</h3>

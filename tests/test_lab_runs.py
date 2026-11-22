@@ -10,6 +10,7 @@ import pytest
 import lab_pack
 import management
 import operations
+from vm_config import lab_machine_identity
 from test_api import service
 from test_simple_flow import simple_lab
 
@@ -304,6 +305,97 @@ def existing_input(pack_id, *, credentials=True):
 
 def approve_existing(client, headers, ident, **extra):
     return client.post(LAB+'/run',json=dict(plan_id=ident,confirmed=True,existing_confirmed=True,**extra),headers=headers)
+
+
+def test_cleanup_preview_checks_current_ownership_and_keeps_shared_logins(existing_lab, monkeypatch):
+    app, client, headers, existing_config, existing_vm, guest_calls = existing_lab
+    pack = import_pack(client, headers, {'web': linux(), 'tools': existing_role(after=['web'])}, version=2)
+    plan = client.post(LAB+'/plan', json=existing_input(pack), headers=headers).json
+    run = approve_existing(client, headers, plan['id']).json
+    web, tools = run['machines']
+    web_config = dict(name='renamed-web', vmgenid='20ea2de9-69b2-47a8-a518-52de9e3a5555')
+    def record_build(plan, log, job_id):
+        app.manager.put('builds', dict(id=job_id, node=web['node'], vmid=web['vmid'],
+                                      machine_identity=lab_machine_identity(web_config)))
+    monkeypatch.setattr(app.simple, 'execute', record_build)
+    while app.run_next_job():
+        pass
+    login = app.manager.get('connections', 'lab:201')['credential_id']
+    app.manager.put('connections', dict(id='lab:999', credential_id=login))
+    resources = [existing_vm, dict(type='qemu', node='lab', vmid=web['vmid'], name='renamed-web', status='stopped')]
+    unreadable = set()
+    class Inventory:
+        def resources(self):
+            return resources
+        def call(self, method, path):
+            assert method == 'GET'
+            if path in unreadable:
+                raise RuntimeError('upstream failure with private diagnostics')
+            return {f"nodes/lab/qemu/{web['vmid']}/config": web_config,
+                    'nodes/lab/qemu/201/config': existing_config}[path]
+    monkeypatch.setattr(operations, 'Proxmox', Inventory)
+    url = LAB+'/runs/'+run['id']+'/cleanup-preview'
+    before = client.get('/api/jobs', headers=headers).json
+    calls_before = len(guest_calls)
+    def preview():
+        response = client.get(url, headers=headers)
+        assert response.status_code == 200, response.json
+        assert 'Fresh password' not in response.text and 'private_key' not in response.text
+        return response.json['machines']
+    created, existing = preview()
+    assert (created['key'], created['current_name'], created['power'], created['candidate']) == ('web', 'renamed-web', 'stopped', True)
+    assert existing['key'] == tools['key'] and not existing['candidate'] and 'existing' in existing['reason'].lower()
+    assert existing['credential']['protected'] and 'another VM' in existing['credential']['reason']
+    config_path = f"nodes/lab/qemu/{web['vmid']}/config"
+    unreadable.add(config_path)
+    unavailable, existing = preview()
+    assert not unavailable['candidate'] and not unavailable['identity_matches'] and not existing['candidate']
+    assert 'private diagnostics' not in str(unavailable)
+    unreadable.clear()
+    for setting in ('protection', 'lock', 'template'):
+        web_config[setting] = 1
+        assert not preview()[0]['candidate']
+        del web_config[setting]
+    web_config['vmgenid'] = '1d15bac0-2bba-4b5b-b00b-b87b67eee555'
+    replaced, _ = preview()
+    assert not replaced['candidate'] and 'identity' in replaced['reason'].lower()
+    resources.pop()
+    missing, _ = preview()
+    assert not missing['candidate'] and missing['power'] is None
+    assert client.get('/api/jobs', headers=headers).json == before and len(guest_calls) == calls_before
+    assert client.get(LAB+'/runs/unknown/cleanup-preview', headers=headers).status_code == 404
+
+
+def test_cleanup_preview_protects_unproven_and_unfinished_builds(simple_lab, monkeypatch):
+    app, client, headers, _ = simple_lab
+    pack = import_pack(client, headers, {'new': linux()})
+    plan = client.post(LAB+'/plan', json={'pack_id':pack}, headers=headers).json
+    run = deploy(client, headers, plan['id'])
+    role, = run['machines']
+    config = dict(vmgenid='a091308c-63a6-4fba-a130-258626c26b6f')
+    class Reader:
+        def resources(self):
+            return [dict(type='qemu', node=role['node'], vmid=role['vmid'], status='running')]
+        def call(self, method, path):
+            assert method == 'GET'
+            return config
+    monkeypatch.setattr(operations, 'Proxmox', Reader)
+    url = LAB+'/runs/'+run['id']+'/cleanup-preview'
+    def first():
+        return client.get(url, headers=headers).json['machines'][0]
+    assert not first()['creation_recorded'] and not first()['candidate']
+    build = dict(id=role['job_id'], node=role['node'], vmid=role['vmid'], machine_identity=lab_machine_identity(config))
+    app.manager.put('builds', build)
+    pending = first()
+    assert pending['creation_recorded'] and pending['identity_matches'] and not pending['candidate']
+    assert 'unfinished' in pending['reason']
+    app.manager.put('builds', dict(build, vmid=999))
+    assert not first()['creation_recorded'] and not first()['identity_matches']
+    app.manager.put('builds', dict(build, machine_identity=None))
+    assert not first()['candidate'] and not first()['identity_matches']
+    record = app.manager.get('lab-runs', run['id'])
+    app.manager.put('lab-runs', dict(record, server_id='previous-server'))
+    assert client.get(url, headers=headers).status_code == 404
 
 
 def test_mixed_v2_pack_authenticates_and_runs_on_exact_existing_machine(existing_lab,monkeypatch):

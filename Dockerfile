@@ -29,7 +29,7 @@ RUN --mount=type=bind,from=pwsh-files,source=/pwsh.tar.gz,target=/tmp/pwsh.tar.g
 ENV ANSIBLE_COLLECTIONS_PATH=/usr/share/ansible/collections
 COPY script_library.py windows_setup.py diagnostics.py reviews.py windows_artifacts.py windows_build.py winrm_setup.py app.py job_queue.py machine.py operations.py provisioning.py management.py guest_tasks.py bootstrap.py lifecycle.py server_connection.py simple_flow.py media.py template_finish.py windows_volume.ps1 windows_bootstrap.ps1 ./
 COPY debian_build.py rocky_build.py linux_access.py linux_install.py ubuntu_build.py guided_recipes.py task_recovery.py vm_config.py ./
-COPY lab_exchange.py lab_pack.py lab_runs.py lab_sources.py media_library.py build_credentials.py guest_review.py ./
+COPY lab_exchange.py lab_pack.py lab_runs.py lab_cleanup.py lab_sources.py media_library.py build_credentials.py guest_review.py ./
 COPY dashboard_backup.py backup_portable.py ./
 COPY LICENSE ./
 COPY windows_domain.yml ./
