@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Homelab how-to guides · Proxmate Help</title>
+  <script src="/static/theme.js"></script>
+  <script defer src="/static/help.js"></script>
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/editor-assets/icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/help.css">
+</head>
+<body>
+<a class="skip" href="#guides">Skip to guides</a>
+<header class="guide-bar"><div class="guide-width">
+  <span class="guide-brand"><span class="bi bi-book" aria-hidden="true"></span>Proxmate Help</span>
+  <a href="/#machines">Dashboard</a>
+</div></header>
+<main class="guide-width">
+  <header class="guide-intro">
+    <h1>Homelab how-to guides</h1>
+    <p>Build your first machine, automate a job you do often, or package a whole lab to use again.</p>
+  </header>
+  <div class="guide-layout">
+    <nav class="guide-index" aria-label="How-to guides"><details open>
+      <summary id="guide-index-title">Jump to a guide</summary>
+      <div class="guide-topics">
+      <div><h3>Build machines</h3><ul>
+        <li><a href="#windows-packages">Windows with Chocolatey</a></li>
+        <li><a href="#windows-template">Windows templates and clones</a></li>
+        <li><a href="#linux-ssh">Linux with SSH and packages</a></li>
+        <li><a href="#check-isos">Check installer ISOs</a></li>
+      </ul></div>
+      <div><h3>Run scripts</h3><ul>
+        <li><a href="#run-ansible">Ansible on existing VMs</a></li>
+        <li><a href="#save-script">Scripts with reusable inputs</a></li>
+      </ul></div>
+      <div><h3>Recreate labs</h3><ul>
+        <li><a href="#repeatable-lab">Build and share a lab pack</a></li>
+        <li><a href="#domain-lab">Domain controller and member</a></li>
+      </ul></div>
+      <div><h3>Maintain machines</h3><ul>
+        <li><a href="#repair-connection">Recover a failed script run</a></li>
+        <li><a href="#test-backup">Test a backup restore</a></li>
+      </ul></div>
+      </div>
+    </details></nav>
+    <div class="guide-list" id="guides" tabindex="-1">
+      <section class="guide-group" aria-labelledby="build-heading">
+        <h2 id="build-heading"><span class="bi bi-pc-display" aria-hidden="true"></span>Build machines</h2>
+        <article id="windows-packages">
+          <h3>How do I make a Windows VM with Chocolatey packages already installed?</h3>
+          <p>This example builds <code>win-tools01</code> with 7-Zip and Git. You’ll need a Windows Server installer, a VirtIO guest-tools ISO on the node, and guest network access to Chocolatey and the package download sites.</p>
+          <ol>
+            <li>Open <a href="/#create">Create machine</a>. Choose <strong>Virtual machine</strong>, then <strong>Windows Server</strong>. Enter the machine name. Under <strong>Guest login</strong>, use your Windows build default or enter a separate Administrator password.</li>
+            <li>Choose <strong>Windows ISO</strong> if the wizard offers a source choice. Select the ISO and a <strong>Windows edition</strong>. Choose an edition with Desktop Experience if you want a graphical desktop. Check the destination node and storage, then select <strong>Continue</strong>.</li>
+            <li>In <strong>Software &amp; scripts → Packages</strong>, tick <strong>Set up Chocolatey</strong>. Enter <code>7zip, git</code> in <strong>Packages to install</strong>. Use <strong>Browse Chocolatey packages</strong> to look up other package IDs.</li>
+            <li>Choose <strong>Review build</strong>. Check the edition, destination and package list, confirm the build and choose <strong>Create 1 machine</strong>. You can leave the wizard and follow the job in <a href="/#jobs">Activity</a>.</li>
+          </ol>
+          <p class="result"><strong>Check the result.</strong> To reuse the same login on future machines, open <a href="/#credentials">Credentials</a> and choose a Windows or Linux default under <strong>Defaults for new machines</strong>. After the job succeeds, sign in to the guest and run <code>choco list</code> to see the installed packages. To reuse the unattended setup elsewhere, open the ISO build’s job and choose <strong>Download reusable answer file</strong>. That archive uses placeholders for credentials.</p>
+        </article>
+        <article id="windows-template">
+          <h3>How do I make a reusable Windows template and clone it?</h3>
+          <ol>
+            <li>In <a href="/#create">Create machine</a>, select <strong>Reusable template</strong> before choosing <strong>Windows Server</strong>. Give the base a name such as <code>win-base</code>. Pick the Windows ISO, edition and setup login.</li>
+            <li>Add the software every clone should inherit. For example, install 7-Zip in the base and leave machine-specific roles, such as domain promotion, for deployment. Review and approve <strong>Create 1 template</strong>.</li>
+            <li>Wait for the job to succeed. Proxmate installs the software, runs Sysprep, shuts down the base and converts it to a Proxmox template. The clone goes through Windows first-boot setup.</li>
+            <li>Open <a href="/#machines">Inventory</a>, select <strong>Templates → Clone template</strong> on <code>win-base</code>, and choose <strong>Full copy (independent VM)</strong> for a guest with its own disks. Enter a fresh name such as <code>win-dev01</code> and choose the Administrator login. Add any clone-specific scripts, review and create.</li>
+          </ol>
+          <p class="result"><strong>Check the result.</strong> Inventory should list the base under Templates and the new guest under Running after setup. Run <code>hostname</code> inside the clone and check that your base software is present.</p>
+        </article>
+        <article id="linux-ssh">
+          <h3>How do I build a Linux VM I can SSH into straight away?</h3>
+          <ol>
+            <li>Open <a href="/#create">Create machine</a> and select <strong>Virtual machine → Ubuntu</strong>. For a 24.04 guest, choose an Ubuntu Server 24.04 LTS amd64 live-server ISO. The guided ISO installer also supports Ubuntu Server 22.04 and 26.04 LTS.</li>
+            <li>Name the VM <code>devbox01</code>. In <strong>Guest login</strong>, use the Linux build default or choose a separate SSH key and username. Enter your GitHub username to import its public SSH keys, or paste your workstation’s public key. Keep the corresponding private key on your workstation. Password sign-in is optional for a working VM.</li>
+            <li>In <strong>Software &amp; scripts → Packages</strong>, enter <code>curl, git</code>. Leave firewall and update settings at their Ubuntu defaults unless you want a specific change. Review and create the machine.</li>
+          </ol>
+          <p class="result"><strong>Check the result.</strong> On success, use <strong>Copy SSH command</strong> from the notification or machine page. Run it on the workstation holding your key, then try <code>git --version</code>.</p>
+          <p><strong>Other installers.</strong> Choose <strong>Debian</strong> for Debian 13 amd64 netinst or DVD-1, or <strong>Rocky Linux</strong> for Rocky 10 x86_64 Boot, Minimal or DVD. Supply packages from that distribution. Give network installers guest DNS and access to their package mirrors.</p>
+        </article>
+        <article id="check-isos">
+          <h3>How do I find out which installer ISOs I can use?</h3>
+          <ol>
+            <li>Open <a href="/#media">ISO library</a> and choose the <strong>Proxmox server</strong> where you plan to build. Proxmox calls each server a <em>node</em>. The list shows files in the Proxmate ISO folder and ISO storage available to that server. A <strong>Candidate</strong> is a filename match.</li>
+            <li>Choose <strong>Check media</strong> on a file to inspect it, or <strong>Check installers</strong> to check one candidate for each unverified OS family. If prompted, configure verified Proxmox SSH in <a href="/#server">Server settings</a>. For Windows, select the VirtIO guest-tools ISO too.</li>
+            <li>Look for <strong>Verified</strong> and, for Windows, inspect the reported editions. Choose <strong>Use in Create</strong> to carry that file and server into the wizard. A guided build copies the installer when needed.</li>
+          </ol>
+          <p><strong>To copy a file ahead of time,</strong> choose <strong>Copy to Proxmox storage…</strong> beside a file in the Proxmate ISO folder. Pick the destination ISO storage on your server and choose <strong>Copy ISO</strong>. The original stays in the folder.</p>
+          <p class="result"><strong>Two storage choices.</strong> The installer ISO is what the guest boots. <strong>Setup media storage</strong> is where Proxmate writes the extra media containing this VM’s unattended installation settings. The VM’s system disk has its own storage choice.</p>
+        </article>
+      </section>
+      <section class="guide-group" aria-labelledby="scripts-heading">
+        <h2 id="scripts-heading"><span class="bi bi-terminal" aria-hidden="true"></span>Run scripts</h2>
+        <article id="run-ansible">
+          <h3>How do I run an Ansible script on an existing Windows or Linux VM?</h3>
+          <ol>
+            <li>Open <a href="/#run-scripts">Run scripts</a>, select one or more running guests of the same platform, then choose <strong>Choose scripts</strong>. For one machine you can also choose <strong>Run script</strong> on its Inventory row.</li>
+            <li>Pick a <strong>Library script</strong>. On Windows, add <strong>Create a tools folder</strong> and change <strong>Folder name</strong> from <code>LabTools</code> to <code>OpsTools</code>. On Linux, try <strong>Create a shared tools directory</strong>. Add steps in the order you want them to run.</li>
+            <li>Proxmate uses each VM’s saved guest login. When a login is missing, select a compatible credential or supply one. Windows needs working WinRM and a login with the required privileges. Linux needs SSH and sudo access for system changes.</li>
+            <li>Choose <strong>Review run</strong>. Check the machine names, addresses, script order and inputs, then approve the run. <a href="/#jobs">Activity</a> records a result for each target.</li>
+          </ol>
+          <p class="result"><strong>Check the result.</strong> On Windows, <code>Test-Path C:\OpsTools</code> should return <code>True</code>. On Linux, <code>ls -ld /opt/lab-tools</code> should show the directory. For a single-use task, choose <strong>One-off script → Ansible YAML</strong>, paste a guest task list and review the targets.</p>
+        </article>
+        <article id="save-script">
+          <h3>How do I turn a useful task into a script everyone can reuse?</h3>
+          <ol>
+            <li>Open <a href="/#scripts">Script library</a>. Find <strong>Create a tools folder</strong> and choose <strong>Save a copy</strong>. Give it a descriptive name such as <code>Create a project folder</code>.</li>
+            <li>Keep the input variable <code>name</code>, change its display label to <strong>Project folder</strong> and give it a default such as <code>Projects</code>. The module argument <code>C:\{{ proxmate_inputs.name }}</code> uses the value supplied for each run.</li>
+            <li>Choose <strong>Check syntax</strong>, then <strong>Save copy</strong>. Open the saved script’s <strong>Run script</strong> action to try it on one VM. Choose <strong>Use in lab</strong> to add it to a lab definition.</li>
+          </ol>
+          <p class="result"><strong>When to save a copy.</strong> A saved script can be selected during a build, added to a lab or run later against existing machines. For guest PowerShell or Linux shell, start with a matching starter in the library. PowerShell on Linux requires <code>pwsh</code> on the guest.</p>
+        </article>
+      </section>
+      <section class="guide-group" aria-labelledby="labs-heading">
+        <h2 id="labs-heading"><span class="bi bi-diagram-3" aria-hidden="true"></span>Recreate labs</h2>
+        <article id="repeatable-lab">
+          <h3>How do I make a lab I can recreate or share?</h3>
+          <p>For example, define an Ubuntu web server and a separate client once. A lab pack records their roles, dependencies, software steps and custom script source.</p>
+          <ol>
+            <li>In <a href="/#labs">Labs</a>, choose <strong>Create lab → Add role → New machine</strong>. Add an Ubuntu role named <code>web01</code>. Under <strong>Role settings</strong> choose the install source. Under <strong>Process</strong>, add <strong>Install a Linux package</strong> with <code>nginx</code>, followed by <strong>Manage a Linux service</strong> with service <code>nginx</code> and state <code>started</code>.</li>
+            <li>Add an Ubuntu <code>client01</code> role with the package <code>curl</code>. In the client’s <strong>Role settings → Starts after</strong>, select <code>web01</code>. The client waits for the server’s build and steps to succeed.</li>
+            <li>Choose <strong>Save lab</strong> to keep the definition. From <strong>Saved packs</strong>, choose <strong>Set up lab</strong> when ready. Map each role to the destination’s media, node, storage and network. Supply logins, <strong>Review lab</strong>, inspect both roles and confirm <strong>Deploy lab</strong>.</li>
+            <li>Follow each role in <strong>Deployments</strong>. On the client, run <code>curl http://WEB_IP/</code> using the server address from Inventory. With network access between the guests, you should see the nginx welcome page.</li>
+          </ol>
+          <p class="result"><strong>Recreate it elsewhere.</strong> Choose <strong>Download ZIP</strong> on the saved pack, then <strong>Labs → Import ZIP</strong> on the receiving dashboard. Bundled custom scripts travel with the pack. The receiving dashboard supplies the referenced built-ins, installation media or templates and fresh credentials. Check custom scripts for embedded secrets before sharing.</p>
+          <p><strong>Start with what you have.</strong> <strong>Saved build</strong> reuses a reviewed build. <strong>VM blueprint</strong> copies settings for a new machine. <strong>Existing VM</strong> runs the role’s steps on the actual guest you select during deployment, with a separate confirmation.</p>
+          <p><strong>Try a smaller pack first.</strong> In <strong>Labs → Import ZIP</strong>, choose <strong>Download example pack</strong>. It defines one Ubuntu cloud VM with <code>curl</code> and a bundled directory-creation task. Import the ZIP and inspect the roles and steps before choosing whether to deploy.</p>
+        </article>
+        <article id="domain-lab">
+          <h3>How do I build a Windows domain controller and join a member server?</h3>
+          <p>This example creates a new forest, <code>lab.example.test</code>, with two Windows Server guests on the same lab network. Proxmate automates promotion and stages a join script on the member. An administrator enters a delegated join credential on the member to finish.</p>
+          <ol>
+            <li>Give the controller a stable address, for example through a DHCP reservation. Configure the member to use the controller for DNS through the lab’s DHCP settings or its network adapter before the join. Use an isolated network when running a second copy of the same forest.</li>
+            <li>In <a href="/#scripts">Script library</a>, choose <strong>New script</strong>. Name it <code>Prepare member domain join</code>, select <strong>Windows</strong> and <strong>Ansible YAML</strong>, and paste the task below. Choose <strong>Add input</strong> with variable <code>domain</code>, label <strong>Forest DNS name</strong> and default <code>lab.example.test</code>. Check syntax and save.</li>
+          </ol>
+          <details><summary>Show the Ansible task for the member server</summary>
+            <div class="copy-task" hidden><button type="button" id="copy-task">Copy Ansible task</button><span id="copy-status" role="status"></span></div>
+            <pre tabindex="0" aria-label="Ansible task to stage the domain join"><code id="member-join-example">- name: Put the domain join script on the public desktop
+  ansible.windows.win_copy:
+    dest: 'C:\Users\Public\Desktop\Join-LabDomain.ps1'
+    content: |
+      $ErrorActionPreference = 'Stop'
+      $domain = '{{ proxmate_inputs.domain }}'
+      $computer = Get-CimInstance Win32_ComputerSystem
+      if ($computer.PartOfDomain) {
+        throw "This server already belongs to $($computer.Domain)."
+      }
+      Resolve-DnsName -Type SRV "_ldap._tcp.dc._msdcs.$domain" | Out-Null
+      Add-Computer -DomainName $domain -Credential (Get-Credential) -Restart</code></pre>
+          </details>
+          <ol start="3">
+            <li>In <a href="/#labs">Labs → Create lab</a>, add a <strong>New machine</strong> named <code>dc01</code>. Choose Windows Server with <strong>Desktop Experience</strong>. Add <strong>Set up a Windows domain controller</strong> under <strong>Process</strong>. Enter the forest DNS name. Use the built-in Administrator login for promotion and supply a separate Directory Services Restore Mode password at deployment.</li>
+            <li>Add a second new Windows Server role named <code>member01</code>, also with Desktop Experience. Add <strong>Prepare member domain join</strong> to its Process with the same forest name. In the member’s <strong>Role settings → Starts after</strong>, select <code>dc01</code>. Save, set up and review the lab, then deploy it.</li>
+            <li>After both roles succeed, sign in to <strong>member01</strong> as a local administrator. In elevated Windows PowerShell run <code>&amp; "$env:PUBLIC\Desktop\Join-LabDomain.ps1"</code>. At the prompt enter a domain account allowed to join machines. The script checks domain DNS discovery, joins the computer and restarts it. The credential stays out of the saved pack.</li>
+          </ol>
+          <p class="result"><strong>Verify both guests.</strong> On the restarted member, <code>Test-ComputerSecureChannel</code> should return <code>True</code>. On <code>dc01</code>, open <strong>Active Directory Users and Computers</strong> from the public desktop and find the member’s computer account. <strong>Group Policy Management</strong> is on the same desktop. <a href="https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/add-computer?view=powershell-5.1">Microsoft’s Add-Computer reference</a></p>
+        </article>
+      </section>
+      <section class="guide-group" aria-labelledby="maintain-heading">
+        <h2 id="maintain-heading"><span class="bi bi-tools" aria-hidden="true"></span>Maintain machines</h2>
+        <article id="repair-connection">
+          <h3>How do I recover when a guest changes address or a script fails?</h3>
+          <ol>
+            <li>Open the failed job in <a href="/#jobs">Activity</a> and identify the affected VM and step. If the address changed, choose <strong>Refresh connection</strong> in the job when offered, or on the VM’s <a href="/#machines">Inventory</a> row.</li>
+            <li>Check the addresses reported by the QEMU Guest Agent. Select the current guest address and matching guest login, then choose <strong>Test and save</strong>. If Windows is newly imported, open its machine page and choose <strong>Check WinRM setup</strong> to inspect the listener. Use <strong>Open console</strong> if remote access needs repair.</li>
+            <li>Reopen the failed job. When <strong>Review remaining tasks</strong> is offered, check which steps completed and whether the failed step partly changed the guest. Confirm the remaining steps. Otherwise start a fresh <strong>Run scripts</strong> review for just the affected VM and outstanding steps.</li>
+          </ol>
+          <p class="result"><strong>Check the result.</strong> Look for a successful login test and a new successful job for the right guest. A reachable port alone does not verify its identity or login.</p>
+        </article>
+        <article id="test-backup">
+          <h3>How do I test that a backup boots without touching the original VM?</h3>
+          <ol>
+            <li>Open <a href="/#recovery">More tools → Backup recovery</a>. Pick the archive by node and original VM ID, then choose <strong>Restore / test</strong>.</li>
+            <li>Enter an unused destination VM ID, a distinct name such as <code>restore-test</code> and storage with room for the copy. Keep its network interfaces disconnected. Select the boot test if the backed-up guest has a working QEMU Guest Agent.</li>
+            <li>Choose <strong>Review restore</strong>, check the archive and destination, and confirm. Follow the job in <a href="/#jobs">Activity</a>.</li>
+          </ol>
+          <p class="result"><strong>What a pass proves.</strong> The restored copy booted and answered through the guest agent. Proxmate shuts it down and retains it. Check application data separately, then account for the retained copy and its disk space.</p>
+        </article>
+      </section>
+    </div>
+  </div>
+</main>
+</body>
+</html>

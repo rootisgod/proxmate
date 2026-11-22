@@ -3,7 +3,7 @@ async function openLabDesigner(packId = null, initialScriptId = null, recipeId =
   if (typeof packId !== 'string') packId = null;
   const heading = packId ? 'Edit lab copy' : 'Create lab';
   const loading = labStep(heading, '<p>Loading roles and scripts…</p>', 'Retry', '', () => openLabDesigner(packId,initialScriptId,recipeId));
-  $('#lab-next').disabled = true;
+  setButtonBusy($('#lab-next'),true);
   try {
     const [catalog,options,recipes,pack,recipe] = await Promise.all([
       api('manage/tasks'),api('simple/options').catch(() => null),api('simple/recipes'),
@@ -17,7 +17,7 @@ async function openLabDesigner(packId = null, initialScriptId = null, recipeId =
   } catch (error) {
     if (labActive(loading)) {
       $('#lab-error').textContent = error.message;
-      $('#lab-next').disabled = false;
+      setButtonBusy($('#lab-next'),false);
     }
   }
 }
@@ -303,7 +303,6 @@ function designMachine(uid, name, copied, catalog, options, onChange) {
       edition.oninput = () => { source.edition = edition.value.trim(); };
       if (iso) panel.append(buildButton('Read editions from ISO',async event => {
         const button = event.currentTarget;
-        button.disabled = true;
         try {
           const info = await api('simple/editions',{node:iso.node,source:iso.source});
           if (!labActive(button)) return;
@@ -312,7 +311,6 @@ function designMachine(uid, name, copied, catalog, options, onChange) {
           panel.innerHTML = ws('edition_label','Windows edition',choices,edition.value);
           el('edition_label').onchange = () => { source.edition = el('edition_label').value; };
         } catch (error) { if (labActive(button)) $('#lab-error').textContent = error.message; }
-        finally { button.disabled = false; }
       }));
     }
     editions();

@@ -38,7 +38,9 @@ function managementRender(){
 function renderCredentialWorkspace(){
   if(!$('#credential-list')){
     $('#content').innerHTML='<div class="settings-workspace">'+title('Guest credentials','Manage the logins Proxmate uses to run scripts on Windows and Linux guests.','<button type="button" class="primary" data-mg="new-credentials"><span class="bi bi-plus-lg" aria-hidden="true"></span> Add credential</button>')+
-      `<section class="panel credential-library" aria-label="Saved guest credentials">
+      `<section class="panel build-defaults" aria-labelledby="build-default-heading"><h2 id="build-default-heading">Defaults for new machines</h2>
+      <p>Reuse a guest login for new builds. You can choose a separate login when creating a machine.</p>
+      <div id="build-default-cards"></div></section><section class="panel credential-library" aria-label="Saved guest credentials">
       <div class="settings-toolbar" id="credential-filters">
         <label>Search credentials<input type="search" id="credential-query" placeholder="Name, user or VM"></label>
         <label>Guest platform<select id="credential-platform"><option value="">All platforms</option><option value="windows">Windows</option><option value="linux">Linux</option></select></label>
@@ -48,6 +50,13 @@ function renderCredentialWorkspace(){
     $('#credential-query').oninput=renderCredentialWorkspace;
     $('#credential-platform').onchange=renderCredentialWorkspace;
   }
+  const cards=$('#build-default-cards');
+  const defaults=['windows','linux'].map(platform=>{
+    const current=mg.credentials.find(c=>c.platform===platform&&c.is_build_default);
+    const os=platform==='windows'?'Windows':'Linux';
+    return `<div><div><strong>${os}</strong><small>${current?esc(current.name)+' · '+esc(current.username):'Separate login per build'}</small></div><button type="button" data-mg="build-default" data-record="${platform}" aria-label="Choose ${os} build default">${current?'Change':'Choose default'}</button></div>`;
+  }).join('');
+  if(defaults!==cards.renderedMarkup){cards.innerHTML=defaults;cards.renderedMarkup=defaults}
   const query=$('#credential-query').value.trim().toLowerCase(),platform=$('#credential-platform').value;
   const guests=mgGuests(),rows=[];
   for(const credential of mg.credentials){
@@ -84,7 +93,7 @@ function renderCredentialWorkspace(){
 
 function mgDialog(heading,html,save,button='Save'){
   $('#manage-title').textContent=heading;$('#manage-fields').innerHTML=html;$('#manage-error').textContent='';
-  $('#manage-submit').textContent=button;$('#manage-submit').disabled=false;mgSave=save;
+  $('#manage-submit').textContent=button;setButtonBusy($('#manage-submit'),false);mgSave=save;
   if(!$('#manage-dialog').open)$('#manage-dialog').showModal();
 }
 function mgValues(){
@@ -118,6 +127,29 @@ function editCredential(record={}){
   };
   fields.platform.disabled=editing;
   fields.platform.onchange=showPlatform;showPlatform();
+}
+function editBuildDefault(platform){
+  const windows=platform==='windows',os=windows?'Windows':'Linux';
+  const choices=mg.credentials.filter(c=>c.platform===platform&&(windows?c.has_password&&c.username.toLowerCase()==='administrator':c.has_private_key))
+    .sort((a,b)=>a.name.localeCompare(b.name));
+  const current=choices.find(c=>c.is_build_default)?.id||'';
+  mgDialog(os+' build default','<div class="form-grid">'+wf('filter','Find a credential','','search','autocomplete="off"')+
+    ws('credential_id','Login for new '+os+' machines',[['','Separate login per build']],'')+
+    '<p class="wide">'+(windows?'Windows setup uses the local Administrator password.':'Linux setup installs the public key for the selected account. Each guest still generates its own SSH host keys.')+
+    ' Changing the default affects future builds.</p>'+
+    (choices.length?'':'<p class="wide">Add a '+(windows?'Windows credential for Administrator':'Linux credential with an SSH private key')+' to make it available here.</p>')+'</div>',async d=>{
+      await api('manage/credentials/defaults',{platform,credential_id:d.credential_id||null});
+      $('#manage-dialog').close();await loadManagement();render();notice(os+' build default saved.');
+    },'Save default');
+  const form=$('#manage-form'),search=form.elements.filter,select=form.elements.credential_id;
+  const filter=()=>{
+    const selected=select.value,query=search.value.trim().toLowerCase();
+    for(const option of [...select.options].slice(1))option.remove();
+    for(const c of choices)if((c.name+' '+c.username).toLowerCase().includes(query)||c.id===selected)
+      select.add(new Option(c.name+' · '+c.username,c.id));
+    select.value=selected;
+  };
+  filter();select.value=current;search.oninput=filter;
 }
 function editGroup(record={}){
   mgDialog('VM group','<div class="form-grid">'+wf('name','Group name',record.name||'','text','required')+mgSelect('credential_id','Optional credential for runs selected through this group', [['','Use each VM connection credential'],...mgCreds().slice(1)],record.credential_id)+targetFields(record.targets||[])+'</div>',d=>saveRecord('groups',{id:record.id,name:d.name,credential_id:d.credential_id,targets:selectedTargets()}));
@@ -190,9 +222,12 @@ function editSchedule(record){
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-mg]');if(!b)return;
   const a=b.dataset.mg,id=b.dataset.record;
+  if(b.disabled)return;
+  setButtonBusy(b,true);
   try{
     if(!mg)await loadManagement();
-    if(a==='new-credentials')editCredential();
+    if(a==='build-default')editBuildDefault(id);
+    else if(a==='new-credentials')editCredential();
     else if(a==='new-tasks')editScript();
     else if(a==='new-groups')editGroup();
     else if(a==='new-recipes')openWizard();
@@ -213,12 +248,18 @@ document.addEventListener('click',async e=>{
     else if(a.startsWith('edit-')){const kind=a.slice(5),r=mg[kind].find(r=>r.id===id);({credentials:editCredential,tasks:editScript,groups:editGroup,recipes:editRecipe,schedules:editSchedule})[kind](r)}
     else if(a.startsWith('delete-')){const kind=a.slice(7);mgDialog('Delete saved record','<p>Remove this saved configuration? Existing VMs, snapshots and job history are retained. Referenced records cannot be deleted.</p>'+wc('confirmed','Delete this record.'),async d=>{if(!d.confirmed)throw Error('Confirm deletion');await api(`manage/${kind}/${id}/delete`,{});$('#manage-dialog').close();await loadManagement();render()},'Delete record')}
   }catch(err){notice(err.message);if($('#manage-dialog').open)$('#manage-error').textContent=err.message}
+  finally{setButtonBusy(b,false)}
 });
 $('#manage-close').onclick=()=>$('#manage-dialog').close();
-$('#manage-dialog').addEventListener('close',()=>{$('#manage-fields').replaceChildren();mgSave=null;mgSelectedTasks=[];mgPlan=null});
+$('#manage-dialog').addEventListener('close',event=>{
+  if(event.currentTarget.open)return;
+  $('#manage-fields').replaceChildren();mgSave=null;mgSelectedTasks=[];mgPlan=null;
+});
 $('#manage-form').onsubmit=async e=>{
-  e.preventDefault();const button=$('#manage-submit');button.disabled=true;
+  e.preventDefault();const button=$('#manage-submit');
+  if(button.disabled||!mgSave)return;
+  setButtonBusy(button,true);
   const save=mgSave;
-  try{await save(mgValues())}catch(err){if(mgSave===save)$('#manage-error').textContent=err.message}finally{if(mgSave===save)button.disabled=false}
+  try{await save(mgValues())}catch(err){if(mgSave===save)$('#manage-error').textContent=err.message}finally{if(mgSave===save)setButtonBusy(button,false)}
 };
 document.addEventListener('click',e=>{if(e.target.closest('[data-view]')&&managementViews.includes(view)){loadManagement().then(()=>render()).catch(err=>notice(err.message))}});

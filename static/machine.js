@@ -6,7 +6,8 @@ function remoteButton(kind,target,server,name,context='') {
   button.textContent=(kind==='rdp'?'Open desktop':'Copy SSH command')+(context?' · '+context:'');
   button.onclick=async()=>{
     if(server!==serverInfo?.id)return;
-    button.disabled=true;
+    if(button.disabled)return;
+    setButtonBusy(button,true);
     try{
       const remote=await api('simple/machine/remote-access',target);
       if(!button.isConnected || server!==serverInfo?.id)return;
@@ -31,7 +32,7 @@ function remoteButton(kind,target,server,name,context='') {
         }
       }
     }catch(err){showToast(err.message,{kind:'failure'})}
-    finally{button.disabled=false}
+    finally{setButtonBusy(button,false)}
   };
   return button;
 }
@@ -107,7 +108,7 @@ function renderMachine(){
   const back='<button class="machine-back" data-view="machines">← Inventory</button>';
   const d=page.data;
   if(!d){
-    $('#content').innerHTML=back+'<p role="status">'+esc(page.error||'Reading machine details…')+'</p>';
+    $('#content').innerHTML=back+(page.error?'<p role="status">'+esc(page.error)+'</p>':'<p role="status" class="loading-status">Reading machine details…</p>');
     return;
   }
   const guestName=d.name||'VM '+d.vmid;

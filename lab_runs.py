@@ -31,8 +31,8 @@ def machine_draft(key, machine, binding, login):
     if os_name == 'windows':
         allowed.add('management_cidr')
     fields(binding, allowed, key + ' mapping')
-    fields(login, {'inputs', 'password'} if os_name == 'windows' else
-           {'inputs', 'linux_password', 'ssh_public_key', 'github_username'}, key + ' login')
+    fields(login, {'inputs', 'password', 'build_credential_id'} if os_name == 'windows' else
+           {'inputs', 'linux_password', 'ssh_public_key', 'github_username', 'build_credential_id'}, key + ' login')
     for field, value in binding.items():
         if field == 'generalized':
             if not isinstance(value, bool):
@@ -51,7 +51,8 @@ def machine_draft(key, machine, binding, login):
     settings = dict(machine.get('settings', {}))
     requires_password = settings.pop('password_login', False)
     requires_key = settings.pop('key_login', False)
-    if requires_password and not login.get('password' if os_name == 'windows' else 'linux_password'):
+    has_login = login.get('password') or login.get('linux_password') or (os_name == 'windows' and login.get('build_credential_id'))
+    if requires_password and not has_login:
         raise ValueError('Enter a fresh guest password for ' + key + '.')
     if requires_key and not any(login.get(k, '').strip() for k in ('ssh_public_key', 'github_username')):
         raise ValueError('Supply a workstation public key or GitHub username for ' + key + '.')

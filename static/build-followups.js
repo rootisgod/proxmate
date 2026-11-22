@@ -2,7 +2,7 @@ function buildButton(label, click){
   const button=document.createElement('button');
   button.type='button';
   button.textContent=label;
-  button.onclick=click;
+  button.onclick=event=>withBusyButton(button,()=>click(event));
   return button;
 }
 
@@ -35,7 +35,7 @@ async function loadGuidedRecipes(area){
 
 function saveGuidedRecipe(source,name){
   mgDialog('Save this build',wf('name','Saved build name',name||'','text','required maxlength="100"')+
-    '<p>Reuse the installation source, hardware, settings and software. Each new machine gets its own login.</p>',async values=>{
+    '<p>Reuse the installation source, hardware, settings and software. Choose the guest login when you build again.</p>',async values=>{
     await api('simple/recipes',{...source,name:values.name});
     $('#manage-dialog').close();
     if($('#saved-builds'))await loadGuidedRecipes($('#saved-builds'));
@@ -43,9 +43,12 @@ function saveGuidedRecipe(source,name){
   },'Save build');
 }
 
-function repeatGuidedBuild(recipe,reuse){
+async function repeatGuidedBuild(recipe,reuse){
   const windows=recipe.os==='windows';
+  let defaults;
+  try{defaults=await api('manage/credentials/defaults')}catch(error){notice(error.message);return}
   const fields=wf('name','New machine name','','text','required maxlength="12" pattern="[A-Za-z][A-Za-z0-9\\-]{0,11}" autofocus')+
+    buildLoginChoice(recipe.os,defaults,undefined,recipe.username)+
     (recipe.password_login?wf(windows?'password':recipe.os==='ubuntu'?'ubuntu_password':'linux_password',windows?'New Administrator password':'New guest password','','password',
       'required minlength="12" maxlength="128" autocomplete="new-password"'):'')+
     (recipe.domain_name?wf('domain_name','New forest DNS name','','text','required maxlength="253" placeholder="lab.example.test"')+
@@ -66,6 +69,7 @@ function repeatGuidedBuild(recipe,reuse){
     },'Create '+(recipe.purpose==='template'?'template':'VM'));
     $('#manage-fields .build-review').append(reviewedLabExport(plan));
   },'Review build');
+  bindBuildLogin($('#manage-fields'));
 }
 
 function reviewRemaining(job,target){

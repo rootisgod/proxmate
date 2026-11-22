@@ -35,6 +35,8 @@ def download(db,decode,job_id,original):
     artifact=decode(row['value'])
     from job_queue import job_config
     payload=decode(row['payload'])
+    if original and 'build_credential_revision' in payload.get('plan',{}):
+        raise ValueError('Download the reusable answer file for a build using a shared Administrator password.')
     cfg=job_config(payload)
     manifest={'job':job_id,'machine':cfg.get('name'),'source':cfg.get('template',{}).get('name') or cfg.get('filename') or cfg.get('iso'),
               'edition_index':cfg.get('windows',{}).get('image_index') if cfg.get('source_kind')!='template' else None,

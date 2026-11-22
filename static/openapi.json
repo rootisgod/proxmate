@@ -74,9 +74,11 @@
         "additionalProperties": false,
         "description": "For an existing role supply exactly node and vmid. For a new role map applicable source and placement fields."
       },
+      "BuildCredentialDefault": {"type":"object","nullable":true,"required":["id","name","username"],"properties":{"id":{"type":"string"},"name":{"type":"string"},"username":{"type":"string"}}},
+      "BuildCredentialDefaults": {"type":"object","required":["windows","linux"],"properties":{"windows":{"$ref":"#/components/schemas/BuildCredentialDefault"},"linux":{"$ref":"#/components/schemas/BuildCredentialDefault"}}},
       "LabSecrets": {
         "type": "object",
-        "properties": {"password":{"type":"string","writeOnly":true,"format":"password"},"linux_password":{"type":"string","writeOnly":true,"format":"password"},"ssh_public_key":{"type":"string"},"github_username":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":"string","writeOnly":true,"format":"password"}},"credential_id":{"type":"string","description":"Select a compatible saved login only for an unbound existing VM."},"credential":{"type":"object","writeOnly":true,"description":"Inline guest login only for an unbound existing VM. Supply username, platform and the applicable password or private key.","properties":{"platform":{"type":"string"},"username":{"type":"string"},"password":{"type":"string","format":"password","writeOnly":true},"private_key":{"type":"string","format":"password","writeOnly":true},"become_password":{"type":"string","format":"password","writeOnly":true},"ca_pem":{"type":"string"}}}},
+        "properties": {"build_credential_id":{"type":"string","description":"Current destination build default, only for roles creating a new machine."},"password":{"type":"string","writeOnly":true,"format":"password"},"linux_password":{"type":"string","writeOnly":true,"format":"password"},"ssh_public_key":{"type":"string"},"github_username":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":"string","writeOnly":true,"format":"password"}},"credential_id":{"type":"string","description":"Select a compatible saved login only for an unbound existing VM."},"credential":{"type":"object","writeOnly":true,"description":"Inline guest login only for an unbound existing VM. Supply username, platform and the applicable password or private key.","properties":{"platform":{"type":"string"},"username":{"type":"string"},"password":{"type":"string","format":"password","writeOnly":true},"private_key":{"type":"string","format":"password","writeOnly":true},"become_password":{"type":"string","format":"password","writeOnly":true},"ca_pem":{"type":"string"}}}},
         "additionalProperties": false
       },
       "LabReview": {
@@ -1641,7 +1643,7 @@
       "get": {"summary":"Download an imported pack","description":"Returns its original ZIP bytes.","parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Download an imported pack","content":{"application/zip":{"schema":{"type":"string","format":"binary"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"}}}
     },
     "/api/simple/labs/plan": {
-      "post": {"summary":"Review a lab deployment","description":"Use discovered local source IDs and fresh credentials. Cloud and placement settings use guided defaults. Match any named Windows edition. Review lasts 30 minutes.","parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["pack_id"],"properties":{"pack_id":{"type":"string"},"bindings":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/LabBinding"}},"secrets":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/LabSecrets"}}},"additionalProperties":false}}}},"responses":{"200":{"description":"Review a lab deployment","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabReview"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}}
+      "post": {"summary":"Review a lab deployment","description":"Use discovered local source IDs and destination logins (a build default or separate login for each new role). Cloud and placement settings use guided defaults. Match any named Windows edition. Review lasts 30 minutes.","parameters":[{"name":"X-Proxmate-Server","in":"header","required":true,"schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["pack_id"],"properties":{"pack_id":{"type":"string"},"bindings":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/LabBinding"}},"secrets":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/LabSecrets"}}},"additionalProperties":false}}}},"responses":{"200":{"description":"Review a lab deployment","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LabReview"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"},"409":{"description":"Server disconnected or pin no longer matches"}}}
     },
     "/api/simple/labs/run": {
       "post": {
@@ -2102,7 +2104,7 @@
       ],
       "get": {
         "summary": "List saved records (tasks includes built-ins)",
-        "description": "Credential secrets are never returned. Schedules include last_status/last_job and public plan summary. Saved script bodies are visible to authenticated administrators.",
+        "description": "Credentials include is_build_default and indicators of saved material. Credential secrets are never returned. Schedules include last_status/last_job and public plan summary. Saved script bodies are visible to authenticated administrators.",
         "responses": {
           "200": {
             "description": "Record list",
@@ -2827,10 +2829,15 @@
         }
       }
     },
+    "/api/manage/credentials/defaults": {
+      "get": {"summary":"Read the dashboard-wide build logins","responses":{"200":{"description":"Windows and Linux defaults","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BuildCredentialDefaults"}}}}}},
+      "post": {"summary":"Set or clear the build login for one platform","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":["platform","credential_id"],"properties":{"platform":{"type":"string","enum":["windows","linux"]},"credential_id":{"type":"string","nullable":true}}}}}},
+        "responses":{"200":{"description":"Updated defaults","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BuildCredentialDefaults"}}}},"400":{"description":"Missing or incompatible build credential"}}}
+    },
     "/api/simple/options": {
       "get": {
         "summary": "Discover available build destinations, ISO media, Ubuntu releases and common features",
-        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 installer IDs ordered newest first. The ubuntu object lists suggested packages, firewall/update policies and install_sources. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. rocky_isos lists Rocky Linux 10 x86_64 DVD, Minimal and Boot images per destination. rocky_templates lists prepared Rocky templates. Also includes Windows media, programs and settings. destinations[].isos[] and local_isos[] contain windows_label, a display category inferred from the filename or null. Inspect actual editions before choosing an image.",
+        "description": "Discovers build destinations, ISO media and Ubuntu releases. Destinations include ubuntu_isos with Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 installer IDs ordered newest first. The ubuntu object lists suggested packages, firewall/update policies and install_sources. The ubuntu_templates list identifies stopped templates prepared by this ISO workflow. debian_isos lists compatible Debian 13 amd64 media on each destination, newest version first. debian_templates lists prepared Debian templates. rocky_isos lists Rocky Linux 10 x86_64 DVD, Minimal and Boot images per destination. rocky_templates lists prepared Rocky templates. Also includes Windows media, programs, settings and build_defaults (per-platform saved login summaries or null). destinations[].isos[] and local_isos[] contain windows_label, a display category inferred from the filename or null. Inspect actual editions before choosing an image.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -3026,7 +3033,7 @@
     "/api/simple/plan": {
       "post": {
         "summary": "Review a batch of new Windows Server, Ubuntu, Debian or Rocky Linux machines and software",
-        "description": "Review os, name, count, purpose and ordered tasks. Windows ISO builds require source, inspected edition and password. Windows template builds require a stopped generalized source template and new Administrator password. Ubuntu ISO installs support Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 and require a discovered source from simple/options. Rocky Linux 10 requires an x86-64-v3 node and accepts DVD, Minimal or Boot media or a prepared Rocky template. Minimal and Boot need guest DNS and HTTPS access to the version-matched Rocky repositories. Debian 13 installs accept ISO or template sources and default to the newest discovered compatible installer. Ubuntu cloud images remain available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
+        "description": "Review os, name, count, purpose and ordered tasks. Windows needs an Administrator password or the selected Windows build_credential_id. ISO installs require a source and inspected edition. Clones require a stopped generalized template. Ubuntu ISO installs support Ubuntu Server 22.04, 24.04 and 26.04 LTS amd64 and require a discovered source from simple/options. Rocky Linux 10 requires an x86-64-v3 node and accepts DVD, Minimal or Boot media or a prepared Rocky template. Minimal and Boot need guest DNS and HTTPS access to the version-matched Rocky repositories. Debian 13 installs accept ISO or template sources and default to the newest discovered compatible installer. Ubuntu cloud images remain available. Ubuntu reviews SSH fingerprints and optionally changes firewall and post-install background update settings. Placement and hardware overrides include node, storage, iso_storage, bridge, cores, memory in MB and disk in GiB. Review freezes the source identity, machine IDs, public keys, task bodies and inputs for 30 minutes. The response omits credentials.",
         "responses": {
           "200": {
             "description": "Successful; passwords/private keys omitted"
@@ -3074,6 +3081,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "build_credential_id": {"type":"string","description":"ID of the selected OS build default from simple/options. Omit for a separate login. Replaces the Windows password or supplies the Linux username and automation key. The review returns build_login with its name, username and shared flag."},
                   "reuse": {
                     "type": "object", "additionalProperties": false,
                     "oneOf": [{"required":["recipe_id"]},{"required":["job_id"]}],
@@ -4027,6 +4035,7 @@
       },
       "post": {
         "summary": "Download the exact original Windows answer files including credentials",
+        "description": "Available for separate build logins after explicit confirmation. For shared Administrator credentials only the reusable answer is downloadable via GET.",
         "parameters": [
           {
             "name": "job_id",

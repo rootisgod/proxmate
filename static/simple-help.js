@@ -1,4 +1,5 @@
 const guidedFieldHelp = {
+  build_credential_id: 'Uses the saved login selected in Credentials. Choose a separate login to give this build its own Windows password or Linux SSH key.',
   purpose: 'A working VM is ready to use after setup. A reusable template shuts down after setup so you can create new VMs from it.',
   name: 'Sets the VM name in Proxmox and the hostname inside the guest. Use up to 12 letters, numbers or hyphens.',
   count: 'Creates this many VMs with the same settings. Proxmate adds numbered suffixes such as -01 and -02.',

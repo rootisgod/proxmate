@@ -118,7 +118,7 @@ async function openPowerRun(operation,guests) {
   const targets=guests.map(({node,vmid})=>({node,vmid}));
   const loading=()=>{};
   mgDialog(label,'<p role="status">Checking target machines…</p>',loading,'Review');
-  $('#manage-submit').disabled=true;
+  setButtonBusy($('#manage-submit'),true);
   try{
     const plan=await api('manage/plan',{operation,targets});
     if(mgSave!==loading||!$('#manage-dialog').open)return;
@@ -145,7 +145,7 @@ async function openScriptRun(guests=[],taskId='',draft=null) {
   if(stopped)throw Error('Start '+(stopped.name||machineKey(stopped))+' before running a guest script.');
   const loading=()=>{};
   mgDialog('Run script','<p role="status">Checking machine logins and compatible scripts…</p>',loading,'Review run');
-  $('#manage-submit').disabled=true;
+  setButtonBusy($('#manage-submit'),true);
   const active=()=>mgSave===loading&&$('#manage-dialog').open;
   try{
     const [scripts,connections,credentials]=await Promise.all(['tasks','connections','credentials'].map(k=>api('manage/'+k)));
@@ -168,6 +168,7 @@ async function openScriptRun(guests=[],taskId='',draft=null) {
       draft?{...draft,os:platform||draft.os}:{os:platform,mode:'library',script:taskId,kind:'ansible',body:'',params:{}});
   }catch(err){
     if(active()){
+      $('#manage-submit').removeAttribute('aria-busy');
       $('#manage-fields').innerHTML='<button type="button" data-change-targets>Choose machines</button>';
       $('#manage-fields [data-change-targets]').onclick=()=>openScriptRun([],taskId);
       $('#manage-error').textContent=err.message;

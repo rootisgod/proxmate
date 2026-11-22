@@ -48,7 +48,9 @@ function serverRender(){
     d.verify_tls=form.elements.verify_tls.checked;d.replace_confirmed=!!form.elements.replace_confirmed?.checked;d.expected_id=s.id||null;
     return d;
   };
-  async function run(path,body,reset){
+  async function run(button,path,body,reset){
+    if(button.disabled)return;
+    setButtonBusy(button,true);
     const submittedRevision=draftRevision;
     const buttons=[...form.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);
     feedback.dataset.tone='pending';
@@ -63,11 +65,11 @@ function serverRender(){
         feedback.textContent=`Connection successful. Proxmox ${result.version} on ${result.nodes.join(', ')}. Draft settings have not been saved.`;
       }
     }catch(e){if(reset||submittedRevision===draftRevision){feedback.dataset.tone='error';feedback.textContent=e.message}}
-    finally{buttons.forEach(b=>b.disabled=false)}
+    finally{buttons.forEach(b=>b.disabled=false);setButtonBusy(button,false)}
   }
   form.oninput=()=>{draftRevision++;feedback.textContent=''};
-  form.onsubmit=e=>{e.preventDefault();run('server/connect',draft(),true)};
-  $('#server-test').onclick=()=>{if(form.reportValidity())run('server/test',draft(),false)};
-  if($('#server-disconnect'))$('#server-disconnect').onclick=()=>run('server/disconnect',{expected_id:s.id},true);
+  form.onsubmit=e=>{e.preventDefault();run(form.querySelector('[type=submit]'),'server/connect',draft(),true)};
+  $('#server-test').onclick=()=>{if(form.reportValidity())run($('#server-test'),'server/test',draft(),false)};
+  if($('#server-disconnect'))$('#server-disconnect').onclick=()=>run($('#server-disconnect'),'server/disconnect',{expected_id:s.id},true);
   return true;
 }

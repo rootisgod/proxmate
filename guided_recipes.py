@@ -101,6 +101,7 @@ def description(recipe):
     settings = recipe['settings']
     dc=next((s for s in settings.get('tasks',[]) if s['id']==DOMAIN_CONTROLLER),None)
     return dict(os=settings['os'], purpose=settings['purpose'], source_kind=settings['source_kind'],
+                **({'username':settings['username']} if 'username' in settings else {}),
                 **({'domain_name':dc['params']['domain_name']} if dc else {}),
                 edition=recipe['edition'], password_login=recipe['password_login'],needs_key_source=recipe['needs_key_source'])
 
@@ -127,7 +128,7 @@ class GuidedRecipes:
 
     def expand(self, draft):
         recipe = self.lookup(draft['reuse'])
-        allowed = {'name', 'count', 'password', 'ubuntu_password', 'linux_password', 'generalized'}
+        allowed = {'name', 'count', 'password', 'ubuntu_password', 'linux_password', 'generalized','build_credential_id'}
         tasks=copy.deepcopy(recipe['settings'].get('tasks',[]))
         for task in tasks:
             if task['id']==DOMAIN_CONTROLLER:
@@ -142,7 +143,7 @@ class GuidedRecipes:
             raise ValueError('Supply a new name, quantity and login for this saved build.')
         settings = {**recipe['settings'], **{k:v for k,v in draft.items() if k in allowed-{'domain_name','dsrm_password'}}, 'tasks':tasks}
         password = settings.get('password') if settings['os']=='windows' else linux_access.requested_password(settings,settings['os'])
-        if recipe['password_login'] and not password:
+        if recipe['password_login'] and not password and not (settings['os']=='windows' and settings.get('build_credential_id')):
             raise ValueError('Enter a fresh guest password for this build.')
         return settings, recipe
 

@@ -25,6 +25,20 @@ async function api(path,body,extraHeaders={},responseType='json'){
   return data;
 }
 function notice(message){$('#notice').textContent=message;$('#notice').hidden=false}
+
+function setButtonBusy(button,busy){
+  button.disabled=busy;
+  if(busy)button.setAttribute('aria-busy','true');
+  else button.removeAttribute('aria-busy');
+}
+
+async function withBusyButton(button,work){
+  if(button.disabled || button.hasAttribute('aria-busy'))return;
+  setButtonBusy(button,true);
+  try{return await work()}
+  finally{setButtonBusy(button,false)}
+}
+
 let refreshVersion=0;
 function needsInventoryDetails(){
   return ['overview','templates','backups','ansible','tasks','recipes','recovery','versions'].includes(view) ||
@@ -126,7 +140,7 @@ async function openMediaTool(filename,node,advanced){
   try{
     const inventory=await api('state');
     if(server!==serverInfo?.id||view!=='media')return;
-    if(!inventory.details[node])throw Error('The selected node is unavailable. Refresh the ISO library.');
+    if(!inventory.details[node])throw Error('The selected Proxmox server is unavailable. Refresh the ISO library.');
     state=inventory;
     if(advanced)await openWizard('linux-iso',filename,'vm',node);
     else openAction('upload-iso',null,filename,node);
@@ -167,7 +181,7 @@ $('#content').innerHTML=html;document.querySelectorAll('nav button').forEach(b=>
 function options(items,value,label){return items.map(x=>`<option value="${esc(value(x))}">${esc(label(x))}</option>`).join('')}
 function select(name,label,items){return `<label>${label}<select name="${name}" required>${items}</select></label>`}
 function input(name,label,value,type='text'){return `<label>${label}<input name="${name}" value="${esc(value)}" type="${type}" required></label>`}
-function openAction(a,id,filename,selectedNode){if(!state)return;action=a;fixed={};const guest=state.resources.find(r=>r.vmid===Number(id));const node=selectedNode||guest?.node||state.nodes.find(n=>n.status==='online')?.node;const detail=state.details[node];if(!detail){notice('No online node available');return}let f=select('node','Proxmox node',options(state.nodes.filter(n=>n.status==='online'),x=>x.node,x=>x.node));
+function openAction(a,id,filename,selectedNode){if(!state)return;action=a;fixed={};const guest=state.resources.find(r=>r.vmid===Number(id));const node=selectedNode||guest?.node||state.nodes.find(n=>n.status==='online')?.node;const detail=state.details[node];if(!detail){notice('No online Proxmox server is available.');return}let f=select('node','Proxmox server',options(state.nodes.filter(n=>n.status==='online'),x=>x.node,x=>x.node));
 const storage=()=>select('storage','VM storage',options(detail.storage.filter(s=>s.active&&s.content.split(',').includes('images')),s=>s.storage,s=>s.storage));
 const vm=()=>select('vmid','Virtual machine',options(state.resources.filter(r=>r.type==='qemu'&&!r.template&&r.node===node),r=>r.vmid,r=>`${r.vmid} · ${r.name}`));
 if(['linux-template','installer','clone'].includes(a)){f+=input('vmid','New VM ID',state.next_id,'number')+input('name','Name',a==='linux-template'?'proxmate-ubuntu-2404':'my-new-vm')+storage()+input('cores','CPU cores',2,'number')+input('memory','Memory (MB)',a==='installer'?4096:2048,'number');}
@@ -180,9 +194,14 @@ if(['backup','convert-template','finish-setup','start'].includes(a))f+=vm();
 if(a==='backup')f+=select('backup_storage','Backup destination',options(detail.storage.filter(s=>s.active&&s.content.split(',').includes('backup')),s=>s.storage,s=>s.storage));
 if(a==='finish-setup')f+='<div class="wide"><p>This detaches and deletes only the Proxmate-generated answer ISO attached to the stopped VM. Remove Windows cached answer files and rotate the setup password before sharing a template.</p><label><input type="checkbox" name="prepared" required>Installation has finished and this VM is shut down. Remove its generated answer media.</label></div>';
 if(a==='convert-template')f+='<div class="wide"><p>Template conversion changes this VM into a reusable source. For Windows, run Sysprep /generalize /oobe /shutdown first. For Linux, clean machine identity and cloud-init state, then shut down.</p><label><input type="checkbox" name="prepared" required>I have generalized and shut down this guest.</label></div>';
-if(a==='upload-iso'){fixed.filename=filename;f+=select('storage','ISO destination',options(detail.storage.filter(s=>s.active&&s.content.split(',').includes('iso')),s=>s.storage,s=>s.storage))+`<p class="wide">${esc(filename)}</p>`}
+if(a==='upload-iso'){
+  fixed.filename=filename;
+  f='<p class="wide">Copy <strong>'+esc(filename)+'</strong> from the Proxmate ISO folder to the storage below. The original stays in the folder.</p>'+f+
+    select('storage','Destination ISO storage',options(detail.storage.filter(s=>s.active&&s.content.split(',').includes('iso')),s=>s.storage,s=>s.storage));
+}
+$('#action-form .modal-footer button').textContent=a==='upload-iso'?'Copy ISO':'Run operation →';
 if(a==='ansible')f+=select('target','Run against','<option value="custom">Custom inventory</option><option value="proxmox">Proxmox HYPERVISOR (advanced)</option>')+'<label class="wide">Inventory<textarea name="inventory" required>[lab]\n# 192.168.1.50 ansible_user=ubuntu</textarea></label><label class="wide">Playbook<textarea name="playbook" required rows="12">---\n- name: Check connectivity\n  hosts: all\n  gather_facts: false\n  tasks:\n    - name: Ping guests\n      ansible.builtin.ping:</textarea></label>';
-$('#fields').innerHTML='<div class="form-grid">'+f+'</div>';$('#form-title').textContent={'linux-template':'Create Ubuntu template',installer:'Create installer VM',clone:'Clone a template',backup:'Take a backup','convert-template':'Convert to template',ansible:'Run Ansible playbook','upload-iso':'Upload ISO',start:'Start virtual machine','finish-setup':'Remove generated answer media'}[a];$('#form-error').textContent='';$('#action-form [name=node]').value=node;if(id){const field=$(`#action-form [name=${a==='clone'?'source':'vmid'}]`);if(field)field.value=id}$('#action-form [name=node]').onchange=e=>{const chosen=e.target.value;$('#editor').close();openAction(a,null,filename,chosen)};$('#editor').showModal();}
+$('#fields').innerHTML='<div class="form-grid">'+f+'</div>';$('#form-title').textContent={'linux-template':'Create Ubuntu template',installer:'Create installer VM',clone:'Clone a template',backup:'Take a backup','convert-template':'Convert to template',ansible:'Run Ansible playbook','upload-iso':'Copy ISO to Proxmox storage',start:'Start virtual machine','finish-setup':'Remove generated answer media'}[a];$('#form-error').textContent='';$('#action-form [name=node]').value=node;if(id){const field=$(`#action-form [name=${a==='clone'?'source':'vmid'}]`);if(field)field.value=id}$('#action-form [name=node]').onchange=e=>{const chosen=e.target.value;$('#editor').close();openAction(a,null,filename,chosen)};$('#editor').showModal();}
 async function readJobLog(log){
   if(log.dataset.loading)return;
   log.dataset.loading='true';
@@ -230,7 +249,8 @@ $('#editor').addEventListener('close',()=>$('.modal-footer').hidden=false);
 $('#close').onclick=()=>$('#editor').close();
 $('#refresh').onclick=async()=>{
   const button=$('#refresh'),page=view,server=serverInfo?.id;
-  button.disabled=true;
+  if(button.disabled)return;
+  setButtonBusy(button,true);
   try{
     await refresh();
     if(view!==page||server!==serverInfo?.id)return;
@@ -238,11 +258,33 @@ $('#refresh').onclick=async()=>{
     else if(view==='media')$('.media-refresh')?.click();
     else if(mg&&[...managementViews,'scripts'].includes(view)){await loadManagement();render()}
   }catch(error){notice(error.message)}
-  finally{button.disabled=false}
+  finally{setButtonBusy(button,false)}
 };
 $('#logout').onclick=async()=>{await api('logout',{});location.reload()};
-$('#login-form').onsubmit=async e=>{e.preventDefault();try{const r=await api('login',{password:new FormData(e.target).get('password')});csrf=r.csrf;$('#login').close();e.target.reset();$('#notice').hidden=true;await refresh()}catch(err){$('#login-error').textContent=err.message}};
-$('#action-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const d={action,...fixed,...Object.fromEntries(new FormData(e.target))};if(!d.ssh_key)delete d.ssh_key;if(d.prepared)d.prepared=true;if(d.host_confirmed)d.host_confirmed=true;await api('jobs',d);$('#editor').close();view='jobs';notice('Operation queued. Follow its progress below.');await refresh()}catch(err){$('#form-error').textContent=err.message}finally{b.disabled=false}};
+$('#login-form').onsubmit=async e=>{
+  e.preventDefault();
+  const form=e.currentTarget;
+  await withBusyButton(form.querySelector('button'),async()=>{
+    try{
+      const r=await api('login',{password:new FormData(form).get('password')});
+      csrf=r.csrf;$('#login').close();form.reset();$('#notice').hidden=true;await refresh();
+    }catch(err){$('#login-error').textContent=err.message}
+  });
+};
+$('#action-form').onsubmit=async e=>{
+  e.preventDefault();
+  const form=e.currentTarget,button=e.submitter||form.querySelector('.modal-footer button');
+  await withBusyButton(button,async()=>{
+    try{
+      const d={action,...fixed,...Object.fromEntries(new FormData(form))};
+      if(!d.ssh_key)delete d.ssh_key;
+      if(d.prepared)d.prepared=true;
+      if(d.host_confirmed)d.host_confirmed=true;
+      await api('jobs',d);
+      $('#editor').close();view='jobs';notice('Operation queued. Follow its progress below.');await refresh();
+    }catch(err){$('#form-error').textContent=err.message}
+  });
+};
 async function startDashboard(){view=workspaceRoute()||view;try{csrf=(await api('session')).csrf;await refresh()}catch{if(!$('#login').open)$('#login').showModal()}}
 if(document.readyState==='complete')startDashboard();else document.addEventListener('DOMContentLoaded',startDashboard,{once:true});
 let polling=false,lastInventoryRead=Date.now();

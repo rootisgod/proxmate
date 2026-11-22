@@ -97,7 +97,7 @@ def start_trace():
 
 @app.before_request
 def protect():
-    if request.path in ('/', '/api/health', '/api/openapi.json', '/api/docs') or request.path.startswith('/static/'):
+    if request.path in ('/', '/help', '/api/health', '/api/openapi.json', '/api/docs') or request.path.startswith('/static/'):
         return
     if request.method=='POST' and request.path=='/api/simple/labs/import':
         request.max_content_length=3*1024*1024
@@ -231,6 +231,8 @@ def job_view(row, detail_db=None):
         plan=payload.get('plan',{})
         result['operation']=plan.get('operation',payload['action'])
         target=plan.get('config',plan)
+        if payload['action']=='simple' and target.get('kind')=='windows' and 'build_credential_revision' in plan:
+            result['reusable_answer_only']=True
         result['target']={k:target[k] for k in ('node','vmid','name','label','archive') if k in target}
         if payload['action']=='simple' and target.get('kind')=='ubuntu-iso':
             result['has_autoinstall']=True
@@ -404,6 +406,8 @@ def run_next_job():
         revision=None
         if not wait and config.get('bootstrap',{}).get('verify'):
             revision=manager.get('credentials',config['bootstrap']['credential_id'])['updated']
+            if payload.get('plan',{}).get('build_credential_revision',revision)!=revision:
+                raise ValueError('The saved build credential changed after review. Review the build again.')
         if wait:
             if not resume_guest(row,wait,payload,log): return True
         elif payload['action']=='winrm-setup': winrm_setup.execute(manager,payload,log)
@@ -491,6 +495,11 @@ def openapi():
 
 @app.get('/api/docs')
 def docs(): return send_from_directory('static', 'api.html')
+
+
+@app.get('/help')
+def help_page():
+    return send_from_directory('static', 'help.html')
 
 
 from management import connection_recovery_targets, register

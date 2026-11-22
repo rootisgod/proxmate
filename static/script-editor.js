@@ -241,7 +241,7 @@ function editScript(record={}) {
   }
   async function check() {
     const current = version, id = ++request;
-    status.textContent = 'Checking…'; status.className = ''; checkButton.disabled=true;
+    status.textContent = 'Checking…'; status.className = ''; setButtonBusy(checkButton,true);
     try {
       const result = await api('manage/tasks/check',{platform:platform.value,kind:kind.value,body:body.value});
       if (!active() || current!==version || id!==request) return false;
@@ -261,7 +261,7 @@ function editScript(record={}) {
         status.className='code-error'; status.textContent=error.message;
       }
       return false;
-    } finally { if (id===request) checkButton.disabled=false; }
+    } finally { if (id===request) setButtonBusy(checkButton,false); }
   }
   updateFormat();
   form.oninput=edited;

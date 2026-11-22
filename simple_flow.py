@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from flask import jsonify,request
 
 import management
+import build_credentials
 import media
 import diagnostics
 from guided_recipes import GuidedRecipes, specification
@@ -131,6 +132,7 @@ class SimpleFlow:
     def options(self, inv=None, *, include_templates=True):
         if inv is None: inv=operations.inventory(include_backups=False)
         options=discovery(inv)
+        options['build_defaults']=build_credentials.defaults(self.m)
         if include_templates:
             builds=linux_install.template_builds(self.m)
             options.update(linux_install.templates(builds,inv['resources']))
@@ -265,12 +267,22 @@ class SimpleFlow:
         requested_tasks=[dict(id=s['item']['id'],params=public_params(s)) for s in selections]
         if any(t['item']['platform']!=('windows' if os=='windows' else 'linux') for t in selections):
             raise ValueError('Choose scripts for the selected operating system')
-        credential=dict(id=uuid.uuid4().hex,name=prefix+' login',platform='windows' if os=='windows' else 'linux')
-        public_key='';inspected=None;edition=None;personal_keys=[];password_task=None
+        platform='windows' if os=='windows' else 'linux'
+        saved_id=d.get('build_credential_id','')
+        if saved_id!='':
+            credential,public_key=build_credentials.selected(self.m,platform,saved_id)
+            if platform=='windows' and d.get('password'):
+                raise ValueError('Choose the saved Administrator login or enter a new password for this build.')
+            if platform=='linux' and 'username' in d and d['username']!=credential['username']:
+                raise ValueError('The Linux login name must match the selected build credential.')
+        else:
+            credential=dict(id=uuid.uuid4().hex,name=prefix+' login',platform=platform)
+            public_key=''
+        inspected=None;edition=None;personal_keys=[];password_task=None
         if os=='windows':
             if management.boolean(d.get('manual_updates',False)):
                 selections=[{'item':self.m.task('windows-manual-updates'),'params':{}}]+selections
-            credential.update(username='Administrator',password=d.get('password',''))
+            if not saved_id: credential.update(username='Administrator',password=d.get('password',''))
             if not credential['password']: raise ValueError('Set an Administrator password so software can be installed automatically')
             if cloning:
                 template=windows_build.review_template(self.life,dest,d)
@@ -329,14 +341,12 @@ class SimpleFlow:
                     install_source=d.get('ubuntu_install_source','ubuntu-server')
                     if not isinstance(install_source,str) or install_source not in inspected['install_sources']:
                         raise ValueError('Choose a Server installation image available on the selected Ubuntu ISO.')
-            if not isinstance(d.get('username',os),str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',d.get('username',os)): raise ValueError('Choose a Linux login name using lowercase letters, numbers, underscores or hyphens')
-            if d.get('username') in ('root','daemon','bin','sys','sync','games','man','lp','mail','news','uucp','proxy','www-data','backup','list','irc','_apt','nobody','messagebus','systemd-network','systemd-timesync','sshd'):
-                raise ValueError('Choose a Linux login name other than a system account.')
+            username=credential['username'] if saved_id else build_credentials.linux_username(d.get('username',os))
             password=linux_access.requested_password(d,os)
             if password != '':
                 if purpose!='vm':
                     raise ValueError('Choose a password for a working Linux VM or when cloning its template.')
-                password_task=linux_access.password_login(d.get('username',os),password,os)
+                password_task=linux_access.password_login(username,password,os)
             personal=d.get('ssh_public_key','')
             if not isinstance(personal,str) or len(personal)>8192:
                 raise ValueError('Enter one OpenSSH public key from your workstation.')
@@ -348,11 +358,12 @@ class SimpleFlow:
                 progress('github_keys')
                 personal_keys.extend(linux_access.github_keys(github.strip()))
             personal_keys=list(dict.fromkeys(personal_keys))
-            key=ed25519.Ed25519PrivateKey.generate()
-            public_key=key.public_key().public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).decode()
+            if not saved_id:
+                key=ed25519.Ed25519PrivateKey.generate()
+                public_key=key.public_key().public_bytes(serialization.Encoding.OpenSSH,serialization.PublicFormat.OpenSSH).decode()
+                credential.update(username=username,private_key=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.OpenSSH,serialization.NoEncryption()).decode(),password='')
             public_key='\n'.join([public_key,*personal_keys])
             if len(public_key)>16000: raise ValueError('Too many SSH public keys. Paste one key.')
-            credential.update(username=d.get('username',os),private_key=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.OpenSSH,serialization.NoEncryption()).decode(),password='')
             if os=='ubuntu': selections=ubuntu_build.setting_tasks(d)+selections
             if password_task: selections.append(password_task)
         selections=windows_setup.select(d.get('windows_settings',[]),selections,self.m,platform=os,purpose=purpose,
@@ -445,7 +456,7 @@ class SimpleFlow:
                    +sum(disk['size'] for disk in c.get('data_disks',[])) for c in placement)
         if available is not None and needed*1073741824>available:
             raise ValueError('Not enough free disk space for this batch. Reduce the quantity or choose a storage with more space under Placement and hardware.')
-        plan=dict(operation='simple-build',configs=configs,credential=credential,tasks=selections,purpose=purpose,
+        plan=dict(operation='simple-build',configs=configs,credential={k:credential[k] for k in ('id','updated')} if saved_id else credential,tasks=selections,purpose=purpose,
             source=source if linux_iso else d.get('source','') if os=='windows' else profile,media_identity=inspected['identity'] if inspected else None,
             edition=template['name'] if cloning or linux_clone else edition['label'] if edition else inspected['release'] if linux_iso else PROFILES[profile]['label'],dangerous=any(t['item'].get('dangerous') for t in selections))
         if os=='ubuntu' and linux_iso:
@@ -455,6 +466,7 @@ class SimpleFlow:
             raise ValueError('The saved installation source changed. Review the new source in the Create wizard.')
         plan['recipe']=recipe
         return plan,dict(machines=[{k:c[k] for k in ('vmid','name','node','memory','cores','disk','storage','bridge')} for c in configs],
+            build_login=dict(name=credential['name'],username=credential['username'],shared=bool(saved_id)),
             edition=plan['edition'],purpose=purpose,tasks=[{'name':t['item']['name'],'params':public_params(t),'dangerous':bool(t['item'].get('dangerous'))} for t in selections],dangerous=plan['dangerous'],
             rdp=bool(configs[0].get('windows',{}).get('rdp')),clone_mode=template['mode'] if cloning or linux_clone else None,data_disks=[{k:v for k,v in disk.items() if k in ('size','label','letter')} for disk in configs[0].get('data_disks',[])],
             remote_access='HTTPS WinRM' if os=='windows' else ('SSH with workstation keys' if personal_keys else 'SSH'),
@@ -494,6 +506,10 @@ class SimpleFlow:
             jobs.append({'id':ident,'name':cfg['name'],'url':'/api/jobs/'+ident})
             if con.execute('SELECT 1 FROM jobs WHERE id=?', (ident,)).fetchone():
                 continue
+            if 'updated' in credential:
+                row=con.execute("SELECT value FROM records WHERE kind='credentials' AND id=?",(credential['id'],)).fetchone()
+                if not row or self.m.decode(row['value'])['updated']!=credential['updated']:
+                    raise ValueError('The saved build credential changed or was removed. Review the build again.')
             if cfg['vmid'] in reserved_ids or cfg['name'].lower() in reserved_names:
                 raise ValueError('Another job reserved this machine name or VM ID. Review the build again.')
             require_unbound_target(con,cfg)
@@ -502,11 +518,12 @@ class SimpleFlow:
                 windows_build.check_iso_disk_letters(cfg.get('data_disks', []))
             execution={k:plan[k] for k in ('tasks','purpose','source','media_identity')}
             execution.update(operation='build '+cfg['name'],config=cfg,edition=plan.get('edition'))
+            if 'updated' in credential: execution['build_credential_revision']=credential['updated']
             if plan.get('recipe'): execution['recipe']=plan['recipe']
             payload=dict(action='simple',server_id=server_id,plan=execution,name=cfg['name'],node=cfg['node'],vmid=cfg['vmid'])
             if lab_run_id: payload['lab_run_id']=lab_run_id
             con.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?)',(ident,'simple','queued',time.time(),time.time(),self.m.encode(payload),'Queued: create, prepare remote access, install software.'))
-        if not con.execute('SELECT 1 FROM records WHERE kind=? AND id=?', ('credentials', credential['id'])).fetchone():
+        if 'updated' not in credential and not con.execute('SELECT 1 FROM records WHERE kind=? AND id=?', ('credentials', credential['id'])).fetchone():
             saved = self.m.prepare('credentials', credential)
             con.execute('INSERT INTO records VALUES (?,?,?)', ('credentials', saved['id'], self.m.encode(saved)))
         return jobs

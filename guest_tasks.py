@@ -212,7 +212,7 @@ def run_guest(binding, credential, tasks, log, readiness=False):
                             ansible_become_password=credential.get('become_password') or credential.get('password', ''),
                             ansible_python_interpreter='auto_silent')
             if credential.get('private_key'):
-                hostvars['ansible_ssh_private_key_file'] = write('private_key', credential['private_key'])
+                hostvars['ansible_ssh_private_key_file'] = write('private_key', credential['private_key'].strip().replace('\r\n','\n')+'\n')
         inv = write('inventory.yml', yaml.safe_dump({'all': {'children': {'proxmate_guests': {'hosts': {'guest': hostvars}}}}}))
         if readiness:
             tasks = [{'name': 'Authenticate and check guest runtime', ('ansible.windows.win_ping' if binding['platform'] == 'windows' else 'ansible.builtin.ping'): {}}]

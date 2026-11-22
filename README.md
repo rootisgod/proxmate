@@ -4,7 +4,15 @@ A Docker-hosted LAN dashboard and HTTP API for Proxmox. Single-administrator acc
 
 See [project status](STATUS.md) for the deployed revision, live checks and remaining acceptance tests.
 
-## Run
+## Install a released container
+
+Download `compose.yaml` from a [Proxmate release](https://github.com/rootisgod/proxmate/releases). It selects the tested Linux amd64 image in GitHub Container Registry by version and digest. This repository and its release image are private. An authorized account can install the dashboard without cloning the project or building an image.
+
+On an existing Proxmox cluster, follow [Install Proxmate in a Debian LXC](docs/install-proxmox-lxc.md). The guide covers creating an unprivileged container, installing Docker, signing in to the private registry, connecting the dashboard and upgrading with persistent data. On a Linux Docker host or Debian VM with Compose, start at **Install Proxmate** in the same guide.
+
+Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management, values shared between machines and dashboard backup and restore.
+
+## Run from source
 
 Docker Compose is required. Copy `.env.example` to `.env`, set your ISO directory, and create `.env.admin` containing a separate, strong password for the Proxmate dashboard. This ignored file is mounted as a Docker secret. A Proxmox password file is no longer required for a new installation.
 
@@ -13,6 +21,8 @@ docker compose up -d --build
 ```
 
 Open **http://localhost:8088** (or `http://YOUR-DOCKER-HOST:8088` from your LAN), and sign in with `.env.admin`. Use `PORT` in `.env` to change the host port. The container always listens on 8080. Allow LAN traffic through your host firewall as appropriate.
+
+Choose **Help** above **API documentation** in the sidebar for step-by-step homelab guides. Open it alongside a build to follow the Windows, Linux, Ansible and reusable lab examples. [Open Help on the default local dashboard](http://localhost:8088/help).
 
 Choose **Server settings** in the sidebar. Enter the HTTPS address, username including realm (for example `root@pam`) and password. **Test connection** checks API authentication and visible nodes without saving. **Save & connect** tests again and stores the connection encrypted in the data volume. Passwords are never returned by the API; a blank password retains the existing value only for the same address and username. TLS verification defaults on; explicitly uncheck it only for a trusted LAN server with a self-signed certificate. HTTPS is required. SSH fingerprint and username are separate optional settings; verify the SHA256 fingerprint independently from the server console. Linux image builds and advanced hypervisor scripts require SSH access using the saved password. The connection test checks the HTTPS API only.
 
@@ -28,7 +38,7 @@ Choose **System**, **Light** or **Dark** in the top bar. System follows the devi
 
 **Inventory** shows discovered VMs and templates. **Create machine** starts a guided build. **Script library** is the place to create, edit and inspect scripts. Open **Run scripts** to apply an ordered sequence to existing guests. The same step picker in builds and labs lets you search compatible scripts, use them more than once and set inputs for each occurrence.
 
-**ISO library** lists mounted files and the selected Proxmox node’s ISO storage. **Check installers** inspects up to one candidate per supported OS. Individual files can also be checked, including the Windows editions and their guest-tools compatibility. Start a build from the checked file to carry its node and media choices across.
+**ISO library** lists files in the Proxmate ISO folder and ISO storage available to the selected Proxmox server. Choose **Copy to Proxmox storage…** to copy a file ahead of time. Guided builds copy installers when needed. **Check installers** inspects up to one candidate per supported OS. Individual files can also be checked, including the Windows editions and their guest-tools compatibility. Start a build from the checked file to carry its node and media choices across.
 
 ### Create and share a lab
 
@@ -42,7 +52,7 @@ Add a **Saved build** to reuse its reviewed settings and frozen steps. Use **Edi
 
 Choose **Download ZIP** to share the saved lab. Each pack includes a readable `lab.yaml` with machine definitions, dependencies and ordered tasks. Custom Ansible, PowerShell and shell scripts travel inside the pack. ZIP import and export from a guided build review or job log are also available.
 
-On another dashboard, import the pack, inspect the scripts, choose local media or templates and enter fresh guest credentials. Review the destination names, VM IDs and software together before you deploy. Open the lab run to follow each machine. Saved imports can be downloaded again or reviewed for another deployment. The [lab pack specification and example](static/lab-packs.md) cover the file format, supported guest tasks and execution rules.
+On another dashboard, import the pack, inspect the scripts, choose local media or templates and select guest logins for that destination. Review the destination names, VM IDs and software together before you deploy. Open the lab run to follow each machine. Saved imports can be downloaded again or reviewed for another deployment. The [lab pack specification and example](static/lab-packs.md) cover the file format, supported guest tasks and execution rules.
 
 ### Saved builds and recovery
 
@@ -50,11 +60,13 @@ Choose **Save this build** at the review step to give a Windows, Ubuntu, Debian 
 
 If guest software fails during a build or an Operations run, open its job in **Activity** and choose **Review remaining tasks** beside the affected VM. The review shows the saved login, the original task versions and inputs, and any snapshot or template preparation the run will perform. Inspect a task marked as already started before approving it again, especially after a timeout. Each recovery gets its own job linked to the earlier run. Recovery requires a recorded task checkpoint and the original VM and disks. Installation and template-generalization failures still need inspection.
 
+**Credentials ? Defaults for new machines** pins one optional login per platform. Choose an existing local Administrator credential for Windows or an SSH private-key credential for Linux. Create machine, template clones, saved builds and lab deployments preselect compatible defaults. Choose a separate login in an individual build or clear the platform default to return to a separate login per build. Changes apply to future builds. Editing a shared credential in the library updates the login Proxmate uses for every linked machine. Guest passwords and authorized keys must be rotated inside those machines separately.
+
 For a guided Ubuntu, Debian or Rocky VM, paste your workstation’s **public** SSH key in Machine details if you want to sign in from your own terminal. Proxmate also installs a separate automation key. A successful VM build offers **Open desktop** for RDP-enabled Windows or **Copy SSH command** for Linux in the completion notification. The machine page also offers these actions for running guests. The dashboard checks the guest identity and current address on click. Open the downloaded `.rdp` file with your Remote Desktop client and sign in there. The SSH shortcut uses your local SSH client and keys.
 
 ### Rocky Linux 10
 
-In **Create machine**, choose **Rocky Linux** for a working VM or a reusable template. Proxmate discovers Rocky 10 x86_64 DVD, Minimal and Boot ISOs and checks the node's CPU. Boot installs from the matching online Rocky BaseOS and AppStream repositories. Minimal uses its local packages and supplements them from those repositories for guest tools. Both need guest DNS and HTTPS access to Rocky’s mirror list and its regional mirrors during installation. Enter a name, add optional SSH keys or password sign-in, and choose packages or scripts. Rocky starts with SELinux enforcing and SSH allowed through firewalld. Download the reusable Kickstart file from the ISO job. For another machine, choose the prepared template and review a full copy with fresh login keys. Run later scripts under **Inventory**.
+In **Create machine**, choose **Rocky Linux** for a working VM or a reusable template. Proxmate discovers Rocky 10 x86_64 DVD, Minimal and Boot ISOs and checks the node's CPU. Boot installs from the matching online Rocky BaseOS and AppStream repositories. Minimal uses its local packages and supplements them from those repositories for guest tools. Both need guest DNS and HTTPS access to Rocky’s mirror list and its regional mirrors during installation. Enter a name, add optional SSH keys or password sign-in, and choose packages or scripts. Rocky starts with SELinux enforcing and SSH allowed through firewalld. Download the reusable Kickstart file from the ISO job. For another machine, choose the prepared template and review a full copy with its selected guest login. Run later scripts under **Inventory**.
 
 To repeat the four-guest acceptance test on a lab node, use the command in the Debian section with the exact Rocky ISO ID and append `--os rocky`.
 

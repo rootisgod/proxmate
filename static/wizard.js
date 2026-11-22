@@ -128,12 +128,12 @@ function wizardPayload() {
   return result;
 }
 
-document.addEventListener('click',e=>{const b=e.target.closest('[data-wizard]');if(b)openWizard(b.dataset.wizard||'linux-cloud',b.dataset.filename||'',b.dataset.purpose||'vm');});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-wizard]');if(b)withBusyButton(b,()=>openWizard(b.dataset.wizard||'linux-cloud',b.dataset.filename||'',b.dataset.purpose||'vm'));});
 $('#wizard-close').onclick=()=>$('#wizard').close();
 $('#wizard').addEventListener('close',()=>{wizard=null;$('#wizard-fields').replaceChildren();});
 $('#wizard-back').onclick=()=>{collectWizard();wizard.step--;showWizardStep();};
 $('#wizard-form').onsubmit=async e=>{
-  e.preventDefault();const activeWizard=wizard;const button=$('#wizard-next');button.disabled=true;$('#wizard-back').disabled=true;$('#wizard-close').disabled=true;
+  e.preventDefault();const activeWizard=wizard;const button=$('#wizard-next');if(button.disabled)return;setButtonBusy(button,true);$('#wizard-back').disabled=true;$('#wizard-close').disabled=true;
   try {
     collectWizard();
     if(wizard.step===0&&wizard.draft.kind!=='linux-cloud'&&!wizard.draft[wizard.draft.source_kind==='local'?'filename':'iso'])throw Error('No ISO is available in this source. Choose another source or add an ISO to the library.');
@@ -145,7 +145,7 @@ $('#wizard-form').onsubmit=async e=>{
       const data=await response.json();if(!response.ok)throw Error(data.error||'Submission failed');
       $('#wizard').close();view='jobs';notice('Provisioning queued. Installer preparation does not mean the OS installation is complete.');await refresh();
     }else{wizard.step++;showWizardStep();}
-  }catch(error){$('#wizard-error').textContent=error.message;}finally{button.disabled=false;$('#wizard-back').disabled=false;$('#wizard-close').disabled=false;}
+  }catch(error){$('#wizard-error').textContent=error.message;}finally{setButtonBusy(button,false);$('#wizard-back').disabled=false;$('#wizard-close').disabled=false;}
 };
 $('#wizard-download').onclick=async()=>{
   try{

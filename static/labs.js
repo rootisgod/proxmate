@@ -11,13 +11,13 @@ function labStep(title, html, next, progress, submit, validate) {
   form.noValidate = !!validate;
   $('#lab-title').textContent = title;
   $('#lab-next').textContent = next;
-  $('#lab-next').disabled = false;
+  setButtonBusy($('#lab-next'),false);
   $('#lab-status').textContent = '';
   $('#lab-error').textContent = '';
   form.onsubmit = async event => {
     event.preventDefault();
     if ($('#lab-next').disabled || (validate && !validate(fields))) return;
-    $('#lab-next').disabled = true;
+    setButtonBusy($('#lab-next'),true);
     fields.inert = true;
     $('#lab-error').textContent = '';
     $('#lab-status').textContent = progress;
@@ -26,7 +26,7 @@ function labStep(title, html, next, progress, submit, validate) {
     finally {
       if (labActive(fields)) {
         fields.inert = false;
-        $('#lab-next').disabled = false;
+        setButtonBusy($('#lab-next'),false);
         $('#lab-status').textContent = '';
       }
     }
@@ -218,7 +218,7 @@ async function loadLabEditions(slot, node, source, hint) {
     field.append(message,buildButton('Retry edition check', () => loadLabEditions(slot,node,source,hint)));
   }
 }
-function labAccess(machine) {
+function labAccess(machine, defaults) {
   const password = (name, label, required) => wf(name, label, '', 'password',
     (required ? 'required ' : '') + 'minlength="12" maxlength="128" autocomplete="new-password"');
   const windows = machine.os === 'windows';
@@ -229,7 +229,7 @@ function labAccess(machine) {
     wf('ssh_public_key', 'Workstation SSH public key' + keyLabel, '', 'text', 'maxlength="8192" autocomplete="off"') +
     wf('github_username', 'GitHub account for SSH keys' + keyLabel, '', 'text', 'maxlength="39" autocomplete="off"') +
     (settings.purpose === 'template' ? '' : password('linux_password', settings.password_login ? 'New guest password' : 'New guest password (optional)', settings.password_login));
-  return '<div class="form-grid lab-access">' + fields + labPrompts(machine) + '</div>';
+  return '<div class="form-grid lab-access">' + buildLoginChoice(machine.os,defaults,undefined,settings.username) + fields + labPrompts(machine) + '</div>';
 }
 
 function labPrompts(machine) {
@@ -340,7 +340,7 @@ function mapLab(pack, options, previous = Object.create(null)) {
       '<br>' + afterLabel(machine) + '</p>' + labTasks(pack,machine) +
       '<div class="form-grid">' + wf('name','New machine name',saved?.name || names[i],'text','required maxlength="12" pattern="[A-Za-z](?:[A-Za-z0-9\\-]{0,10}[A-Za-z0-9])?"') +
       labSelect('node','Proxmox node',nodes,saved?.node || nodes[0][0]) + '</div>' +
-      '<div class="form-grid lab-placement"></div>' + labAccess(machine) + '</fieldset>';
+      '<div class="form-grid lab-placement"></div>' + labAccess(machine,options.build_defaults) + '</fieldset>';
   });
   const pickRole = (area,i) => {
     for (const row of area.querySelectorAll('[data-machine-index]')) row.hidden = Number(row.dataset.machineIndex) !== i;
@@ -369,7 +369,7 @@ function mapLab(pack, options, previous = Object.create(null)) {
       const edition = row.querySelector('[name=edition]');
       if (edition) binding.edition_identity = edition.dataset.identity;
       bindings[machine.key] = binding;
-      const login = Object.fromEntries([...row.querySelectorAll('.lab-access [name]')].filter(input => input.value)
+      const login = Object.fromEntries([...row.querySelectorAll('.lab-access [name]')].filter(input => !input.disabled && input.value)
         .map(input => [input.name,input.value]));
       if (prompts.length) login.inputs = inputs;
       if (machine.settings?.key_login && !login.ssh_public_key?.trim() && !login.github_username?.trim()) {
@@ -397,6 +397,7 @@ function mapLab(pack, options, previous = Object.create(null)) {
       return;
     }
     node.onchange = () => labPlacement(row,machine,options);
+    bindBuildLogin(row.querySelector('.lab-access'));
     node.onchange();
     const saved = previous[machine.key];
     if (!saved) return;
@@ -571,18 +572,30 @@ function drawLabList(area,kind) {
 
 async function openSavedPack(id) {
   const fields = labStep('Set up lab', '<p>Loading the pack and destination options…</p>', 'Retry', '', () => openSavedPack(id));
+  setButtonBusy($('#lab-next'),true);
   try {
     const pack = await api('simple/labs/packs/' + encodeURIComponent(id));
     if (labActive(fields)) await prepareLabSetup(pack,fields);
-  } catch (error) { if (labActive(fields)) $('#lab-error').textContent = error.message; }
+  } catch (error) {
+    if (labActive(fields)) {
+      setButtonBusy($('#lab-next'),false);
+      $('#lab-error').textContent = error.message;
+    }
+  }
 }
 
 async function openLabRun(id) {
   const fields = labStep('Lab deployment', '<p>Loading progress…</p>', 'Retry', '', () => openLabRun(id));
+  setButtonBusy($('#lab-next'),true);
   try {
     const run = await api('simple/labs/runs/' + encodeURIComponent(id));
     if (labActive(fields)) showLabRun(run);
-  } catch (error) { if (labActive(fields)) $('#lab-error').textContent = error.message; }
+  } catch (error) {
+    if (labActive(fields)) {
+      setButtonBusy($('#lab-next'),false);
+      $('#lab-error').textContent = error.message;
+    }
+  }
 }
 
 function showLabRun(run) {

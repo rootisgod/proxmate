@@ -77,6 +77,8 @@ After a service restart, confirmed lab machines that have never started remain e
 
 **Existing VMs as blueprints.** Proxmate reads the selected guest's QEMU configuration. A matching stable identity and guided build record let it recover the recorded installation choices and setup tasks. You can keep or remove those tasks, edit public inputs and add scripts from the current library. A VM with only hardware metadata provides its CPU count, memory and an identifiable system disk size. You choose its OS and install source when they cannot be recovered. Disk contents, later in-guest changes and source credentials are outside the portable definition.
 
+For a role that creates a machine, deployment can supply `secrets.<role>.build_credential_id` from the destination dashboard's build defaults. A saved Windows login satisfies the Administrator password prompt. A Linux default supplies the automation key and must match an explicitly required login name. Optional or required workstation keys and Linux sign-in passwords are separate. Credential IDs and key material stay outside exported manifests.
+
 ## Running tasks on existing VMs in version 2
 
 In **Create lab**, choose **Run scripts on an existing VM** and select the specific tasks that should run. A portable existing role uses `os: linux` or `os: windows`, `source.kind: existing`, optional `source.hint` for the VM display name, and one or more tasks. Hardware, installer media, VM IDs and credentials are excluded from that role. Here is a complete example with an Ubuntu build followed by a task on an existing Linux guest.

@@ -16,6 +16,8 @@ When a documented example changes, update its assertions and verify it against t
 
 ## Compose dashboard workflows from machines and scripts
 
+When changing a workflow described in [dashboard Help](static/help.html), update its steps, button labels and example in the same change. Keep the distinction between automated provisioning and any operator steps explicit.
+
 Follow the [workspace interaction model](docs/interface-workflows.md). Put machine settings in guided provisioning and script inputs in the script catalog. Create machine, Run scripts and Labs share the ordered step picker. Preserve the distinction between saving a definition and reviewing specific destination machines for execution.
 
 Treat published lab packs and versioned built-in task references as compatibility contracts. Version 1 creates new guests. In-place task roles require version 2, an explicit local target, and separate approval. Keep authoring free of infrastructure changes and login secrets. When changing portable settings, script resolution or deployment behavior, update [the pack specification](static/lab-packs.md) and run `python -m pytest -q tests -k lab`. Verify that an archive still works on a second dashboard with an empty script library and fresh credentials.

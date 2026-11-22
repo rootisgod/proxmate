@@ -63,6 +63,9 @@ function jobWindowsActions(job,log){
   if(job.has_answer){
     const path='/api/jobs/'+encodeURIComponent(job.id)+'/answer';
     const safe=document.createElement('a');safe.href=path;safe.download='';safe.textContent='Download reusable answer file';bar.append(safe);
+  }
+  if(job.has_answer&&!job.reusable_answer_only){
+    const path='/api/jobs/'+encodeURIComponent(job.id)+'/answer';
     const original=document.createElement('button');original.type='button';original.textContent='Download original with credentials';
     original.onclick=async()=>{
       if(!window.confirm('Download the original answer file including the Windows setup password?'))return;
@@ -180,7 +183,7 @@ function bindWindowsFields(d){
         if(dest){d.template_id=src.vmid;Object.assign(d,{node:dest.node,storage:dest.storage,bridge:dest.bridge,iso_storage:dest.iso_storage,management_cidr:dest.management_cidr,scope_edited:false})}
       }
       redrawMachineFields(name);
-      if(d.source_kind==='template'){$('#simple-next').disabled=false;$('#simple-error').textContent=''}
+      if(d.source_kind==='template'){setButtonBusy($('#simple-next'),false);$('#simple-error').textContent=''}
       else await loadEditions();
     };
   }

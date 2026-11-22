@@ -35,7 +35,7 @@ def inventory(node=None):
     try:
         nodes=[{'node':n['node'],'status':n['status']} for n in client.call('GET','nodes')]
         online=[n['node'] for n in nodes if n['status']=='online']
-        if node is not None and node not in online: raise ValueError('Choose an online Proxmox node.')
+        if node is not None and node not in online: raise ValueError('Choose an online Proxmox server.')
         node=node if node is not None else next(iter(online),None)
         if node:
             try:
@@ -90,7 +90,7 @@ def inspect_windows(result, node, source, tools, ssh_ready):
     if not supported:
         raise ValueError('No editions support guided Windows setup on this dashboard.')
     if not tools or not ssh_ready:
-        result.update(status='missing',detail='Add a VirtIO guest-tools ISO to this node.' if not tools
+        result.update(status='missing',detail='Add a VirtIO guest-tools ISO to storage on this Proxmox server.' if not tools
                       else 'Configure the verified SSH connection in Server settings to check guest tools.')
         return
     result['agent_iso']=tools
@@ -107,15 +107,15 @@ def inspect_windows(result, node, source, tools, ssh_ready):
 def verify(data, listing, ssh_ready):
     node,source,os_name=listing['node'],data['source'],data['os']
     files={f['id']:f for f in listing['files']}
-    if source not in files: raise ValueError('This ISO is no longer listed on the selected node. Refresh the library.')
+    if source not in files: raise ValueError('This ISO is no longer listed for the selected Proxmox server. Refresh the library.')
     if os_name!='windows' and files[source]['family']!=os_name:
         raise ValueError('Choose an installer filename supported by this Linux build.')
     tools=data.get('agent_iso')
     if tools is not None and (os_name!='windows' or tools not in listing['driver_isos']):
-        raise ValueError('Choose a VirtIO ISO available on the selected Proxmox node.')
+        raise ValueError('Choose a VirtIO ISO available on the selected Proxmox server.')
     result=dict(node=node,source=source,os=os_name,status='failed',checked_at=time.time())
     if not ssh_ready and files[source]['location']=='proxmox':
-        return dict(result,status='missing',detail='Add the verified SSH fingerprint in Server settings to inspect node storage.')
+        return dict(result,status='missing',detail='Add the verified SSH fingerprint in Server settings to inspect Proxmox storage.')
     try:
         if os_name=='windows':
             inspect_windows(result,node,source,tools or next(iter(listing['driver_isos']),None),ssh_ready)
@@ -127,7 +127,7 @@ def verify(data, listing, ssh_ready):
             if os_name=='ubuntu': result['install_sources']=list(inspected['install_sources'])
             if os_name=='rocky': result['kind']=inspected['kind']
             if not ssh_ready:
-                return dict(result,status='missing',detail='Installer contents verified. Configure node SSH for guided setup.')
+                return dict(result,status='missing',detail='Installer contents verified. Configure SSH for the Proxmox server in Server settings.')
             media.verify_ssh_node(node)
             if os_name=='rocky':
                 client=operations.Proxmox()
@@ -137,7 +137,7 @@ def verify(data, listing, ssh_ready):
     except ValueError as exc:
         result['detail']=str(exc)
     except Exception:
-        result['detail']='Could not finish the media check. Verify the ISO and the node connection, then retry.'
+        result['detail']='Could not finish the media check. Verify the ISO and the Proxmox server connection, then retry.'
     return result
 
 

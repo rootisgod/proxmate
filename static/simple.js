@@ -203,7 +203,7 @@ async function openSimple(os='windows',purpose='vm',filename='',sourceTemplate=n
     }
     if(filename)simpleDraft.source='library:'+filename;
     if(os==='windows'&&(mediaChoice||filename))simpleDraft.all_media=!simpleSources().find(s=>s.id===simpleDraft.source)?.windows_label;
-    $('#simple-next').disabled=false;
+    setButtonBusy($('#simple-next'),false);
     drawSimple();$('#simple-dialog').showModal();focusSimpleStep();if(os==='windows')await loadEditions();
   }catch(e){notice(e.message)}
 }
@@ -215,6 +215,22 @@ function simpleSources(){
 }
 
 const linuxNames={ubuntu:'Ubuntu',debian:'Debian',rocky:'Rocky Linux'};
+function buildLoginChoice(os,defaults,selected,username){
+  const windows=os==='windows',login=defaults?.[windows?'windows':'linux'];
+  if(!login||(!windows&&username&&username!==login.username))return '';
+  return ws('build_credential_id','Proxmate login',[[login.id,login.name+' · '+login.username+' (default)'],
+    ['',windows?'Enter a separate Administrator password':'Generate a separate SSH key']],selected??login.id);
+}
+function bindBuildLogin(area){
+  const select=area.querySelector('[name=build_credential_id]');
+  if(!select)return;
+  select.onchange=()=>{
+    for(const field of area.querySelectorAll('[name=password],[name=username]')){
+      field.disabled=!!select.value;field.closest('.guided-field,label').hidden=field.disabled;
+    }
+  };
+  select.onchange();
+}
 const linuxProfiles={ubuntu:'ubuntu-24.04',debian:'debian-13',rocky:'rocky-10'};
 
 function linuxSourceFields(d,dest){
@@ -271,8 +287,9 @@ async function loadEditions(){
   $('#simple-error').textContent='';
   draft.editions=[];delete draft.edition;delete draft.edition_identity;
   showEditionPlaceholder(draft);
-  $('#simple-next').disabled=true;
+  setButtonBusy($('#simple-next'),true);
   if(!source){
+    $('#simple-next').removeAttribute('aria-busy');
     reviewProgress('');
     $('#simple-error').textContent='Choose a Windows Server ISO to continue.';
     return;
@@ -291,9 +308,10 @@ async function loadEditions(){
     select.replaceChildren(...draft.editions.map(e=>new Option(e.label,e.index)));
     select.value=draft.edition;select.disabled=false;
     reviewProgress('');
-    $('#simple-next').disabled=false;
+    setButtonBusy($('#simple-next'),false);
   }catch(e){
     if(!current())return;
+    $('#simple-next').removeAttribute('aria-busy');
     $('#simple-retry-iso').hidden=false;showEditionPlaceholder(draft);
     reviewProgress('');$('#simple-error').textContent=e.message;
   }
@@ -422,6 +440,7 @@ function buildReview(p,windows,withConfirmation=true){
   for(const disk of p.data_disks||[]){
     specs.push(['Data disk','Format '+esc(disk.size)+' GiB as NTFS · '+esc(disk.label)+' · '+(disk.letter?esc(disk.letter)+':':'Automatic drive letter')]);
   }
+  if(p.build_login)specs.push(['Guest login',esc(p.build_login.username)+' · '+(p.build_login.shared?esc(p.build_login.name)+' (shared)':'Separate login for this build')]);
   return '<div class="build-review">'+
     (p.machines.length===1?'<h3>'+machine(first)+'</h3>':
       '<details><summary>'+p.machines.length+' machines · '+esc(first.name)+' … '+esc(p.machines.at(-1).name)+'</summary><ul>'+
@@ -499,6 +518,7 @@ function drawSimple(){
       (d.os==='windows'?windowsSourceFields(d):
         linuxSourceFields(d,dest))+'</section>';
     html+='</div><section class="machine-access" aria-labelledby="machine-access-heading"><h3 id="machine-access-heading">Guest login</h3><div class="machine-access-fields">'+
+      buildLoginChoice(d.os,simpleOptions.build_defaults,d.build_credential_id)+
       (d.os==='windows'?wf('password','Administrator password',d.password,'password','required minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"'):
         wf('username','SSH login name',d.username,'text','required pattern="[a-z_][a-z0-9_\\-]{0,31}"')+
         wf('github_username','GitHub username for SSH keys (optional)',d.github_username||'','text','maxlength="39" autocomplete="off"')+
@@ -523,6 +543,7 @@ function drawSimple(){
   }
   if(simpleStep===0){
     const fields=$('#simple-form').elements;
+    bindBuildLogin($('#simple-fields'));
     const updatePlacementPreview=()=>{
       const values=[fields.node.value,fields.cores.value&&fields.cores.value+' vCPU',fields.memory_gb.value&&fields.memory_gb.value+' GiB RAM'];
       $('#placement-preview').textContent=values.filter(Boolean).join(' · ');
@@ -569,26 +590,28 @@ function drawSimple(){
   }
 }
 
+async function openTemplateClone(vmid){
+  const src=state.resources.find(r=>r.type==='qemu'&&r.template&&r.vmid===Number(vmid));
+  if(!src)return notice('Refresh to see available templates.');
+  const fromView=view;
+  const hint=await api('simple/software',{targets:[{node:src.node,vmid:src.vmid}]});
+  if(view!==fromView)return;
+  if(hint.platforms[machineKey(src)]==='windows')await openSimple('windows','vm','',src);
+  else if(hint.rocky_templates?.includes(machineKey(src)))await openSimple('rocky','vm','',src);
+  else if(hint.debian_templates?.includes(machineKey(src)))await openSimple('debian','vm','',src);
+  else if(hint.ubuntu_templates?.includes(machineKey(src)))await openSimple('ubuntu','vm','',src);
+  else{
+    const inventory=state.details?state:await api('state');
+    if(view!==fromView)return;
+    if(!inventory.resources.some(r=>r.type==='qemu'&&r.template&&machineKey(r)===machineKey(src)))throw Error('The source template changed. Refresh the inventory.');
+    state=inventory;openAction('clone',src.vmid,'',src.node);
+  }
+}
+
 document.addEventListener('click',async e=>{
   const button=e.target.closest('button');if(!button)return;
   try{
-    if(button.dataset.cloneTemplate){
-      const src=state.resources.find(r=>r.type==='qemu'&&r.template&&r.vmid===Number(button.dataset.cloneTemplate));
-      if(!src)return notice('Refresh to see available templates.');
-      const fromView=view;
-      const hint=await api('simple/software',{targets:[{node:src.node,vmid:src.vmid}]});
-      if(view!==fromView)return;
-      if(hint.platforms[machineKey(src)]==='windows')await openSimple('windows','vm','',src);
-      else if(hint.rocky_templates?.includes(machineKey(src)))await openSimple('rocky','vm','',src);
-      else if(hint.debian_templates?.includes(machineKey(src)))await openSimple('debian','vm','',src);
-      else if(hint.ubuntu_templates?.includes(machineKey(src)))await openSimple('ubuntu','vm','',src);
-      else{
-        const inventory=state.details?state:await api('state');
-        if(view!==fromView)return;
-        if(!inventory.resources.some(r=>r.type==='qemu'&&r.template&&machineKey(r)===machineKey(src)))throw Error('The source template changed. Refresh the inventory.');
-        state=inventory;openAction('clone',src.vmid,'',src.node);
-      }
-    }
+    if(button.dataset.cloneTemplate)await withBusyButton(button,()=>openTemplateClone(button.dataset.cloneTemplate));
     else if(button.dataset.simple==='apply'){
       const targets=button.dataset.id?mgGuests().filter(g=>g.vmid===Number(button.dataset.id)):
         button.id==='run-selected'?mgGuests().filter(g=>machineFilters.selected.has(machineKey(g))):[];
@@ -596,7 +619,7 @@ document.addEventListener('click',async e=>{
       await openScriptRun(targets);
     }
     else if(button.dataset.simple){
-      await openSimple(button.dataset.simple,button.dataset.purpose||'vm',button.dataset.filename||'');
+      await withBusyButton(button,()=>openSimple(button.dataset.simple,button.dataset.purpose||'vm',button.dataset.filename||''));
     }
     if(button.dataset.simpleTask)await openScriptRun([],button.dataset.simpleTask);
   }catch(err){notice(err.message)}
@@ -611,6 +634,7 @@ function reviewProgress(message){
 async function reviewBuild(draft){
   const settings={...draft,packages:enabledPackageText(draft),memory:Number(draft.memory_gb)*1024,tasks:selectedSoftware(draft)};
   delete settings.scriptSteps;
+  if(settings.build_credential_id){delete settings.password;delete settings.username}
   if(draft.os==='ubuntu'&&draft.source_kind!=='cloud')delete settings.profile;
   if(draft.os!=='ubuntu'||draft.source_kind!=='iso')delete settings.ubuntu_install_source;
   delete settings.ubuntu_password_enabled;
@@ -640,8 +664,8 @@ async function requestBuildReview(settings,active,progress){
   }
 }
 $('#simple-form').onsubmit=async e=>{
-  e.preventDefault();if(simpleBusy)return;simpleBusy=true;const draft=simpleDraft;
-  $('#simple-next').disabled=true;$('#simple-error').textContent='';
+  e.preventDefault();if(simpleBusy||$('#simple-next').disabled)return;simpleBusy=true;const draft=simpleDraft;
+  setButtonBusy($('#simple-next'),true);$('#simple-error').textContent='';
   try{
     collectSimple();
     if(simpleStep===0){if(draft.os==='windows'&&draft.source_kind==='template'&&!draft.generalized)throw Error('Confirm the source template has been prepared.');if(draft.os==='windows'&&draft.source_kind!=='template'&&!draft.edition)throw Error('Choose a readable Windows Server ISO and edition.');if(['rocky','debian'].includes(draft.os)&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose a '+linuxNames[draft.os]+' installer ISO.');if(draft.os==='ubuntu'&&draft.source_kind==='iso'&&!draft.source)throw Error('Choose an Ubuntu Server LTS ISO or the cloud image.');simpleStep=1;drawSimple();focusSimpleStep()}
@@ -650,7 +674,7 @@ $('#simple-form').onsubmit=async e=>{
   }catch(err){if(simpleDraft===draft)$('#simple-error').textContent=err.message}
   finally{
     if(simpleDraft===draft){
-      simpleBusy=false;reviewProgress('');$('#simple-fields').inert=false;$('#simple-back').disabled=false;$('#simple-next').disabled=false;
+      simpleBusy=false;reviewProgress('');$('#simple-fields').inert=false;$('#simple-back').disabled=false;setButtonBusy($('#simple-next'),false);
       if(simpleStep===1)$('#simple-next').textContent='Review build';
     }
   }

@@ -96,7 +96,7 @@ dialog :is(.modal-head,.modal-footer) { border-color: var(--line); }
   .workspace-rail { position: static; width: 100%; min-height: 0; overflow: visible; }
   #workspace-nav { gap: 9px; }
   .workspace-rail.nav-open nav { max-height: 58dvh; overflow-y: auto; }
-  .workspace-rail.nav-open .aside-bottom { display: flex; gap: 18px; padding-top: 8px; }
+  .workspace-rail.nav-open .aside-bottom { display: flex; flex-wrap:wrap; gap: 4px 18px; padding-top: 8px; }
   main { margin-left: 0; }
   .workspace-location > :not(strong) { display: none; }
   .workspace-bar > div { gap: 7px; }
@@ -168,6 +168,20 @@ dialog :is(.modal-head,.modal-footer) { border-color: var(--line); }
 .primary { font-weight:600; }
 button[data-mg^="delete-"] { color:var(--danger); }
 button:disabled { box-shadow:none; }
+button[aria-busy="true"] { opacity:1; cursor:progress; }
+button[aria-busy="true"]::after, .loading-status::before {
+  content:""; display:inline-block; box-sizing:border-box; width:1em; height:1em; flex:none;
+  margin-inline-start:.45em; vertical-align:-.13em; border:2px solid currentColor;
+  border-inline-end-color:transparent; border-radius:50%;
+}
+.loading-status::before { margin-inline:0 .5em; }
+@media (prefers-reduced-motion:no-preference) {
+  button[aria-busy="true"]::after, .loading-status::before { animation:button-progress .75s linear infinite; }
+  @keyframes button-progress { to { transform:rotate(360deg); } }
+}
+.platform-card[aria-busy="true"]::after { grid-area:1 / 2; justify-self:end; }
+.platform-card[aria-busy="true"] .platform-arrow, #refresh[aria-busy="true"] .bi { display:none; }
+#refresh[aria-busy="true"]::after { order:-1; margin:0; }
 ::selection { background:var(--selection); color:var(--ink); }
 :is(input[type=checkbox],input[type=radio],progress) { accent-color:var(--action); }
 :is(input,textarea)::placeholder { color:var(--muted); opacity:.9; }
@@ -197,3 +211,10 @@ button:disabled { box-shadow:none; }
   .appearance-control .bi { display:none; }
   #workspace-nav button[aria-current=page] { outline:1px solid Highlight; outline-offset:-2px; }
 }
+.build-defaults {padding:1rem 1.25rem}
+.build-defaults h2 {margin:0}
+.build-defaults p {margin:.3rem 0 1rem}
+#build-default-cards {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr));gap:.85rem}
+#build-default-cards > div {display:flex;align-items:center;justify-content:space-between;gap:.7rem;padding:.75rem;border:1px solid var(--line);border-radius:.6rem}
+#build-default-cards small {display:block;overflow-wrap:anywhere}
+#build-default-cards button {flex:none}

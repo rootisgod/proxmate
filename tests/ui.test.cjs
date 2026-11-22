@@ -3,6 +3,22 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {JSDOM}=require('jsdom');
 
+test('Help is above API documentation and its topic and workspace links resolve',()=>{
+  const dashboard=new JSDOM(fs.readFileSync('static/index.html','utf8'));
+  const help=new JSDOM(fs.readFileSync('static/help.html','utf8'),{url:'https://dashboard.test/help'});
+  try{
+    const shell=dashboard.window.document, guide=help.window.document;
+    const link=shell.querySelector('.aside-bottom a[href="/help"]');
+    assert.equal(link.nextElementSibling.getAttribute('href'),'/api/docs');
+    assert.equal(link.target,'_blank');
+    const topics=[...guide.querySelectorAll('.guide-index a')].map(a=>a.hash.slice(1));
+    assert.deepEqual(topics,[...guide.querySelectorAll('article[id]')].map(el=>el.id));
+    for(const a of guide.querySelectorAll('a[href^="/#"]')){
+      assert.ok(shell.querySelector('#workspace-nav [data-view="'+a.hash.slice(1)+'"]'),a.href);
+    }
+  }finally{dashboard.window.close();help.window.close()}
+});
+
 test('sidebar stays distinct from the workspace and its navigation stays legible in both themes',()=>{
   const {window:w}=new JSDOM(fs.readFileSync('static/index.html','utf8'));
   const doc=w.document;
@@ -1001,6 +1017,56 @@ test('Windows ISO picker categorizes candidates and keeps other media browsable'
   }finally{f.close()}
 });
 
+test('opening a machine build shows progress immediately and allows a retry after failure',async()=>{
+  const f=await fixture({},true),{w}=f,doc=w.document;
+  try{
+    doc.querySelector('nav [data-view=create]').click();await f.settle();
+    const original=w.fetch,requests=[];
+    w.fetch=(url,opts)=>url==='/api/simple/options'
+      ?new Promise(resolve=>requests.push(resolve)):original(url,opts);
+    const card=doc.querySelector('.platform-card[data-simple=ubuntu]');
+    card.click();card.click();
+    assert.equal(card.getAttribute('aria-busy'),'true');
+    assert.equal(card.disabled,true);
+    assert.equal(requests.length,1);
+    requests[0]({ok:false,status:503,json:async()=>({error:'Storage unavailable'})});await f.settle();
+    assert.equal(card.hasAttribute('aria-busy'),false);
+    assert.equal(card.disabled,false);
+    assert.match(doc.querySelector('#notice').textContent,/Storage unavailable/);
+    card.click();
+    requests[1](await original('/api/simple/options'));await f.settle();
+    assert.ok(doc.querySelector('#simple-dialog').open);
+    assert.equal(card.hasAttribute('aria-busy'),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('confirming an ISO copy allows only one submission while the job request is in flight',async()=>{
+  const f=await fixture(),{w}=f,doc=w.document;
+  try{
+    w.openAction('upload-iso',null,'tools.iso','pve');
+    const form=doc.querySelector('#action-form'),button=form.querySelector('.modal-footer button');
+    const original=w.fetch,requests=[];
+    w.fetch=(url,opts)=>url==='/api/jobs'&&opts.method==='POST'
+      ?new Promise(resolve=>requests.push(resolve)):original(url,opts);
+    button.click();form.requestSubmit();button.click();
+    assert.equal(requests.length,1);
+    assert.equal(button.disabled,true);
+    assert.equal(button.getAttribute('aria-busy'),'true');
+    requests[0]({ok:false,status:409,json:async()=>({error:'File already exists'})});await f.settle();
+    assert.ok(doc.querySelector('#editor').open);
+    assert.match(doc.querySelector('#form-error').textContent,/File already exists/);
+    assert.equal(button.disabled,false);
+    assert.equal(button.hasAttribute('aria-busy'),false);
+    form.requestSubmit();
+    assert.equal(requests.length,2);
+    requests[1]({ok:true,json:async()=>({id:'copy-job'})});await f.settle();
+    assert.equal(doc.querySelector('#editor').open,false);
+    assert.equal(button.hasAttribute('aria-busy'),false);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('ISO Library filters node files and explicitly verifies before handing the selected image to Create',async()=>{
   const f=await fixture({},true),{w}=f,doc=w.document;
   try {
@@ -1025,6 +1091,19 @@ test('ISO Library filters node files and explicitly verifies before handing the 
     assert.equal(doc.querySelector('h1').textContent,'ISO Library');
     assert.equal(checks.length,0);
     assert.equal(doc.querySelectorAll('.media-file').length,2);
+    const copy=doc.querySelector('[data-upload-file]');
+    assert.equal(copy.textContent,'Copy to Proxmox storage…');
+    assert.match(copy.closest('li').textContent,/Proxmate ISO folder/);
+    assert.equal(doc.querySelectorAll('[data-upload-file]').length,1);
+    copy.click();await f.settle();
+    const form=doc.querySelector('#action-form');
+    assert.ok(doc.querySelector('#editor').open);
+    assert.match(form.textContent,/Copy other\.iso from the Proxmate ISO folder/);
+    assert.equal(form.elements.node.value,'pve');
+    assert.equal(form.elements.storage.value,'local');
+    assert.equal(form.querySelector('.modal-footer button').textContent,'Copy ISO');
+    assert.ok(!f.calls.some(([url,body])=>url==='/api/jobs' && body));
+    doc.querySelector('#close').click();
     assert.match(doc.querySelector('[data-family=rocky]').textContent,/No candidates/);
     const search=doc.querySelector('[name=media_search]');
     search.value='not an iso';search.dispatchEvent(new w.Event('input',{bubbles:true}));
@@ -1131,6 +1210,57 @@ test('guest credentials filter VM connections, preserve focus and show verificat
     assert.equal(fields.password.required,true);
     fields.platform.value='linux';fields.platform.dispatchEvent(new w.Event('change'));
     assert.equal(fields.password.required,false);assert.equal(fields.private_key.disabled,false);
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
+test('a pinned build login can be found, used and overridden without submitting stale login fields',async()=>{
+  const f=await fixture({},true),{w,records}=f,doc=w.document,original=w.fetch;
+  const win={id:'lab-win',name:'Lab Administrator',username:'Administrator',platform:'windows',has_password:true};
+  const linux={id:'lab-ssh',name:'Lab SSH',username:'deploy',platform:'linux',has_private_key:true,is_build_default:true};
+  records.credentials.push(win,linux,{id:'ops',name:'Domain ops',platform:'windows',username:'domain-user',has_password:true});
+  const changes=[];
+  w.fetch=async(url,opts)=>{
+    if(url==='/api/manage/credentials/defaults'&&opts?.body){
+      changes.push(JSON.parse(opts.body));win.is_build_default=true;
+      return {ok:true,json:async()=>({windows:win,linux})};
+    }
+    const response=await original(url,opts);
+    if(url==='/api/simple/options')(await response.json()).build_defaults={windows:win,linux};
+    return response;
+  };
+  try{
+    doc.querySelector('nav [data-view=credentials]').click();await f.settle();
+    assert.match(doc.querySelector('#build-default-cards').textContent,/Lab SSH/);
+    doc.querySelector('[data-mg=build-default][data-record=windows]').click();await f.settle();
+    // Chromium can deliver the preceding dialog's close event after reopening.
+    doc.querySelector('#manage-dialog').dispatchEvent(new w.Event('close'));
+    const picker=doc.querySelector('#manage-form').elements;
+    assert.deepEqual([...picker.credential_id.options].map(o=>o.value),['',win.id]);
+    picker.filter.value='missing';picker.filter.dispatchEvent(new w.Event('input'));
+    assert.equal(picker.credential_id.options.length,1);
+    picker.filter.value='lab';picker.filter.dispatchEvent(new w.Event('input'));picker.credential_id.value=win.id;
+    doc.querySelector('#manage-submit').click();await f.settle();
+    assert.deepEqual(changes,[{platform:'windows',credential_id:win.id}]);
+    assert.match(doc.querySelector('#build-default-cards').textContent,/Lab Administrator/);
+    await f.build('windows');
+    let fields=doc.querySelector('#simple-form').elements;
+    assert.ok(doc.querySelector('#simple-dialog').open&&fields.edition.value);
+    assert.equal(fields.build_credential_id.value,win.id);assert.ok(fields.password.disabled);
+    fields.build_credential_id.value='';fields.build_credential_id.dispatchEvent(new w.Event('change'));
+    assert.ok(!fields.password.disabled&&fields.password.required);
+    fields.password.value='Separate-pass#123';
+    fields.build_credential_id.value=win.id;fields.build_credential_id.dispatchEvent(new w.Event('change'));
+    doc.querySelector('#simple-next').click();await f.settle();
+    assert.equal(w.eval('simpleStep'),1,JSON.stringify([...doc.querySelectorAll('#simple-form :invalid')].map(x=>x.name))+doc.querySelector('#simple-error').textContent);
+    doc.querySelector('#simple-next').click();await f.settle();
+    assert.equal(w.eval('simpleStep'),2,doc.querySelector('#simple-error').textContent);
+    const draft=f.calls.find(([url])=>url==='/api/simple/plan')[1];
+    assert.equal(draft.build_credential_id,win.id);assert.ok(!('password' in draft));
+    doc.querySelector('#simple-close').click();await f.settle();
+    await f.build('ubuntu');fields=doc.querySelector('#simple-form').elements;
+    assert.ok(fields.username.disabled);assert.equal(fields.build_credential_id.value,linux.id);
+    assert.ok(!fields.github_username.disabled);
     assert.deepEqual(f.errors,[]);
   }finally{f.close()}
 });
@@ -1524,7 +1654,7 @@ test('a saved build asks for fresh credentials and reviews before it queues',asy
   w.fetch=async(url,opts)=>url==='/api/simple/recipes'?{ok:true,json:async()=>[recipe]}:fetch(url,opts);
   try{
     doc.querySelector('nav [data-view=create]').click();await f.settle();
-    doc.querySelector('#saved-builds button').click();
+    doc.querySelector('#saved-builds button').click();await f.settle();
     const fields=doc.querySelector('#manage-form').elements;
     assert.equal(fields.password.value,'');assert.equal(fields.name.value,'');
     fields.password.value='Fresh-Password#123';fields.name.value='win-copy';

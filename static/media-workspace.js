@@ -69,37 +69,38 @@ function renderMediaWorkspace() {
       const label=pending?'Checking…':r?mediaResultLabel(r.status):mediaFamilies[family]?'Candidate':'Unchecked';
       let actions='';
       if (listing.node && family!=='virtio') {
-        actions+='<button type="button" data-check="'+i+'"'+(pending||batch?' disabled':'')+'>'+
+        actions+='<button type="button" data-check="'+i+'"'+(pending?' disabled aria-busy="true"':batch?' disabled':'')+'>'+
           (pending?'Checking…':r?'Recheck':family==='other'?'Check as Windows':'Check media')+'</button>';
       }
       if (r?.status==='verified' && !pending) actions+='<button type="button" class="primary" data-use="'+i+'">Use in Create</button>';
       if (listing.node && f.location==='library') {
-        actions+='<button type="button" data-upload-file="'+i+'">Upload to node</button>';
+        actions+='<button type="button" data-upload-file="'+i+'">Copy to Proxmox storage…</button>';
         if (family==='other'&&!r) actions+='<button type="button" data-advanced-file="'+i+'">Advanced wizard</button>';
       }
       return '<li class="media-file"><div class="media-file-main"><div class="media-file-name">'+esc(f.name)+'</div>'+
-        '<div class="media-file-meta">'+esc(f.location==='library'?'Mounted library':listing.node+' / '+f.storage)+' · '+esc(mediaSize(f.bytes))+' · '+esc(mediaKinds[family])+'</div>'+
+        '<div class="media-file-meta">'+esc(f.location==='library'?'Proxmate ISO folder':listing.node+' / '+f.storage)+' · '+esc(mediaSize(f.bytes))+' · '+esc(mediaKinds[family])+'</div>'+
         (r?'<div class="media-check-detail">'+details(r)+'</div>':'')+
         (errors.has(f.id)?'<p class="media-check-error">'+esc(errors.get(f.id))+'</p>':'')+'</div><span class="media-state state-'+state+'">'+label+
         '</span><div class="media-file-actions">'+actions+'</div></li>';
-    }).join('') : '<li class="media-empty">'+(listing.files.length?'No files match these filters.':'No ISO files were found in active node storage or the mounted library.')+'</li>';
+    }).join('') : '<li class="media-empty">'+(listing.files.length?'No files match these filters.':'No ISO files were found in Proxmox storage or the Proxmate ISO folder.')+'</li>';
   }
 
   function paint() {
     const nodes=listing.nodes.filter(n=>n.status==='online');
-    browser.innerHTML='<div class="media-section-head"><h2>Installer readiness</h2><label class="media-node">Proxmox node '+
-      '<select name="media_node">'+(nodes.map(n=>'<option value="'+esc(n.node)+'">'+esc(n.node)+'</option>').join('')||'<option>No online nodes</option>')+'</select></label></div>'+
+    browser.innerHTML='<div class="media-section-head"><h2>Installer readiness</h2><label class="media-node">Proxmox server '+
+      '<select name="media_node">'+(nodes.map(n=>'<option value="'+esc(n.node)+'">'+esc(n.node)+'</option>').join('')||'<option>No online servers</option>')+'</select></label></div>'+
       '<div class="media-readiness" role="group" aria-label="Filter files by installer family"></div>'+
       '<div class="media-readiness-actions"><button type="button" class="primary" data-check-group>Check installers</button>'+
-      '<span>Checks one candidate for each unverified system on this node.</span></div>'+
+      '<span>Checks one candidate for each unverified system on this server.</span></div>'+
       '<div class="media-warnings">'+listing.warnings.map(w=>'<p>'+esc(w)+'</p>').join('')+
-      (!nodes.length?'<p>No online node is available for media checks.</p>':'')+'</div>'+
+      (!nodes.length?'<p>No online Proxmox server is available for media checks.</p>':'')+'</div>'+
       (!listing.ssh_configured?'<p class="media-config">A verified SSH connection is required to inspect Proxmox storage. <button type="button" data-view="server">Server settings</button></p>':'')+
       '<div class="media-section-head"><h2>ISO files</h2><span class="media-count" aria-live="polite"></span></div>'+
+      (listing.files.some(f=>f.location==='library')?'<p class="subtle">Guided builds copy installers when needed. You can also copy an ISO to Proxmox storage ahead of time.</p>':'')+
       '<div class="media-filters"><label>Search files<input type="search" name="media_search" placeholder="Filename or storage"></label>'+
       '<label>Media type<select name="media_family"><option value="">All types</option>'+
       Object.entries(mediaKinds).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join('')+'</select></label>'+
-      '<label>Location<select name="media_location"><option value="">All locations</option><option value="proxmox">Proxmox storage</option><option value="library">Mounted library</option></select></label></div>'+
+      '<label>Location<select name="media_location"><option value="">All locations</option><option value="proxmox">Proxmox storage</option><option value="library">Proxmate ISO folder</option></select></label></div>'+
       (listing.driver_isos.length?'<label class="media-driver">VirtIO ISO for Windows checks<select name="media_driver">'+
         listing.driver_isos.map(s=>'<option value="'+esc(s)+'">'+esc(s)+'</option>').join('')+'</select></label>':'')+
       '<ul class="media-files" aria-label="ISO files"></ul>';
@@ -127,6 +128,7 @@ function renderMediaWorkspace() {
     const button=root.querySelector('[data-check-group]');
     if (!button) return;
     button.disabled=batch||!listing.node||checking.size>0||!candidates().length;
+    if(batch)button.setAttribute('aria-busy','true');else button.removeAttribute('aria-busy');
     button.textContent=batch?'Checking installers…':'Check installers';
   }
 
@@ -148,7 +150,7 @@ function renderMediaWorkspace() {
       if (!current()||token!==sequence) return;
       notice.textContent=err.message;
       browser.innerHTML='<button type="button" data-retry-list>Retry listing</button>'+
-        (node?'<button type="button" data-reset-node>Use available node</button>':'');
+        (node?'<button type="button" data-reset-node>Use available server</button>':'');
     }
   }
 
@@ -197,7 +199,7 @@ function renderMediaWorkspace() {
     const button=e.target.closest('button');
     if (!button) return;
     const d=button.dataset;
-    if (button.matches('.media-refresh,[data-retry-list]')){load();return;}
+    if (button.matches('.media-refresh,[data-retry-list]'))return withBusyButton(button,()=>load());
     if (button.hasAttribute('data-reset-node')){load('');return;}
     if (button.hasAttribute('data-check-group')){checkGroup();return;}
     if (d.family){
@@ -207,10 +209,10 @@ function renderMediaWorkspace() {
     if (d.check!=null) check(listing.files[Number(d.check)]);
     if (d.use!=null) {
       const f=listing.files[Number(d.use)];
-      openSimpleMedia(f.check.os,listing.node,f.id,f.check.agent_iso);
+      return withBusyButton(button,()=>openSimpleMedia(f.check.os,listing.node,f.id,f.check.agent_iso));
     }
-    if (d.uploadFile!=null) openMediaUpload(listing.files[Number(d.uploadFile)].name,listing.node);
-    if (d.advancedFile!=null) openMediaAdvanced(listing.files[Number(d.advancedFile)].name,listing.node);
+    if (d.uploadFile!=null) return withBusyButton(button,()=>openMediaUpload(listing.files[Number(d.uploadFile)].name,listing.node));
+    if (d.advancedFile!=null) return withBusyButton(button,()=>openMediaAdvanced(listing.files[Number(d.advancedFile)].name,listing.node));
   };
   load();
 }

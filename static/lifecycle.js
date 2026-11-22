@@ -91,7 +91,8 @@ async function lcHelper(){
   },'Download helper');
 }
 document.addEventListener('click',async e=>{
-  const b=e.target.closest('[data-lc]');if(!b)return;
+  const b=e.target.closest('[data-lc]');if(!b||b.disabled)return;
+  setButtonBusy(b,true);
   try{
     if(!lcData)await loadLifecycle();if(!mg)await loadManagement();
     const id=b.dataset.record,action=b.dataset.lc,v=lcData.versions.find(v=>v.id===id);
@@ -109,4 +110,5 @@ document.addEventListener('click',async e=>{
     else if(action==='policy'){const p=lcData.policies.find(p=>p.id===id);lcPolicy(p.mode,p)}
     else if(action==='helper')await lcHelper();
   }catch(err){notice(err.message);if($('#manage-dialog').open)$('#manage-error').textContent=err.message}
+  finally{setButtonBusy(b,false)}
 });

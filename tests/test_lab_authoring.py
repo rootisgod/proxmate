@@ -1,5 +1,7 @@
 import base64
+import html
 import json
+import re
 
 import pytest
 
@@ -36,6 +38,39 @@ def create_source_job(client, headers):
         'plan_id': plan['id'], 'confirmed': True, 'risk_confirmed': True,
     }, 202).json['jobs'][0]['id']
     return job, script, body
+
+
+def test_help_domain_lab_can_be_saved_exported_and_reviewed_without_running(simple_lab):
+    app, client, headers, _ = simple_lab
+    guide = app.app.test_client().get('/help')
+    assert guide.status_code == 200 and guide.mimetype == 'text/html'
+    body = html.unescape(re.search(r'<code id="member-join-example">(.*?)</code>', guide.text, re.S)[1])
+    domain = 'lab.example.test'
+    script = post(client, headers, '/api/manage/tasks', {
+        'name': 'Prepare member domain join', 'platform': 'windows', 'kind': 'ansible', 'body': body,
+        'parameters': {'domain': 'Forest DNS name'}, 'defaults': {'domain': domain},
+    }).json
+    source = {'kind': 'iso', 'edition': 'Standard (Desktop Experience)'}
+    saved = post(client, headers, PACKS, {'name': 'Windows domain lab', 'machines': [
+        {'key': 'dc01', 'os': 'windows', 'source': source, 'tasks': [
+            {'id': 'windows-domain-controller', 'params': {'domain_name': domain}}]},
+        {'key': 'member01', 'os': 'windows', 'source': source, 'after': ['dc01'],
+         'tasks': [{'id': script['id'], 'params': {'domain': domain}}]},
+    ]}, 201).json
+    archive = client.get(PACKS + '/' + saved['id'] + '/export', headers=headers)
+    manifest, files = lab_pack.read_pack(archive.data)
+    assert lab_pack.ordered_vms(manifest) == ['dc01', 'member01']
+    assert manifest['machines']['dc01']['tasks'][0]['with']['dsrm_password'] == {'prompt': 'dsrm_password'}
+    assert files[manifest['machines']['member01']['tasks'][0]['file']] == body
+    review = post(client, headers, LABS + '/plan', {
+        'pack_id': saved['id'],
+        'bindings': {key: {'name': key, 'source': 'local:iso/server.iso', 'edition': 7,
+                           'edition_identity': 'media-v1'} for key in ('dc01', 'member01')},
+        'secrets': {'dc01': {'password': 'Test-Admin#1234', 'inputs': {'dsrm_password': 'Test-Restore#1234'}},
+                    'member01': {'password': 'Test-Member#1234'}},
+    }).json
+    assert review['dangerous'] and len(review['machines']) == 2
+    assert client.get('/api/jobs', headers=headers).json == []
 
 
 def test_saved_build_and_pack_copy_keep_reviewed_steps_after_library_removal(simple_lab):

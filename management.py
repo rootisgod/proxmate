@@ -12,6 +12,7 @@ import uuid
 from urllib.parse import urlparse
 
 from flask import jsonify, request
+import build_credentials
 import operations
 from guest_tasks import BUILTINS, DOMAIN_CONTROLLER, compile_task, run_guest, script_parameters, input_type_schema, selected_drive_letters, public_params
 from script_library import check_script, ScriptDiagnostic
@@ -181,6 +182,7 @@ class Manager:
         with db() as con:
             con.execute('CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, value TEXT, PRIMARY KEY(kind,id))')
             con.execute('CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, created REAL, value TEXT)')
+            con.execute('CREATE TABLE IF NOT EXISTS build_credential_defaults (platform TEXT PRIMARY KEY, credential_id TEXT NOT NULL)')
         # Deliberately skip missed schedule occurrences on restart.
         now = time.time()
         for record in self.all('schedules'):
@@ -203,7 +205,12 @@ class Manager:
         return record
 
     def put(self, kind, value):
-        with self.db() as con: con.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)', (kind, value['id'], self.encode(value)))
+        with self.db() as con:
+            if kind == 'credentials':
+                con.execute('BEGIN IMMEDIATE')
+                pinned = con.execute('SELECT platform FROM build_credential_defaults WHERE credential_id=?',(value['id'],)).fetchone()
+                if pinned: build_credentials.setup_key(value,pinned['platform'])
+            con.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)', (kind, value['id'], self.encode(value)))
         return self.public(kind, value)
 
     def save_verified(self, con, binding, credential, identity, previous, *, new_login=False):
@@ -348,7 +355,15 @@ class Manager:
             for record in self.all(other):
                 if other==kind and record['id']==ident: continue
                 if ident in json.dumps(record): raise ValueError('Record is referenced by a connection, group, recipe or schedule; update those first')
-        with self.db() as con: con.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, ident))
+        with self.db() as con:
+            con.execute('BEGIN IMMEDIATE')
+            if kind=='credentials' and con.execute('SELECT 1 FROM build_credential_defaults WHERE credential_id=?',(ident,)).fetchone():
+                raise ValueError('Choose another build default or clear it before deleting this credential.')
+            if kind=='credentials':
+                active=con.execute("SELECT payload FROM jobs WHERE action='simple' AND status IN ('queued','running','waiting')")
+                if any(self.decode(row['payload'])['plan']['config'].get('bootstrap',{}).get('credential_id')==ident for row in active):
+                    raise ValueError('An active machine build uses this credential. Wait for it to finish before deleting it.')
+            con.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, ident))
 
     def create_plan(self, d, *, selections=None, discovered=None, recovery=None):
         plan = self.review_operation(d,selections=selections,discovered=discovered,recovery=recovery)
@@ -590,6 +605,10 @@ def register(app, db, encode, decode):
     def list_records(kind):
         if kind not in KINDS: raise ValueError('Unknown record type')
         values = [manager.public(kind,r) for r in manager.all(kind)]
+        if kind=='credentials':
+            defaults=build_credentials.defaults(manager)
+            for value in values:
+                value['is_build_default']=(defaults[value['platform']] or {}).get('id')==value['id']
         if kind=='tasks': values = BUILTINS + values
         if kind=='schedules':
             with db() as con:
@@ -597,6 +616,11 @@ def register(app, db, encode, decode):
                     row = con.execute('SELECT status,log FROM jobs WHERE id=?',(value.get('last_job'),)).fetchone()
                     value['last_status'] = row['status'] if row else None
         return jsonify(values)
+
+    @app.route('/api/manage/credentials/defaults', methods=['GET','POST'])
+    def credential_defaults():
+        if request.method=='POST': return jsonify(build_credentials.set_default(manager,request.get_json()))
+        return jsonify(build_credentials.defaults(manager))
 
     @app.post('/api/manage/tasks/check')
     def check_guest_script():

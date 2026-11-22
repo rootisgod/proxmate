@@ -2,6 +2,12 @@
 
 The [everyday Windows workflows](docs/windows-workflows.md) describe the intended template, clone and ISO experience, acceptance criteria and disposable-guest validation.
 
+## Future features
+
+1. **Manage a deployed lab.** Give each deployment a page showing its roles, current VM identities, power state, last verified login and console links. Start with a read-only cleanup preview. Later add dependency-aware start and shutdown, followed by explicitly reviewed removal of owned machines and unused credentials. Existing VMs used for scripts, shared credentials and guests whose identity has changed must be protected. Test with a reused VM ID and a credential shared outside the lab.
+2. **Pass discovered values between machines.** Let a script input select a prerequisite role's verified IPv4 address or hostname. Resolve the value from the correct deployment and guest identity after readiness. Start with a Windows domain lab that obtains the controller's address, configures member DNS, uses a delegated join credential and verifies domain membership after reboot. Keep credentials local to deployment and check the portable pack on a second dashboard.
+3. **Back up Proxmate and move configurations between clusters.** Prioritize a portable export of the script library, lab definitions and reusable build settings. On a fresh dashboard, preview conflicts, select what to import and remap destination media, templates and credentials. Keep the destination's server connection, VM bindings, encryption keys and job history local. Importing definitions must never run jobs or enable schedules. Verify the round trip with two instances connected to different servers. Separately, support a passphrase-protected disaster-recovery backup of one complete dashboard, including its secrets, with an isolated test restore.
+
 ## Rocky Linux 10 DVD provisioning
 
 Completed on 2026-11-21. A working ISO VM, reusable template, two independent full clones and a parameterized Operations run passed on `nuc`. The implementation uses verified SSH to prepare the template and preserves Rocky's SELinux policy. [Live release checks](STATUS.md#rocky-linux-10-guided-builds)
