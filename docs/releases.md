@@ -1,10 +1,15 @@
 # Publish a Proxmate container release
 
-Pull requests and pushes to `main` run the backend and UI suites, build the Linux amd64 image, exercise the bundled guest tooling without network access and start a disposable Compose installation twice to check persistence. These checks can run without a Proxmox server or registry credentials.
+Pull requests targeting `main`, pushes to `main` and release tags run both release checks.
+
+- **verify** runs the backend and UI suites, builds the Linux amd64 image and tests the bundled guest tooling with networking disabled. This includes the 11 disk-preparation cases against the Windows script shipped in the image. The job also starts a disposable Compose installation twice to check persistence.
+- **windows-bootstrap** runs the 18 bootstrap cases on Windows Server 2025 using Windows PowerShell and Pester 3.4.0.
+
+Both checks can run without a Proxmox server or registry credentials.
 
 ## Cut a stable release
 
-1. Merge the intended changes into `main` and wait for **Container checks and release → verify** to pass on that commit. Check the working tree before tagging. Keep dashboard credentials, local databases, screenshots and ISO media outside the release.
+1. Merge the intended changes into `main` and wait for both jobs in **Container checks and release** to pass on that commit. Check the working tree before tagging. Keep dashboard credentials, local databases, screenshots and ISO media outside the release.
 2. Choose an unused stable tag of the form `vMAJOR.MINOR.PATCH`. For example, to publish version 0.6.0 from the verified commit:
 
    ```sh
