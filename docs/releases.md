@@ -26,4 +26,4 @@ docker build --platform linux/amd64 -t proxmate-ci:checked .
 python tests/release_install.py proxmate-ci:checked
 ```
 
-The check uses a random Compose project, an unused loopback port and disposable data. It verifies authentication, the read-only ISO mount and that a saved credential survives container recreation. It removes its own test volume on exit. For installers, use the generated Compose file from the release assets. The checked-in `compose.release.yaml` takes `PROXMATE_IMAGE` so maintainers can run the same checks before publication.
+The check uses two disposable Compose projects on loopback ports. It verifies authentication, the read-only ISO mount and credential persistence after recreation. It then imports a portable script and recovers the full dashboard onto a second installation with separate storage, keys and administrator password. It removes both test projects and volumes on exit. Installers use the generated Compose file from the release assets. The checked-in `compose.release.yaml` takes `PROXMATE_IMAGE` so maintainers can run the same checks before publication.

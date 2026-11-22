@@ -89,6 +89,8 @@ Start with installer media already on Proxmox storage. **ISO Library** discovers
 
 ## Upgrade or roll back
 
+On dashboard versions with **Resources → Backup & restore**, a **Complete dashboard** download gives you a separate application-level recovery copy. A **Portable configuration** download moves definitions to another cluster. Keep your CT backup for the installation files, dashboard access keys, Docker settings and local ISO media.
+
 1. Check **Activity** for queued, running and waiting jobs. Let them finish and pause recurring schedules and policies during maintenance. Back up the CT root disk, including the Docker data volume, `.env.admin` and the current Compose file. The database and its encryption key belong together. Include any separately mounted storage in your backup plan.
 2. From `/opt/proxmate`, download the new Compose asset and pull its image. These commands leave the running service available during the download.
 

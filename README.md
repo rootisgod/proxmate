@@ -10,7 +10,11 @@ Download `compose.yaml` from a [Proxmate release](https://github.com/rootisgod/p
 
 On an existing Proxmox cluster, follow [Install Proxmate in a Debian LXC](docs/install-proxmox-lxc.md). The guide covers creating an unprivileged container, installing Docker, signing in to the private registry, connecting the dashboard and upgrading with persistent data. On a Linux Docker host or Debian VM with Compose, start at **Install Proxmate** in the same guide.
 
-Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management, values shared between machines and dashboard backup and restore.
+Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management and values shared between machines.
+
+## Back up or move a dashboard
+
+Open **Resources → Backup & restore**. **Complete dashboard** protects application data, credentials and history in one passphrase-encrypted file. **Portable configuration** moves selected scripts, labs and reusable builds to a different cluster. Preview the file on the destination before applying it. See the [backup and restore guide](docs/dashboard-backups.md) for recovery scope, exclusions and verification.
 
 ## Run from source
 

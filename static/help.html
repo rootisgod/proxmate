@@ -42,6 +42,7 @@
       </ul></div>
       <div><h3>Maintain machines</h3><ul>
         <li><a href="#repair-connection">Recover a failed script run</a></li>
+        <li><a href="#dashboard-recovery">Recover or move Proxmate</a></li>
         <li><a href="#test-backup">Test a backup restore</a></li>
       </ul></div>
       </div>
@@ -168,6 +169,15 @@
             <li>Reopen the failed job. When <strong>Review remaining tasks</strong> is offered, check which steps completed and whether the failed step partly changed the guest. Confirm the remaining steps. Otherwise start a fresh <strong>Run scripts</strong> review for just the affected VM and outstanding steps.</li>
           </ol>
           <p class="result"><strong>Check the result.</strong> Look for a successful login test and a new successful job for the right guest. A reachable port alone does not verify its identity or login.</p>
+        </article>
+        <article id="dashboard-recovery">
+          <h3>How do I recover my dashboard or take my scripts and labs to another cluster?</h3>
+          <ol>
+            <li>Open <a href="/#dashboard-backup">Resources → Backup &amp; restore</a>. Choose <strong>Complete dashboard</strong> for disaster recovery, or <strong>Portable configuration</strong> for another Proxmox server. Set a backup passphrase and choose <strong>Download backup</strong>.</li>
+            <li>On the destination dashboard, choose the file, enter its passphrase and select <strong>Preview restore</strong>. For a portable import, connect the destination server before importing labs. Select the new scripts and labs you want. Saved builds arrive as one-machine labs with placement and logins chosen at deployment.</li>
+            <li>For complete recovery, back up any destination data you need first. Finish active jobs and disable enabled schedules and policies. Confirm the replacement using the destination dashboard password. Inspect the restored settings, reconnect the recovered server and enable the automation you want.</li>
+          </ol>
+          <p class="result"><strong>Verify the result.</strong> Open Script library and Labs and check a definition you recognize. For a complete recovery, check Activity and Credentials too. Keep separate backups of VM disks, ISOs and installation files.</p>
         </article>
         <article id="test-backup">
           <h3>How do I test that a backup boots without touching the original VM?</h3>

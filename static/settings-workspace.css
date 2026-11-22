@@ -50,6 +50,16 @@
 .server-panel .settings-help { margin: 12px 0 0; }
 #server-result { margin: 16px 0 0; padding: 10px 12px; background: var(--canvas); border-left: 3px solid var(--muted); }
 #server-result:empty { display: none; }
+#dashboard-backup-page { max-width: 960px; }
+#dashboard-backup-page .server-panel { padding: clamp(16px, 3vw, 28px); margin-bottom: 18px; }
+#dashboard-backup-page [hidden], .backup-feedback:empty { display: none; }
+.backup-feedback { color: var(--ink); padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--canvas); }
+.backup-review { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; }
+.backup-review .check { margin: 10px 0; }
+.backup-counts { display: grid; grid-template-columns: repeat(auto-fit,minmax(110px,1fr)); gap: 12px; }
+.backup-counts div { padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.backup-counts dt { color: var(--muted); }
+.backup-counts dd { margin: 3px 0 0; font-weight: 600; }
 #server-result[data-tone=success] { color: var(--accent); border-color: var(--accent); }
 #server-result[data-tone=error] { color: var(--danger); border-color: currentColor; }
 @media (max-width: 1100px) {

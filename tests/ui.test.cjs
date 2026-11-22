@@ -771,6 +771,36 @@ test('responses from the previous server cannot repopulate UI caches after repla
   }finally{f.close()}
 });
 
+test('dashboard backup is available before connecting and requires a fresh preview after a file change',async()=>{
+  const f=await fixture({connected:false},true),{w}=f,doc=w.document;
+  const original=w.fetch,calls=[];
+  w.fetch=async(url,options)=>{
+    if(!url.startsWith('/api/dashboard-backup/'))return original(url,options);
+    calls.push([url,JSON.parse(options.body)]);
+    return {ok:true,json:async()=>({mode:'portable',review:'sample',created:1700000000,destination:'Unconfigured dashboard',
+      items:[{id:'0',kind:'script',name:'Report <host>',status:'new'},{id:'1',kind:'lab',name:'Existing',status:'connect a server'}],omitted:[]})};
+  };
+  try{
+    doc.querySelector('nav [data-view="dashboard-backup"]').click();await f.settle();
+    const download=doc.querySelector('#backup-download'),upload=doc.querySelector('#backup-upload');
+    assert.equal(doc.querySelector('#workspace-location').textContent,'Backup & restore');
+    download.elements.mode.value='portable';download.elements.mode.dispatchEvent(new w.Event('change'));
+    assert.equal(download.elements.admin_password.disabled,true);
+    Object.defineProperty(upload.elements.file,'files',{value:[new w.File(['test bytes'],'file.proxmate')]});
+    upload.elements.passphrase.value='long enough passphrase';
+    upload.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await f.settle();
+    assert.equal(calls[0][0],'/api/dashboard-backup/preview');
+    assert.equal(calls[0][1].archive,Buffer.from('test bytes').toString('base64'));
+    const choices=doc.querySelectorAll('#restore-review [name=selected]');
+    assert.equal(choices[0].checked,true);assert.equal(choices[1].disabled,true);
+    assert.equal(doc.querySelector('#restore-review host'),null);
+    w.eval('render()');assert.equal(doc.querySelector('#backup-upload'),upload);
+    upload.elements.passphrase.dispatchEvent(new w.Event('input',{bubbles:true}));
+    assert.equal(doc.querySelector('#restore-review').childElementCount,0);
+    assert.equal(calls.length,1);assert.deepEqual(f.errors,[]);
+  }finally{f.close()}
+});
+
 test('server settings test drafts without persisting or exposing saved passwords',async()=>{
   const f=await fixture(),{w}=f;
   try{

@@ -14,6 +14,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import diagnostics
+import dashboard_backup
 import job_queue
 import windows_artifacts
 import winrm_setup
@@ -101,6 +102,8 @@ def protect():
         return
     if request.method=='POST' and request.path=='/api/simple/labs/import':
         request.max_content_length=3*1024*1024
+    if request.method=='POST' and request.path in ('/api/dashboard-backup/preview','/api/dashboard-backup/restore'):
+        request.max_content_length=dashboard_backup.REQUEST_LIMIT
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         if request.headers.get('Origin') and request.headers['Origin'] != request.host_url.rstrip('/'):
             return jsonify(error='Cross-origin requests are not allowed'), 403
@@ -521,6 +524,7 @@ from server_connection import ServerConnection
 import operations
 server = ServerConnection(db,encode_payload,decode_payload)
 operations.connection_provider = server
+dashboard_backup.register(app, manager, server, admin_password)
 from machine import register as register_machine
 register_machine(app,manager,lifecycle)
 winrm_setup.register(app,manager,lifecycle)
@@ -532,7 +536,7 @@ def connection_boundary():
         return
     # These authenticated local reads are valid across server replacements.
     # Host-bound plans, inventory and writes still serialize with connection changes.
-    if request.endpoint in ('job_answer','job_autoinstall','check_guest_script','lab_example') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
+    if request.endpoint in ('job_answer','job_autoinstall','check_guest_script','lab_example','backup_export','backup_restore') or request.method in ('GET', 'HEAD') and request.endpoint in ('jobs', 'job', 'server_settings', 'current_session'):
         return
     started=time.monotonic()
     server.lock.acquire()

@@ -304,14 +304,20 @@ def inspected(record):
     return dict(id=record['id'], name=manifest['name'], manifest=manifest, scripts=record['scripts'], machines=machines)
 
 
-def save_pack(manager, manifest, files, raw):
-    """Persist already validated contents and the matching original archive atomically."""
-    server_id = operations.connection_provider.current()['id']
+def pack_records(server_id, manifest, files, raw):
+    """Create the destination-specific pack and its matching shelf entry."""
     ident = hashlib.sha256(server_id.encode() + b'\0' + raw).hexdigest()[:32]
     record = dict(id=ident, server_id=server_id, manifest=manifest, scripts=files,
                   archive=base64.b64encode(raw).decode(), order=lab_pack.ordered_vms(manifest))
     summary = dict(id=ident, server_id=server_id, name=manifest['name'],
                    machine_count=len(record['order']), created=time.time())
+    return record, summary
+
+
+def save_pack(manager, manifest, files, raw):
+    """Persist already validated contents and the matching original archive atomically."""
+    record, summary = pack_records(operations.connection_provider.current()['id'], manifest, files, raw)
+    ident = record['id']
     with manager.db() as con:
         con.executemany('INSERT OR IGNORE INTO records VALUES (?,?,?)',
                         [('lab-packs', ident, manager.encode(record)),

@@ -166,10 +166,11 @@ function renderActivity(){
   };
 }
 function render(){
-  const showServer=!state&&!['scripts','tasks','credentials','jobs'].includes(view);
+  const showServer=!state&&!['scripts','tasks','credentials','jobs','dashboard-backup'].includes(view);
   workspaceLocation(showServer?'server':view);
   if(workspaceRoute()&&workspaceRoute()!==view&&view!=='machine')history.replaceState({},'','#'+view);
   if(view==='jobs'){renderActivity();return}
+  if(view==='dashboard-backup'){renderDashboardBackup();return}
   if(state&&!state.details&&needsInventoryDetails()){loadInventoryDetails();return}
   if(typeof serverRender==='function'&&serverRender())return;if(view==='machine'&&typeof renderMachine==='function'){renderMachine();return}if(typeof simpleRender==='function'&&simpleRender())return;if(typeof lifecycleRender==='function'&&lifecycleRender())return;if(typeof managementRender==='function'&&managementRender())return;if(!state)return;const guests=state.resources.filter(r=>r.vmid),templates=guests.filter(r=>r.template),vms=guests.filter(r=>!r.template);let html='';
 if(view==='overview'){html=title('Your lab, at a glance.','Less repetition. More time to build.', '<button class="primary" data-wizard="linux-cloud">＋ Build a machine</button>')+`<div class="stats"><div class="stat"><span>VIRTUAL MACHINES</span><strong>${vms.length}</strong></div><div class="stat"><span>READY TEMPLATES</span><strong>${templates.length}</strong></div><div class="stat"><span>RUNNING GUESTS</span><strong>${vms.filter(r=>r.status==='running').length}</strong></div><div class="stat"><span>ACTIVE JOBS</span><strong>${jobs.filter(j=>['running','queued','waiting'].includes(j.status)).length}</strong></div></div><h2>A shortcut to your next project</h2><div class="cards"><div class="card"><span class="icon">▧</span><h3>Build once. Use again.</h3><p>Create an Ubuntu cloud template, or prepare a Windows or Linux installer VM.</p><button data-wizard="linux-cloud">Linux wizard</button></div><div class="card"><span class="icon">⌘</span><h3>Put your playbook to work.</h3><p>Run Ansible against your inventory and keep the result in one place.</p>${btn('Run a playbook →','ansible')}</div><div class="card"><span class="icon">◷</span><h3>A little peace of mind.</h3><p>Take a compressed VM backup on your Proxmox backup storage.</p>${btn('Take a backup →','backup')}</div></div><h2>Your machines <span class="subtle">${vms.length} guests</span></h2>`+table(['Name','Status','Node','Resources','Actions'],guestRows(vms));}

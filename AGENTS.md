@@ -24,6 +24,8 @@ Treat published lab packs and versioned built-in task references as compatibilit
 
 ## Keep changes easy to reason about
 
+When adding persistent state, update the [dashboard backup contract](docs/dashboard-backups.md) in the same change. Classify it as complete recovery data, a portable definition, or deployment-owned state. Preserve older backup readers when evolving the format. Exercise full recovery under a different encryption key and keep portable imports free of server bindings and execution side effects.
+
 - Before coding, trace one real caller through validation, storage and execution. Identify the owning module, the contract it promises and a focused test. Use the [codebase-quality skill](.agents/skills/codebase-quality/SKILL.md) in Continuous mode for routine work, Audit for assessment and Improve for selected refactors.
 - Keep a complete responsibility behind a narrow interface. Put decisions, validation and types near their callers when they change together. Make dependencies and side effects visible. Prefer straightforward control flow and measure simplicity by what a reader must understand.
 - Centralize rules that protect machine identity, secrets, reviewed plans and transactional job claims. A small amount of local duplication is fine when the policies can evolve independently. Introduce an abstraction when it owns a real shared contract.

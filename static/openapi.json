@@ -27,6 +27,88 @@
       }
     },
     "schemas": {
+      "DashboardBackupReview": {
+        "type": "object",
+        "required": [
+          "mode",
+          "created",
+          "destination",
+          "review"
+        ],
+        "properties": {
+          "mode": {
+            "enum": [
+              "full",
+              "portable"
+            ],
+            "type": "string"
+          },
+          "created": {
+            "type": "integer",
+            "description": "Unix seconds"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "review": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "destination_counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "imported": {
+            "type": "integer"
+          },
+          "omitted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "script",
+                    "lab",
+                    "saved build"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "new",
+                    "already present",
+                    "name conflict",
+                    "connect a server",
+                    "repeated name in backup"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
       "InstallerCheck": {"type": "object", "required": ["node", "source", "os", "status", "detail", "checked_at"], "properties": {"node": {"type": "string"}, "source": {"type": "string"}, "os": {"type": "string"}, "detail": {"type": "string"}, "agent_iso": {"type": "string"}, "release": {"type": "string"}, "kind": {"type": "string"}, "status": {"type": "string", "enum": ["verified", "failed", "missing"]}, "checked_at": {"type": "number", "description": "Unix timestamp in seconds"}, "install_sources": {"type": "array", "items": {"type": "string"}}, "editions": {"type": "array", "items": {"type": "object", "properties": {"index": {"type": "integer"}, "label": {"type": "string"}, "build": {"type": "string"}, "language": {"type": "string"}, "compatible": {"type": "boolean"}, "reason": {"type": "string", "nullable": true}}}}}},
       "IsoInventory": {"type": "object", "required": ["nodes", "node", "files", "warnings", "driver_isos", "ssh_configured"], "properties": {"node": {"type": "string", "nullable": true}, "nodes": {"type": "array", "items": {"type": "object", "properties": {"node": {"type": "string"}, "status": {"type": "string"}}}}, "files": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "location": {"type": "string"}, "family": {"type": "string"}, "storage": {"type": "string", "nullable": true}, "bytes": {"type": "integer", "nullable": true}, "revision": {"type": "string", "nullable": true}, "check": {"$ref": "#/components/schemas/InstallerCheck"}}}}, "warnings": {"type": "array", "items": {"type": "string"}}, "driver_isos": {"type": "array", "items": {"type": "string"}}, "ssh_configured": {"type": "boolean"}, "recommended": {"type": "object", "description": "Suggested source ID by OS for bounded installer checks.", "additionalProperties": {"type": "string"}}}},
       "LabAuthorMachine": {
@@ -1598,6 +1680,45 @@
     }
   },
   "paths": {
+    "/api/dashboard-backup/export": {
+      "post": {
+        "summary": "Download an encrypted dashboard backup",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["passphrase", "mode"], "properties": {"passphrase": {"type": "string", "minLength": 12, "maxLength": 256, "format": "password"}, "mode": {"type": "string", "enum": ["full", "portable"]}, "admin_password": {"type": "string", "format": "password", "description": "Required for complete dashboard mode."}}}}}},
+        "responses": {
+          "200": {"description": "Encrypted file", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "400": {"description": "Invalid file, passphrase, review, selection, administrator password or active destination work"},
+          "401": {"description": "Sign-in required"},
+          "403": {"description": "Invalid origin or session CSRF token"},
+          "409": {"description": "Another dashboard backup or restore is in progress."}
+        }
+      }
+    },
+    "/api/dashboard-backup/preview": {
+      "post": {
+        "summary": "Inspect a backup and preview changes on this destination",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["passphrase", "archive"], "properties": {"passphrase": {"type": "string", "minLength": 12, "maxLength": 256, "format": "password"}, "archive": {"type": "string", "format": "byte", "description": "Base64 .proxmate file, up to 64 MiB decoded."}}}}}},
+        "responses": {
+          "200": {"description": "Reviewed backup details", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DashboardBackupReview"}}}},
+          "400": {"description": "Invalid file, passphrase, review, selection, administrator password or active destination work"},
+          "401": {"description": "Sign-in required"},
+          "403": {"description": "Invalid origin or session CSRF token"},
+          "409": {"description": "Another dashboard backup or restore is in progress."}
+        }
+      }
+    },
+    "/api/dashboard-backup/restore": {
+      "post": {
+        "summary": "Apply the reviewed backup in one transaction",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["passphrase", "archive", "review", "confirmed"], "properties": {"passphrase": {"type": "string", "minLength": 12, "maxLength": 256, "format": "password"}, "archive": {"type": "string", "format": "byte", "description": "Base64 .proxmate file, up to 64 MiB decoded."}, "admin_password": {"type": "string", "format": "password", "description": "Required for complete dashboard mode."}, "review": {"type": "string"}, "confirmed": {"type": "boolean", "enum": [true]}, "selected": {"type": "array", "items": {"type": "string"}, "description": "Required for portable mode. New item IDs from preview."}}}}}},
+        "responses": {
+          "200": {"description": "Reviewed backup details", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DashboardBackupReview"}}}},
+          "400": {"description": "Invalid file, passphrase, review, selection, administrator password or active destination work"},
+          "401": {"description": "Sign-in required"},
+          "403": {"description": "Invalid origin or session CSRF token"},
+          "409": {"description": "Another dashboard backup or restore is in progress."}
+        }
+      }
+    },
     "/api/simple/labs/example": {
       "get": {"summary":"Download the example lab ZIP","description":"An Ubuntu cloud machine with curl and a bundled guest task list.","responses":{"200":{"description":"Download the example lab ZIP","content":{"application/zip":{"schema":{"type":"string","format":"binary"}}}},"400":{"description":"Invalid input or resource unavailable"},"401":{"description":"Administrator authentication required"}}}
     },

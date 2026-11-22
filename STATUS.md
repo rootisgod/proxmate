@@ -1,6 +1,12 @@
-# Proxmate status — 2026-11-21
+# Proxmate status — 2026-11-22
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
+
+## Dashboard backup and restore · 2026-11-22
+
+**Resources → Backup & restore** is live on port 8088. Both encrypted export and read-only preview passed against the running dashboard. The full preview included 108 historical jobs, three credentials, two labs and two custom scripts. The portable file contained four definitions and reported no omitted builds.
+
+Full replacement and selective import passed on disposable installations with separate volumes and encryption keys. The release-install check now exercises both workflows. Verification included 455 backend and 75 dashboard tests, an offline container check and rollback after a failed write. [Backup specification and operator guide](docs/dashboard-backups.md)
 
 ## Portable lab packs
 
