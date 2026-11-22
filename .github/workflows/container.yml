@@ -49,6 +49,10 @@ jobs:
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$GITHUB_REF_NAME" \
             --tag proxmate-ci:checked .
+      - name: Check Windows disk preparation in the offline image
+        run: |
+          docker run --rm --network none --volume "$PWD/tests:/app/tests:ro" proxmate-ci:checked \
+            pwsh -NoLogo -NoProfile -NonInteractive -File /app/tests/windows_volume_check.ps1
       - name: Check the image and a fresh Compose installation
         run: |
           docker run --rm --network none --volume "$PWD/tests:/tests:ro" proxmate-ci:checked python /tests/container_check.py
@@ -69,9 +73,25 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  windows-bootstrap:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check Windows bootstrap
+        shell: powershell
+        run: |
+          Import-Module Pester -RequiredVersion 3.4.0 -ErrorAction Stop
+          $result = Invoke-Pester -Script ./tests/windows_bootstrap.Tests.ps1 -PassThru
+          if ($result.TotalCount -lt 18 -or $result.PassedCount -ne $result.TotalCount) {
+            throw "Expected all bootstrap cases to pass (at least 18). Passed $($result.PassedCount) of $($result.TotalCount)."
+          }
+
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: verify
+    needs: [verify, windows-bootstrap]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
