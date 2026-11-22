@@ -2,6 +2,12 @@
 
 The Docker app runs at http://localhost:8088. API reference: /api/docs; OpenAPI: /api/openapi.json. The dashboard password is in an ignored local secret file; saved Proxmox and guest credentials are encrypted in the data volume. Never copy secret values into this document.
 
+## Lab deployment cleanup preview · 2026-11-22
+
+Open a run in **Labs → Deployments** and choose **Preview cleanup**. The read-only preview shows each role’s current node, VM name and power state. It explains why the VM is a cleanup candidate or protected. **Refresh preview** checks Proxmox again, and opening a console rechecks the guest identity. [Dashboard Help](static/help.html#lab-cleanup)
+
+The live dashboard on port 8088 passed the health, API and Help checks. Its deployment history was empty at verification. In an isolated run of the built image, only the lab-created web VM qualified as a candidate. The existing management VM and its shared login stayed protected. After a replacement guest reused the web VM’s ID, a refresh withdrew the candidate and the old console link returned HTTP 400. All 458 backend and 76 dashboard tests passed.
+
 ## Dashboard backup and restore · 2026-11-22
 
 **Resources → Backup & restore** is live on port 8088. Both encrypted export and read-only preview passed against the running dashboard. The full preview included 108 historical jobs, three credentials, two labs and two custom scripts. The portable file contained four definitions and reported no omitted builds.

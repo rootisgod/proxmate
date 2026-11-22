@@ -13,6 +13,7 @@ The process editor takes inspiration from the visible ordering and reusable step
 | Script library | Find a compatible script, inspect source and inputs, create a script or edit a saved one | A validated library entry available to builds, runs and labs |
 | Run scripts | Choose existing targets and supply the missing guest logins, select scripts or paste a one-off | Review the actual targets and ordered steps, then run |
 | Labs | Define machine roles, copy a saved build or machine settings, select steps, order dependencies and inspect saved packs | Save, import or export a definition, then separately map and review a deployment |
+| Labs → Deployments | Follow role jobs and inspect the VMs currently using their recorded IDs | Open **Preview cleanup** to see which VMs match the deployment and why each is a candidate or protected |
 | ISO library | Discover node and mounted ISO files, identify missing installers and check an individual candidate | Hand a checked source, its node and optional guest tools to Create machine |
 | Activity | Follow active jobs, find failures and open per-job results | Inspect the log or use the recovery actions for that job |
 | Credentials and Server settings | Manage guest logins and the connection to the hypervisor | Explicitly save the selected settings |
