@@ -1,14 +1,32 @@
 # Proxmate
 
-A Docker-hosted LAN dashboard and HTTP API for Proxmox. Single-administrator access; no external account or hosted service required.
+A self-hosted LAN dashboard and HTTP API for Proxmox. Once installed, it uses a local administrator login.
 
 See [project status](STATUS.md) for the deployed revision, live checks and remaining acceptance tests.
 
-## Install a released container
+## Quickstart: run Proxmate on your Proxmox server
 
-Download `compose.yaml` from a [Proxmate release](https://github.com/rootisgod/proxmate/releases). It selects the tested Linux amd64 image in GitHub Container Registry by version and digest. This repository and its release image are private. An authorized account can install the dashboard without cloning the project or building an image.
+Proxmate can manage the same Proxmox VE node that hosts it. The installer creates a dedicated, unprivileged Debian 13 LXC, installs Docker **inside the LXC**, and starts the dashboard automatically when the node boots.
 
-On an existing Proxmox cluster, follow [Install Proxmate in a Debian LXC](docs/install-proxmox-lxc.md). The guide covers creating an unprivileged container, installing Docker, signing in to the private registry, connecting the dashboard and upgrading with persistent data. On a Linux Docker host or Debian VM with Compose, start at **Install Proxmate** in the same guide.
+You need a root shell on an amd64 Proxmox VE node with Debian 13 template support, a management LAN with DHCP, and 32 GiB of container storage. The release is private. Have a GitHub username with package access and a classic personal access token with `read:packages` ready. [GitHub registry authentication](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)
+
+1. **On your workstation**, create a folder named `proxmate-install`. Save the [installer script](scripts/install-proxmox-lxc.sh) there using GitHub’s **Download raw file** button. Download **`compose.yaml`** from the [latest release assets](https://github.com/rootisgod/proxmate/releases/latest) into the same folder. This file selects the tested image by digest.
+2. **Copy the folder to the node.** From the workstation directory containing `proxmate-install`, run the first command below, substituting your node’s address. The second opens an interactive host shell.
+
+   ```sh
+   scp -r proxmate-install root@YOUR-PROXMOX-HOST:/root/
+   ssh root@YOUR-PROXMOX-HOST
+   ```
+
+3. **In the Proxmox node shell**, run this command. It shows the unused CT ID, storage and network, then asks before creating the container. Defaults are 2 vCPUs, 2 GiB RAM and DHCP on `vmbr0`. Inside the new CT, enter your GitHub username and paste your token at Docker’s password prompt.
+
+   ```sh
+   bash /root/proxmate-install/install-proxmox-lxc.sh
+   ```
+
+4. **Open the dashboard URL printed at the end**, usually `http://<CT-IP>:8088`. Run the printed `pct exec` command to read the generated dashboard password. In **Server settings**, enter your Proxmox address (`https://<node>:8006`) and realm-qualified account, choose **Test connection**, then **Save & connect**. Open **Inventory** to verify you see your guests.
+
+For a read-only preview, add `--plan` to the installer command. For a different bridge or storage, a static address, or installation on an existing Docker host, see the [LXC installation guide](docs/install-proxmox-lxc.md). Keep the dashboard on a trusted LAN or behind a protected HTTPS proxy.
 
 Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management and values shared between machines.
 

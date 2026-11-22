@@ -4,6 +4,19 @@ Use this route for a dedicated dashboard on an existing Proxmox VE host. You nee
 
 An unprivileged LXC is lightweight and can start with the host. A small Debian VM is also a good choice if your cluster restricts nested Docker or you need live migration and stronger isolation. The installation from step 2 is the same. [Proxmox Container Toolkit](https://github.com/proxmox/pve-docs/blob/master/pct.adoc)
 
+## Install from the Proxmox shell
+
+Follow the [README quickstart](https://github.com/rootisgod/proxmate#quickstart-run-proxmate-on-your-proxmox-server) for the one-command installation. Run the script in a root terminal on the node where you want the container. It selects the next cluster-wide guest ID, uses a cached Debian 13 amd64 template when available, and offers to create a 32 GiB unprivileged LXC with nesting, keyctl and start at boot. Docker runs inside Debian using its packaged Engine and Compose plugin. [Debian Docker Engine](https://packages.debian.org/trixie/docker.io) · [Debian Compose plugin](https://packages.debian.org/trixie/amd64/docker-compose/filelist)
+
+The installer prefers `local-lvm` for the root disk and `local` for the template. If the preferred storage is unavailable, it selects the only eligible active storage or lists the choices. To preview a custom placement from the node shell, substitute your own storage and bridge names:
+
+```sh
+cd /root/proxmate-install
+PROXMATE_CT_STORAGE=ssd PROXMATE_TEMPLATE_STORAGE=local PROXMATE_BRIDGE=vmbr1 bash install-proxmox-lxc.sh --plan
+```
+
+Repeat the command without `--plan` when the placement is correct. For a fixed IP, reserve the CT’s DHCP lease or use the manual creation steps below. The installer prints the new ID and a retry command. If registry login, package installation or dashboard startup fails, fix the issue and use that retry command on the existing CT. The host installer always allocates a fresh ID. To inspect the service, enter the CT with `pct enter <CT-ID>` and run `docker compose -f /opt/proxmate/compose.yaml logs --tail=100`. The generated dashboard password and Compose file stay in `/opt/proxmate`, and dashboard data persists in the Docker volume.
+
 ## 1. Create the system container
 
 1. In the Proxmox web UI, open a node's template-capable storage, choose **CT Templates → Templates**, and download the Debian 13 standard amd64 template.
