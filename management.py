@@ -184,17 +184,17 @@ class Manager:
             con.execute('CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, created REAL, value TEXT)')
             con.execute('CREATE TABLE IF NOT EXISTS build_credential_defaults (platform TEXT PRIMARY KEY, credential_id TEXT NOT NULL)')
 
-    def skip_missed_occurrences(self, con, now):
-        reports = {'schedules': 'Missed occurrence skipped on service restart.',
-                   'backup-policies': 'Missed occurrence skipped on restart.'}
-        for kind, report in reports.items():
-            rows = con.execute('SELECT id,value FROM records WHERE kind=?', (kind,)).fetchall()
-            for ident, value in rows:
-                record = self.decode(value)
-                if record['next_run'] < now:
-                    record['next_run'] = next_occurrence(now, record)
-                    record['last_report'] = report
-                    con.execute('UPDATE records SET value=? WHERE kind=? AND id=?', (self.encode(record), kind, ident))
+    def recover_schedules(self, con, now):
+        self.advance_missed_occurrences(con, 'schedules', now, 'Missed occurrence skipped on service restart.')
+
+    def advance_missed_occurrences(self, con, kind, now, report):
+        rows = con.execute('SELECT id,value FROM records WHERE kind=?', (kind,)).fetchall()
+        for ident, value in rows:
+            record = self.decode(value)
+            if record['next_run'] < now:
+                record['next_run'] = next_occurrence(now, record)
+                record['last_report'] = report
+                con.execute('UPDATE records SET value=? WHERE kind=? AND id=?', (self.encode(record), kind, ident))
 
     def all(self, kind):
         with self.db() as con: rows = con.execute('SELECT value FROM records WHERE kind=? ORDER BY id', (kind,)).fetchall()
@@ -381,7 +381,7 @@ class Manager:
         con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
         return dict(id=ident, **self.summary(plan))
 
-    def review_operation(self, d, *, selections=None, discovered=None, recovery=None, lab_existing=False):
+    def review_operation(self, d, *, selections=None, discovered=None, recovery=None, lab_existing=False, client=None):
         if not isinstance(d, dict): raise ValueError('Plan must be a JSON object')
         op = d.get('operation')
         if op not in OPS: raise ValueError('Unknown management operation')
@@ -403,7 +403,7 @@ class Manager:
             raise ValueError('Choose one Windows Server for the first domain controller.')
         drive_letters=selected_drive_letters(selections)
         discovered = discovered or {}
-        p = operations.Proxmox()
+        p = client if client is not None else operations.Proxmox()
         resources = p.resources()
         plan = {'operation': op, 'targets': [], 'tasks': selections, 'snapshot_before': boolean(d.get('snapshot_before', False)),
                 'dangerous': op in ('stop', 'restore') or any(t['item'].get('dangerous') for t in selections)}

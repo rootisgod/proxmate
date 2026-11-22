@@ -57,9 +57,8 @@ def require(ok, message):
 class LiveTest:
     def __init__(self):
         data = Path(os.environ.get('DATA_DIR', '/data'))
-        # Importing the web app would run its startup queue recovery. Use a read-only
-        # connection for the two things deliberately absent from the public jobs API:
-        # the original build inputs and the new guest's encrypted login.
+        # Read the original build inputs and the new guest's encrypted login directly.
+        # Both are intentionally omitted from the public jobs response.
         self.db = sqlite3.connect((data / 'jobs.sqlite').resolve().as_uri() + '?mode=ro', uri=True)
         self.cipher = Fernet(base64.urlsafe_b64encode(hashlib.sha256((data / 'session-key').read_text().strip().encode()).digest()))
         self.http = requests.Session()

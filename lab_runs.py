@@ -96,7 +96,7 @@ class LabRuns:
         inventory = None
         reviews, summaries, configs = [], [], []
         existing_ids = set()
-        for key in pack.get('order') or lab_pack.ordered_vms(manifest):
+        for key in lab_pack.ordered_vms(manifest, stored_order=pack.get('order')):
             machine = machines[key]
             login = secrets.get(key, {})
             try:

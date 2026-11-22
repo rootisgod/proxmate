@@ -108,8 +108,10 @@ def _integer(value, low, high, label):
         raise ValueError(f'{label} must be an integer from {low} to {high}.')
 
 
-def ordered_vms(manifest):
-    """Return machine keys in dependency order, retaining declaration order among ready VMs."""
+def ordered_vms(manifest, *, stored_order=None):
+    """Use the frozen deployment order, or resolve dependencies with declaration order as the tie break."""
+    if stored_order:
+        return stored_order
     machines = manifest['machines']
     done = []
     for name, machine in machines.items():
@@ -130,7 +132,7 @@ def ordered_vms(manifest):
 def definition_digest(manifest, scripts, *, stored_order=None):
     """Identify a deployable definition across archive encodings and dashboard storage."""
     # SQLite records sort mapping keys, so use the saved deployment order when available.
-    content = [manifest, scripts, stored_order or ordered_vms(manifest)]
+    content = [manifest, scripts, ordered_vms(manifest, stored_order=stored_order)]
     return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 

@@ -600,7 +600,8 @@ def recover_worker_state():
         con.execute('BEGIN IMMEDIATE')
         now = time.time()
         job_queue.recover_interrupted(con, now)
-        manager.skip_missed_occurrences(con, now)
+        manager.recover_schedules(con, now)
+        lifecycle.recover_policies(con, now)
 
 
 def scheduler():

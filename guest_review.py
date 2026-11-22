@@ -8,26 +8,7 @@ import operations
 from vm_config import lab_machine_identity, vm_path
 
 
-def _discover_connections(manager, targets, selections, login, lab_existing):
-    bindings = {row['id'] for row in manager.all('connections')}
-    missing = [target for target in targets if management.target_id(target) not in bindings]
-    if not missing:
-        if lab_existing and ('credential_id' in login or 'credential' in login):
-            raise ValueError('This machine already has a saved guest connection. Use its configured login.')
-        return {}
-
-    discovered = {}
-    if login.get('credential_id'):
-        credential = manager.get('credentials', login['credential_id'])
-    elif isinstance(login.get('credential'), dict):
-        fields = {k: login['credential'].get(k) for k in
-                  ('platform', 'username', 'password', 'private_key', 'become_password', 'ca_pem')}
-        credential = manager.prepare('credentials', dict(fields, name='Guest login ' + time.strftime('%Y-%m-%d %H:%M')))
-        discovered['credentials', credential['id']] = credential
-    else:
-        raise ValueError('Choose a saved login or enter a username and password for these machines')
-
-    client = operations.Proxmox()
+def _discover_connections(client, manager, missing, selections, credential, lab_existing):
     resources = client.resources()
     for target in missing:
         guest = next((r for r in resources if r.get('node') == target['node'] and r.get('vmid') == target['vmid']
@@ -67,17 +48,34 @@ def _discover_connections(manager, targets, selections, login, lab_existing):
             record = manager.prepare('connections', binding, credential)
             if lab_existing:
                 record['machine_identity'] = identity
-            discovered['connections', record['id']] = record
         except Exception as exc:
             raise ValueError(f"Could not detect the connection for VM {target['vmid']}. Check its guest agent or use "
                              "Inventory > Refresh connection to verify its address and login.") from exc
-    return discovered
+        yield record
 
 
 def prepare(manager, targets, selections, login, *, lab_existing):
-    discovered = _discover_connections(manager, targets, selections, login, lab_existing)
+    bindings = {row['id'] for row in manager.all('connections')}
+    missing = [target for target in targets if management.target_id(target) not in bindings]
+    discovered = {}
+    client = None
+    if missing:
+        if login.get('credential_id'):
+            credential = manager.get('credentials', login['credential_id'])
+        elif isinstance(login.get('credential'), dict):
+            fields = {k: login['credential'].get(k) for k in
+                      ('platform', 'username', 'password', 'private_key', 'become_password', 'ca_pem')}
+            credential = manager.prepare('credentials', dict(fields, name='Guest login ' + time.strftime('%Y-%m-%d %H:%M')))
+            discovered['credentials', credential['id']] = credential
+        else:
+            raise ValueError('Choose a saved login or enter a username and password for these machines')
+        client = operations.Proxmox()
+        for record in _discover_connections(client, manager, missing, selections, credential, lab_existing):
+            discovered['connections', record['id']] = record
+    elif lab_existing and ('credential_id' in login or 'credential' in login):
+        raise ValueError('This machine already has a saved guest connection. Use its configured login.')
     operation = manager.review_operation(dict(operation='tasks', targets=targets), selections=selections,
-                                         discovered=discovered, lab_existing=lab_existing)
+                                         discovered=discovered, lab_existing=lab_existing, client=client)
     # This shape is also embedded in encrypted lab reviews until confirmation.
     return dict(operation=operation, discoveries=[(kind, record) for (kind, _), record in discovered.items()])
 

@@ -58,6 +58,9 @@ class Lifecycle:
         self.m=manager
         with self.m.db() as con: con.execute('CREATE TABLE IF NOT EXISTS lifecycle_plans (id TEXT PRIMARY KEY, created REAL, value TEXT)')
 
+    def recover_policies(self, con, now):
+        self.m.advance_missed_occurrences(con, 'backup-policies', now, 'Missed occurrence skipped on restart.')
+
     def guest(self,p,t,template=None):
         r=next((r for r in p.resources() if r.get('type')=='qemu' and r.get('node')==t['node'] and r.get('vmid')==t['vmid']),None)
         if not r or (template is not None and bool(r.get('template')) != template): raise ValueError('Expected VM/template is missing or moved')
