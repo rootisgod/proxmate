@@ -41,7 +41,10 @@ jobs:
           python -m pytest -q
       - name: Build the distribution image
         run: |
+          version=source
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="$GITHUB_REF_NAME"; fi
           docker build --platform linux/amd64 \
+            --build-arg "PROXMATE_VERSION=$version" \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$GITHUB_REF_NAME" \
@@ -52,9 +55,12 @@ jobs:
           docker run --rm --network none --user 0 --volume "$PWD/tests:/tests:ro" --volume "$PWD/scripts:/scripts:ro" \
             proxmate-ci:checked bash /tests/lxc_install_check.sh /scripts/install-proxmox-lxc.sh
           python tests/release_install.py proxmate-ci:checked
+          sudo bash tests/release_update_check.sh proxmate-ci:checked
       - name: Export the exact tested image
         if: startsWith(github.ref, 'refs/tags/')
-        run: docker save proxmate-ci:checked | gzip -1 > "$RUNNER_TEMP/proxmate.tar.gz"
+        run: |
+          docker tag proxmate-ci:checked "proxmate-bundle:$GITHUB_REF_NAME"
+          docker save "proxmate-bundle:$GITHUB_REF_NAME" | gzip -1 > "$RUNNER_TEMP/proxmate.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -90,6 +96,7 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           version="${GITHUB_REF_NAME#v}"
           docker load --input "$RUNNER_TEMP/proxmate.tar.gz"
+          docker tag "proxmate-bundle:$GITHUB_REF_NAME" proxmate-ci:checked
           test "$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' proxmate-ci:checked)" = "$GITHUB_SHA"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           docker tag proxmate-ci:checked "$image:$version"
@@ -100,7 +107,17 @@ jobs:
           docker pull "$ref"
           sed "s|^    image: .*|    image: $ref|" compose.release.yaml > "$RUNNER_TEMP/compose.yaml"
           test "$(docker compose -f "$RUNNER_TEMP/compose.yaml" config --images)" = "$ref"
+          mv "$RUNNER_TEMP/proxmate.tar.gz" "$RUNNER_TEMP/proxmate-linux-amd64.tar.gz"
+          archive_sha=$(sha256sum "$RUNNER_TEMP/proxmate-linux-amd64.tar.gz" | cut -d' ' -f1)
+          sed -e "s/^release_tag=source$/release_tag=$GITHUB_REF_NAME/" \
+            -e "s/^archive_sha=unpublished$/archive_sha=$archive_sha/" \
+            -e "s/^revision=unpublished$/revision=$GITHUB_SHA/" \
+            scripts/install-proxmox-lxc.sh > "$RUNNER_TEMP/install-proxmox-lxc.sh"
+          bash -n "$RUNNER_TEMP/install-proxmox-lxc.sh"
+          notes="$RUNNER_TEMP/release-notes.md"
+          if [[ -f "docs/releases/$GITHUB_REF_NAME.md" ]]; then cat "docs/releases/$GITHUB_REF_NAME.md" > "$notes"; fi
+          printf '\n[Install or update Proxmate](https://github.com/%s/blob/%s/README.md)\n\nLinux amd64 image: `%s`\n\nRelease archive SHA-256: `%s`\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$ref" "$archive_sha" >> "$notes"
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Proxmate $version" --generate-notes \
-            --notes "Linux amd64 image: \`$ref\`. Download compose.yaml and follow the attached installation guide." \
-            "$RUNNER_TEMP/compose.yaml" docs/install-proxmox-lxc.md scripts/install-proxmox-lxc.sh
+            --notes-file "$notes" \
+            "$RUNNER_TEMP/compose.yaml" docs/install-proxmox-lxc.md "$RUNNER_TEMP/install-proxmox-lxc.sh" "$RUNNER_TEMP/proxmate-linux-amd64.tar.gz"

@@ -161,7 +161,7 @@ def error(exc):
 @app.get('/static/index.html')
 def index():
     g.style_nonce = secrets.token_urlsafe(24)
-    return render_template('index.html', style_nonce=g.style_nonce)
+    return render_template('index.html', style_nonce=g.style_nonce, installed_version=os.getenv('PROXMATE_VERSION', 'source'))
 
 
 @app.get('/api/health')

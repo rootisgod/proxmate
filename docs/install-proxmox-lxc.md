@@ -1,6 +1,6 @@
 # Install Proxmate in a Debian LXC
 
-Use this route for a dedicated dashboard on an existing Proxmox VE host. You need an Intel or AMD 64-bit host, a LAN address for the dashboard, and permission to read the private GitHub release and its GHCR package. Guests still run on Proxmox. Only the dashboard and its worker run inside the container.
+Use this route for a dedicated dashboard on an existing Proxmox VE host. You need an Intel or AMD 64-bit host, a LAN address for the dashboard, and outbound HTTPS to download the public release. Guests still run on Proxmox. Only the dashboard and its worker run inside the container.
 
 An unprivileged LXC is lightweight and can start with the host. A small Debian VM is also a good choice if your cluster restricts nested Docker or you need live migration and stronger isolation. The installation from step 2 is the same. [Proxmox Container Toolkit](https://github.com/proxmox/pve-docs/blob/master/pct.adoc)
 
@@ -11,11 +11,10 @@ Follow the [README quickstart](https://github.com/rootisgod/proxmate#quickstart-
 The installer prefers `local-lvm` for the root disk and `local` for the template. If the preferred storage is unavailable, it selects the only eligible active storage or lists the choices. To preview a custom placement from the node shell, substitute your own storage and bridge names:
 
 ```sh
-cd /root/proxmate-install
-PROXMATE_CT_STORAGE=ssd PROXMATE_TEMPLATE_STORAGE=local PROXMATE_BRIDGE=vmbr1 bash install-proxmox-lxc.sh --plan
+PROXMATE_CT_STORAGE=ssd PROXMATE_TEMPLATE_STORAGE=local PROXMATE_BRIDGE=vmbr1 bash /root/proxmate-install.sh --plan
 ```
 
-Repeat the command without `--plan` when the placement is correct. For a fixed IP, reserve the CT’s DHCP lease or use the manual creation steps below. The installer prints the new ID and a retry command. If registry login, package installation or dashboard startup fails, fix the issue and use that retry command on the existing CT. The host installer always allocates a fresh ID. To inspect the service, enter the CT with `pct enter <CT-ID>` and run `docker compose -f /opt/proxmate/compose.yaml logs --tail=100`. The generated dashboard password and Compose file stay in `/opt/proxmate`, and dashboard data persists in the Docker volume.
+Repeat the command without `--plan` when the placement is correct. For a fixed IP, reserve the CT’s DHCP lease or use the manual creation steps below. The installer prints the new ID and a retry command. If the image download, package installation or dashboard startup fails, fix the issue and use that retry command on the existing CT. The host installer always allocates a fresh ID. To inspect the service, enter the CT with `pct enter <CT-ID>` and run `docker compose -f /opt/proxmate/compose.yaml logs --tail=100`. The generated dashboard password and Compose file stay in `/opt/proxmate`, and dashboard data persists in the Docker volume.
 
 ## 1. Create the system container
 
@@ -61,21 +60,10 @@ cd /opt/proxmate
 install -d -m 0755 isos
 ```
 
-Download the **compose.yaml** asset from the chosen release into this directory. You can transfer it from a signed-in browser or use the GitHub CLI inside the CT. The CLI's browser login displays a device code you can enter on your workstation.
+Download the pinned Compose asset and pull the image. If GHCR requires authentication, use the one-command LXC installer for its verified GitHub release image fallback, or authenticate Docker with an account that has package access.
 
 ```sh
-apt-get install -y gh openssl
-gh auth login --hostname github.com --git-protocol https --web
-gh release download --repo rootisgod/proxmate --pattern compose.yaml
-```
-
-Without a tag, this selects the latest stable release. To install a particular release, add its tag after `download`, for example `v0.6.0`. The asset contains the exact image digest. [Proxmate releases](https://github.com/rootisgod/proxmate/releases)
-
-Sign in to GHCR using your GitHub username. At Docker's password prompt, paste a personal access token (classic) with **read:packages** from an account granted read access to the package. Keep the dashboard password separate. [GitHub Container Registry authentication](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)
-
-```sh
-read -rp 'GitHub username: ' github_user
-docker login ghcr.io --username "$github_user"
+curl -fL https://github.com/rootisgod/proxmate/releases/latest/download/compose.yaml -o compose.yaml
 docker compose pull
 ```
 
@@ -102,12 +90,4 @@ Start with installer media already on Proxmox storage. **ISO Library** discovers
 
 ## Upgrade or roll back
 
-Follow [Update an existing install](https://github.com/rootisgod/proxmate#update-an-existing-install) for backup, staging the new image, switching releases, checking your data and rolling back. Use the existing CT throughout.
-
-If you already use an authenticated GitHub CLI inside the CT, you can stage the latest stable release directly after the backup in step 1.
-
-```sh
-cd /opt/proxmate && gh release download --repo rootisgod/proxmate --pattern compose.yaml --output compose.next.yaml
-```
-
-To choose a specific release, add its tag immediately after `download`. Continue at step 4 in the README to check the image and pull it. GitHub CLI authenticates the release download. Docker uses its own GHCR login for the image. [GitHub CLI release downloads](https://cli.github.com/manual/gh_release_download)
+Follow [Update an existing install](https://github.com/rootisgod/proxmate#update-an-existing-install) for the one-command update, backup, health check and rollback. Use the existing CT throughout.

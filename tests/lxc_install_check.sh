@@ -35,6 +35,10 @@ case $name in
     if [[ $1 == create && ${OCCUPIED:-no} == yes ]]; then exit 17; fi
     if [[ $1 == exec && $* == *'address show dev eth0'* ]]; then echo '2: eth0 inet 192.0.2.40/24 scope global eth0'; fi ;;
   systemd-detect-virt) echo lxc ;;
+  curl)
+    if [[ $* == *' -o '* ]]; then
+      if [[ $* == *'.tar.gz '* ]]; then printf '%s' "${ARCHIVE:-fixture}" > "${!#}"; else cp "$FIXTURE_MANIFEST" "${!#}"; fi
+    fi ;;
   docker)
     if [[ $1 == login ]]; then read -r ignored; fi ;;
 esac
@@ -75,4 +79,29 @@ run_host --guest <<< $'example\nexample-token' >/dev/null
 [[ $(sha256sum "$admin") == "$original" ]]
 grep -q '^docker compose up -d --wait --wait-timeout 120' "$CALLS"
 ! grep -q 'example-token' "$CALLS" || exit 1
+! grep -q '^docker login' "$CALLS" || exit 1
+
+# The release script fetches its own pinned Compose file and can use a verified
+# archive when GHCR is unavailable. Only the asset transport/engine are mocked.
+export FIXTURE_MANIFEST="$tmp/compose.yaml"
+archive_sha=$(printf fixture | sha256sum | cut -d' ' -f1)
+export FIXTURE_REVISION=$(printf '%040d' 5)
+sed -e 's/^release_tag=source/release_tag=v1.2.3/' -e "s/^archive_sha=unpublished/archive_sha=$archive_sha/" \
+    -e "s/^revision=unpublished/revision=$FIXTURE_REVISION/" "$source_script" > "$tmp/released.sh"
+bash "$tmp/released.sh" --plan | grep -q 'Create CT 321'
+rm "$tmp/bin/docker"
+cat > "$tmp/bin/docker" <<'ENGINE'
+#!/usr/bin/env bash
+echo "$*" >> "$CALLS"
+case "$*" in
+  *' pull'|'image inspect '*proxmate-local:*) exit 1 ;;
+  'image inspect '*proxmate-bundle:*) echo "v1.2.3@$FIXTURE_REVISION" ;;
+esac
+ENGINE
+chmod +x "$tmp/bin/docker"
+if ARCHIVE=corrupt bash "$tmp/released.sh" --guest >/dev/null 2>&1; then exit 1; fi
+! grep -q '^load --input' "$CALLS" || exit 1
+bash "$tmp/released.sh" --guest >/dev/null
+grep -q '^load --input' "$CALLS"
+grep -q '^    pull_policy: never$' /opt/proxmate/compose.yaml
 echo 'LXC installer checks passed for preview, storage, occupied IDs, templates, guest setup and retry.'

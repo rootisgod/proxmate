@@ -31,11 +31,14 @@ COPY script_library.py windows_setup.py diagnostics.py reviews.py windows_artifa
 COPY debian_build.py rocky_build.py linux_access.py linux_install.py ubuntu_build.py guided_recipes.py task_recovery.py vm_config.py ./
 COPY lab_exchange.py lab_pack.py lab_runs.py lab_sources.py media_library.py build_credentials.py ./
 COPY dashboard_backup.py backup_portable.py ./
+COPY LICENSE ./
 COPY windows_domain.yml ./
 COPY static ./static
 COPY --from=editor /build/static/editor-assets ./static/editor-assets
 RUN useradd --uid 10001 --create-home proxmate && mkdir /data && chown proxmate /data
 USER proxmate
+ARG PROXMATE_VERSION=source
+ENV PROXMATE_VERSION=$PROXMATE_VERSION
 ENV DATA_DIR=/data ISO_DIR=/isos
 EXPOSE 8080
 CMD ["python", "app.py"]

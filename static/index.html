@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/static/settings-workspace.css" nonce="{{ style_nonce }}">
   <script defer src="/static/notifications.js"></script>
   <script defer src="/static/app.js"></script>
+  <script defer src="/static/release.js"></script>
   <script defer src="/static/wizard.js"></script>
   <script defer src="/static/script-editor.js"></script>
   <script defer src="/static/script-workspace.js"></script>
@@ -69,11 +70,26 @@
     </details>
   </nav>
   <div class="aside-bottom">
+    <button type="button" id="show-release"><span class="bi bi-box-seam" aria-hidden="true"></span>{{ 'Source build' if installed_version == 'source' else installed_version }} · Updates</button>
     <a href="/help" target="_blank" rel="noopener"><span class="bi bi-question-circle" aria-hidden="true"></span>Help</a>
     <a href="/api/docs" target="_blank" rel="noopener"><span class="bi bi-book" aria-hidden="true"></span>API documentation</a>
     <button id="logout"><span class="bi bi-box-arrow-right" aria-hidden="true"></span>Sign out</button>
   </div>
 </aside>
+<dialog id="release-dialog" aria-labelledby="release-title"><form method="dialog">
+  <div class="modal-head"><h2 id="release-title">Proxmate updates</h2><button aria-label="Close">Close</button></div>
+  <p>Installed version <strong>{{ 'Source build' if installed_version == 'source' else installed_version }}</strong></p>
+  <p><a href="https://github.com/rootisgod/proxmate/releases/latest" target="_blank" rel="noopener">View latest release and notes ↗</a></p>
+  {% if installed_version != 'source' %}
+  <p>Back up the dashboard LXC. In its root console, run this command to update when Activity is idle.</p>
+  <pre><code id="release-command">curl -fsSL https://github.com/rootisgod/proxmate/releases/latest/download/install-proxmox-lxc.sh -o /root/proxmate-install.sh &amp;&amp; bash /root/proxmate-install.sh --update</code></pre>
+  {% else %}
+  <p>Back up the dashboard and wait for Activity to finish. Run this command in your source checkout.</p>
+  <pre><code id="release-command">git pull --ff-only &amp;&amp; docker compose up -d --build --wait</code></pre>
+  {% endif %}
+  <button type="button" id="copy-release">Copy update command</button> <span id="release-feedback" role="status"></span>
+  <p><a href="https://github.com/rootisgod/proxmate#update-an-existing-install" target="_blank" rel="noopener">Update and recovery guide ↗</a></p>
+</form></dialog>
 <main>
 <header class="workspace-bar"><div class="workspace-location"><span id="workspace-group">Workspace</span><span aria-hidden="true">/</span><strong id="workspace-location">Inventory</strong></div>
 <div class="workspace-connection"><span class="connection-status"><i id="connection"></i><span id="connection-label">Checking connection</span></span><label class="appearance-control" title="Appearance"><span class="bi appearance-icon" aria-hidden="true"></span><select id="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select><span class="bi bi-chevron-down" aria-hidden="true"></span></label><button id="refresh" aria-label="Refresh workspace" title="Refresh workspace"><span class="bi bi-arrow-clockwise" aria-hidden="true"></span><span class="refresh-label">Refresh</span></button></div></header>

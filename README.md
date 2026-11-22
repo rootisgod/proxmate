@@ -11,7 +11,7 @@ Proxmate is a self-hosted dashboard for the jobs you repeat in a Proxmox VE home
 - **Build a machine the way you like it.** Run an unattended Windows Server install with Chocolatey packages and WinRM, or bring up Ubuntu Server LTS, Debian or Rocky Linux with packages and SSH ready. When you have a base worth keeping, prepare a reusable template and clone it.
 - **Look after the machines you already have.** Inventory discovers guests across your nodes. Select one or several, pick an Ansible task, PowerShell script or shell script for their platform, and fill in its inputs. Proxmate uses saved guest logins and tracks each run in Activity.
 - **Rebuild an entire test lab.** Define a domain controller and an application server, choose which one starts first, and give each its own setup steps. Export the lab and its custom scripts together. On another cluster, choose local media, placement and credentials before deploying.
-- **Keep the work you put into the dashboard.** Dashboard backup, added after v0.6.0, can recover scripts, labs, credentials and job history from one passphrase-encrypted file. A portable export lets you take selected definitions to a different cluster. [Backup and restore guide](docs/dashboard-backups.md)
+- **Keep the work you put into the dashboard.** Dashboard backup in v0.7.0 and later can recover scripts, labs, credentials and job history from one passphrase-encrypted file. A portable export lets you take selected definitions to a different cluster. [Backup and restore guide](docs/dashboard-backups.md)
 
 Proxmate runs on your LAN with a local administrator login. If you prefer to automate from a terminal or coding agent, the HTTP API lets you discover available media, review a build and follow its job through completion. [API examples](#api) · [Provisioning guide for agents](static/llms.txt)
 
@@ -19,72 +19,31 @@ Proxmate runs on your LAN with a local administrator login. If you prefer to aut
 
 Proxmate can manage the same Proxmox VE node that hosts it. The installer creates a dedicated, unprivileged Debian 13 LXC, installs Docker **inside the LXC**, and starts the dashboard automatically when the node boots.
 
-You need a root shell on an amd64 Proxmox VE node with Debian 13 template support, a management LAN with DHCP, and 32 GiB of container storage. The release is private. Have a GitHub username with package access and a classic personal access token with `read:packages` ready. [GitHub registry authentication](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-with-a-personal-access-token-classic)
+On an amd64 Proxmox VE node with Debian 13 template support, open **Shell** as root and paste this one command. You need a DHCP-enabled management LAN, 32 GiB of container storage and outbound HTTPS. The installer shows the new CT ID, storage and bridge and asks before creating anything.
 
-1. **On your workstation**, create a folder named `proxmate-install`. Save the [installer script](scripts/install-proxmox-lxc.sh) there using GitHub’s **Download raw file** button. Download **`compose.yaml`** from the [latest release assets](https://github.com/rootisgod/proxmate/releases/latest) into the same folder. This file selects the tested image by digest.
-2. **Copy the folder to the node.** From the workstation directory containing `proxmate-install`, run the first command below, substituting your node’s address. The second opens an interactive host shell.
+```sh
+curl -fsSL https://github.com/rootisgod/proxmate/releases/latest/download/install-proxmox-lxc.sh -o /root/proxmate-install.sh && bash /root/proxmate-install.sh
+```
 
-   ```sh
-   scp -r proxmate-install root@YOUR-PROXMOX-HOST:/root/
-   ssh root@YOUR-PROXMOX-HOST
-   ```
+When setup finishes, open the printed dashboard URL and run the printed `pct exec` command to read your generated password. In **Server settings**, enter the Proxmox URL and realm-qualified account, select **Test connection**, then **Save & connect**. Check **Inventory** for your guests.
 
-3. **In the Proxmox node shell**, run this command. It shows the unused CT ID, storage and network, then asks before creating the container. Defaults are 2 vCPUs, 2 GiB RAM and DHCP on `vmbr0`. Inside the new CT, enter your GitHub username and paste your token at Docker’s password prompt.
-
-   ```sh
-   bash /root/proxmate-install/install-proxmox-lxc.sh
-   ```
-
-4. **Open the dashboard URL printed at the end**, usually `http://<CT-IP>:8088`. Run the printed `pct exec` command to read the generated dashboard password. In **Server settings**, enter your Proxmox address (`https://<node>:8006`) and realm-qualified account, choose **Test connection**, then **Save & connect**. Open **Inventory** to verify you see your guests.
-
-For a read-only preview, add `--plan` to the installer command. For a different bridge or storage, a static address, or installation on an existing Docker host, see the [LXC installation guide](docs/install-proxmox-lxc.md). Keep the dashboard on a trusted LAN or behind a protected HTTPS proxy.
-
-See [project status](STATUS.md) for live checks and remaining acceptance tests. Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management and values shared between machines.
+The installer downloads the matching Compose file and release image. If the registry pull fails, it downloads and checks the same image from GitHub Releases. For a preview, append `--plan` to the command. If setup stops after creating the CT, use the printed retry command for that CT. [Inspect the installer source](scripts/install-proxmox-lxc.sh) ? [Custom storage, networking and manual installation](docs/install-proxmox-lxc.md)
 
 ## Update an existing install
 
-**Keep your existing LXC.** Running the Proxmox installer again creates a second container. Each release's `compose.yaml` pins an exact image, so pulling with the old file keeps you on the old version. To upgrade, use the new release's file inside the LXC you already run.
+**Open the existing Proxmate LXC's Console** in Proxmox and sign in as root. Running the installer on the node again would create another LXC. Before upgrading, pause recurring schedules and backup policies, allow jobs in **Activity** to finish, and back up the CT and any separately mounted data. With v0.7.0 or later, you can also download a **Complete dashboard** backup from **Resources ? Backup & restore**.
 
-1. **Prepare for a short dashboard outage.** Pause recurring schedules and backup policies, then let queued, running and waiting jobs finish in **Activity**. Back up the Proxmate CT in Proxmox, including its Docker data volume and any separately mounted data. If your version has **Resources → Backup & restore**, also download a **Complete dashboard** backup.
-2. **On your workstation**, open the [GitHub releases page](https://github.com/rootisgod/proxmate/releases), read the target version's release notes and download `compose.yaml` from its **Assets**. From the download directory, copy it to your Proxmox node under a staging name.
+Paste this command in the CT. It also upgrades installations created with v0.6.0.
 
-   ```sh
-   scp compose.yaml root@YOUR-PROXMOX-HOST:/root/proxmate-compose.next.yaml
-   ```
+```sh
+curl -fsSL https://github.com/rootisgod/proxmate/releases/latest/download/install-proxmox-lxc.sh -o /root/proxmate-install.sh && bash /root/proxmate-install.sh --update
+```
 
-3. **In the Proxmox node shell**, run `pct list` to find the existing Proxmate CT. Enter that ID when prompted.
+The updater checks the installed image, stages the latest stable release and checks for all queued, running or waiting jobs before stopping the dashboard. If the queue is busy, retry after the jobs finish. It keeps the data volume, dashboard login, ISO path and port, and waits for a healthy dashboard. Sign in at the usual URL, check **Inventory** and a saved script or lab, then resume schedules and policies. In v0.7.0 and later, **Updates** at the foot of the sidebar shows the installed build, release notes and a copyable command.
 
-   ```sh
-   read -rp 'Existing Proxmate CT ID: ' ctid
-   pct push "$ctid" /root/proxmate-compose.next.yaml /opt/proxmate/compose.next.yaml --perms 0600 && pct enter "$ctid"
-   ```
+**If startup fails**, use `cd /opt/proxmate && docker compose logs --tail=100 proxmate`. The previous release file is saved as `compose.previous.yaml`. If the release notes confirm data compatibility, run `cp -p compose.previous.yaml compose.yaml && docker compose up -d --wait` from that directory. If compatibility is unknown or a migration requires older data, restore the pre-update CT backup and its matching data and encryption key. [Recovery guide](docs/dashboard-backups.md)
 
-4. **Inside that CT**, check the displayed image version and digest against the release. Once they match, pull the image while the dashboard is still online.
-
-   ```sh
-   cd /opt/proxmate && docker compose -f compose.next.yaml config --images
-   ```
-
-   ```sh
-   docker compose -f compose.next.yaml pull
-   ```
-
-   If the pull reports `unauthorized`, run `docker login ghcr.io --username YOUR-GITHUB-USERNAME` inside the CT. At the password prompt, enter a classic token with `read:packages` for an account with package access, then retry the pull.
-
-5. **After the pull succeeds**, confirm Activity is still idle and apply the release. The existing project keeps its data volume, dashboard password, port and ISO directory. Keep `.env.admin`, any `.env`, and the data volume in place.
-
-   ```sh
-   cp -p compose.yaml compose.previous.yaml &&
-     mv compose.next.yaml compose.yaml &&
-     docker compose up -d --wait &&
-     docker compose ps
-   ```
-
-   Look for `healthy`, sign in at your usual URL and check **Inventory** and a saved script or lab. Resume your schedules and policies once those checks pass.
-
-**If startup fails**, inspect `docker compose logs --tail=100 proxmate`. If the release supports using the previous image with the current data, run `cp -p compose.previous.yaml compose.yaml && docker compose up -d --wait` inside the CT. If data compatibility is unknown or a migration requires the older database, recover the pre-update CT backup with its matching data and encryption key. [Recovery guide](docs/dashboard-backups.md)
-
-**Using a standalone Docker host?** Stage the release asset as `compose.next.yaml` beside the installed `compose.yaml`, back up that installation and follow steps 4–5 from its directory. For a **source checkout**, back up the installation and wait for idle Activity as above, then run `git pull --ff-only && docker compose up -d --build --wait` from the checkout on the branch you track.
+**Other installations.** A Linux Docker host using the release layout in `/opt/proxmate` can run the same updater as root. For a source checkout, back up the installation, wait for idle Activity and run `git pull --ff-only && docker compose up -d --build --wait` from the branch you track. [Release notes](https://github.com/rootisgod/proxmate/releases) ? [Project status](STATUS.md) ? [Roadmap](PLAN.md#future-features)
 
 ## Dashboard tour
 
@@ -104,7 +63,7 @@ These screenshots show the current source build with example homelab data.
 
 ## Back up or move a dashboard
 
-Dashboard backup and restore was added after the v0.6.0 release. Open **Resources → Backup & restore**. **Complete dashboard** protects application data, credentials and history in one passphrase-encrypted file. **Portable configuration** moves selected scripts, labs and reusable builds to a different cluster. Preview the file on the destination before applying it. See the [backup and restore guide](docs/dashboard-backups.md) for recovery scope, exclusions and verification.
+Dashboard backup and restore is available from v0.7.0. Open **Resources → Backup & restore**. **Complete dashboard** protects application data, credentials and history in one passphrase-encrypted file. **Portable configuration** moves selected scripts, labs and reusable builds to a different cluster. Preview the file on the destination before applying it. See the [backup and restore guide](docs/dashboard-backups.md) for recovery scope, exclusions and verification.
 
 ## Run from source
 
@@ -445,3 +404,7 @@ Adjust the bind mount on another machine. This checks authentication, static rou
 Inspired by [Creating Proxmox Templates with Ansible](https://www.rootisgod.com/2024/Creating-Proxmox-Templates-with-Ansible/). Template creation intentionally refuses VM-ID collisions rather than deleting existing guests.
 
 Official references: [Ansible WinRM](https://docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html), [Chocolatey module](https://docs.ansible.com/projects/ansible/latest/collections/chocolatey/chocolatey/win_chocolatey_module.html), [Proxmox guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.pdf).
+
+## License
+
+Proxmate is released under the [MIT License](LICENSE). Bundled third-party software retains its own licenses.
