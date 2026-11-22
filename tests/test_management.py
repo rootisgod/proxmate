@@ -270,9 +270,9 @@ def test_schedule_window_and_restart_skip(lab,monkeypatch):
     assert 'outside' in app.manager.get('schedules',s['id'])['last_report']
     raw=app.manager.get('schedules',s['id']);raw['next_run']=39000;app.manager.put('schedules',raw)
     monkeypatch.setattr(management.time,'time',lambda:40000)
-    manager=management.Manager(app.db,app.encode_payload,app.decode_payload)
-    assert manager.get('schedules',s['id'])['next_run']==90000
-    assert 'restart' in manager.get('schedules',s['id'])['last_report']
+    app.recover_worker_state()
+    assert app.manager.get('schedules',s['id'])['next_run']==90000
+    assert 'restart' in app.manager.get('schedules',s['id'])['last_report']
 
 
 def test_daily_schedule_aligns_to_window_instead_of_skipping_forever():

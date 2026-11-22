@@ -61,6 +61,7 @@ def test_wait_releases_worker_and_survives_restart(recovery,monkeypatch,action):
         deadline=con.execute('SELECT deadline FROM job_waits').fetchone()[0]
         with pytest.raises(ValueError,match='waiting'): app.server.idle(con)
     importlib.reload(app)
+    app.recover_worker_state()
     assert status(app)['status']=='waiting' and status(app,'same')['status']=='interrupted'
     with app.db() as con: assert con.execute('SELECT deadline FROM job_waits').fetchone()[0]==deadline
     due(app)
@@ -102,7 +103,7 @@ def test_crash_on_each_side_of_followup_boundary(recovery,monkeypatch):
     def crash_probe(*args,**kwargs): raise PowerLoss
     monkeypatch.setattr(lifecycle,'run_guest',crash_probe)
     with pytest.raises(PowerLoss): app.run_next_job()
-    importlib.reload(app)
+    app.recover_worker_state()
     assert status(app)['status']=='waiting'
     monkeypatch.setattr(lifecycle,'run_guest',lambda *a,**kw:None)
     def crash_in_software(*args):
@@ -111,7 +112,7 @@ def test_crash_on_each_side_of_followup_boundary(recovery,monkeypatch):
     monkeypatch.setattr(app.simple,'finish_build',crash_in_software)
     with pytest.raises(PowerLoss): app.run_next_job()
     assert status(app)['status']=='running'
-    importlib.reload(app)
+    app.recover_worker_state()
     assert status(app)['status']=='interrupted' and not app.run_next_job()
     assert calls==[('provision',201),('software',201)]
 
@@ -129,7 +130,7 @@ def test_frozen_software_runs_once_after_restart(recovery,monkeypatch,action):
     app,_,_,fake=recovery
     tasks=app.manager.task_selection([{'id':'linux-package','params':{'package':'curl'}}])
     calls,_=build(app,fake,monkeypatch,action,tasks)
-    importlib.reload(app)
+    app.recover_worker_state()
     def software(plan,log,job_id=None):
         if action=='simple': assert job_id=='build'
         assert plan['tasks']==tasks
@@ -140,7 +141,7 @@ def test_frozen_software_runs_once_after_restart(recovery,monkeypatch,action):
     assert app.run_next_job() and status(app)['status']=='succeeded'
     assert calls==[('provision',201),('software',201)]+([('template',201)] if action=='simple' else [])
     assert app.manager.get('builds','build')['tasks'][0]['tasks'][0]['params']=={'package':'curl'}
-    importlib.reload(app)
+    app.recover_worker_state()
     assert not app.run_next_job()
 
 def test_only_executor_target_fields_can_release_a_queued_job():

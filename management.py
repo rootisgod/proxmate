@@ -183,13 +183,18 @@ class Manager:
             con.execute('CREATE TABLE IF NOT EXISTS records (kind TEXT, id TEXT, value TEXT, PRIMARY KEY(kind,id))')
             con.execute('CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, created REAL, value TEXT)')
             con.execute('CREATE TABLE IF NOT EXISTS build_credential_defaults (platform TEXT PRIMARY KEY, credential_id TEXT NOT NULL)')
-        # Deliberately skip missed schedule occurrences on restart.
-        now = time.time()
-        for record in self.all('schedules'):
-            if record['next_run'] < now:
-                record['next_run'] = next_occurrence(now, record)
-                record['last_report'] = 'Missed occurrence skipped on service restart.'
-                self.put('schedules', record)
+
+    def skip_missed_occurrences(self, con, now):
+        reports = {'schedules': 'Missed occurrence skipped on service restart.',
+                   'backup-policies': 'Missed occurrence skipped on restart.'}
+        for kind, report in reports.items():
+            rows = con.execute('SELECT id,value FROM records WHERE kind=?', (kind,)).fetchall()
+            for ident, value in rows:
+                record = self.decode(value)
+                if record['next_run'] < now:
+                    record['next_run'] = next_occurrence(now, record)
+                    record['last_report'] = report
+                    con.execute('UPDATE records SET value=? WHERE kind=? AND id=?', (self.encode(record), kind, ident))
 
     def all(self, kind):
         with self.db() as con: rows = con.execute('SELECT value FROM records WHERE kind=? ORDER BY id', (kind,)).fetchall()
@@ -365,19 +370,16 @@ class Manager:
                     raise ValueError('An active machine build uses this credential. Wait for it to finish before deleting it.')
             con.execute('DELETE FROM records WHERE kind=? AND id=?', (kind, ident))
 
-    def create_plan(self, d, *, selections=None, discovered=None, recovery=None):
-        plan = self.review_operation(d,selections=selections,discovered=discovered,recovery=recovery)
-        ident = uuid.uuid4().hex
+    def create_plan(self, d, *, selections=None, recovery=None):
+        plan = self.review_operation(d,selections=selections,recovery=recovery)
         with self.db() as con:
-            self.save_discoveries(con,[(kind,r) for (kind,_),r in (discovered or {}).items()])
-            con.execute('DELETE FROM plans WHERE created < ?', (time.time()-86400,))
-            con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
-        return dict(id=ident, **self.summary(plan))
+            return self.store_plan(con, plan)
 
-    def save_discoveries(self,con,records):
-        for kind,record in records:
-            inserted=con.execute('INSERT OR IGNORE INTO records VALUES (?,?,?)', (kind,record['id'],self.encode(record)))
-            if not inserted.rowcount: raise ValueError('Guest connection changed during discovery. Review the run again.')
+    def store_plan(self, con, plan):
+        ident = uuid.uuid4().hex
+        con.execute('DELETE FROM plans WHERE created < ?', (time.time()-86400,))
+        con.execute('INSERT INTO plans VALUES (?,?,?)', (ident,time.time(),self.encode(plan)))
+        return dict(id=ident, **self.summary(plan))
 
     def review_operation(self, d, *, selections=None, discovered=None, recovery=None, lab_existing=False):
         if not isinstance(d, dict): raise ValueError('Plan must be a JSON object')

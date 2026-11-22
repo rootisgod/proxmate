@@ -57,11 +57,6 @@ class Lifecycle:
     def __init__(self,manager):
         self.m=manager
         with self.m.db() as con: con.execute('CREATE TABLE IF NOT EXISTS lifecycle_plans (id TEXT PRIMARY KEY, created REAL, value TEXT)')
-        for policy in self.m.all('backup-policies'):
-            if policy['next_run'] < time.time():
-                policy['next_run']=management.next_occurrence(time.time(),policy)
-                policy['last_report']='Missed occurrence skipped on restart.'
-                self.m.put('backup-policies',policy)
 
     def guest(self,p,t,template=None):
         r=next((r for r in p.resources() if r.get('type')=='qemu' and r.get('node')==t['node'] and r.get('vmid')==t['vmid']),None)

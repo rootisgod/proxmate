@@ -13,6 +13,7 @@ import linux_install
 
 
 LABEL = 'Ubuntu Server LTS'
+DEFAULT_PROFILE = 'ubuntu-24.04'
 LTS_SERIES = ('22.04', '24.04', '26.04')
 INSTALL_SOURCES = {'ubuntu-server': 'Standard', 'ubuntu-server-minimal': 'Minimized'}
 ISO_NAME = re.compile(r'ubuntu-(\d{2}\.\d{2})(?:\.(\d+))?-live-server-amd64\.iso', re.I)
@@ -92,6 +93,20 @@ def inspect(source, node):
         raise ValueError(media.ssh_error(exc)) from None
     except (OSError, yaml.YAMLError, pycdlib.pycdlibexception.PyCdlibException):
         raise ValueError('The selected Ubuntu ISO could not be read. Check the media and Server connection.') from None
+
+
+def review_iso(source, node, draft):
+    media_info = inspect(source, node)
+    profile = media_info['profile']
+    if draft.get('profile', profile) != profile:
+        raise ValueError('The requested Ubuntu release does not match the selected ISO.')
+    image = draft.get('ubuntu_install_source', 'ubuntu-server')
+    if not isinstance(image, str) or image not in media_info['install_sources']:
+        raise ValueError('Choose a Server installation image available on the selected Ubuntu ISO.')
+    settings = dict(ubuntu_install_source=image, ubuntu_source_record=list(media_info['install_sources'][image]))
+    return linux_install.ReviewedISO(profile=profile, edition=media_info['release'] + ' · ' + INSTALL_SOURCES[image],
+                                     identity=media_info['identity'], answer_key='autoinstall', render_answer=user_data,
+                                     settings=settings)
 
 
 def setting_tasks(d):

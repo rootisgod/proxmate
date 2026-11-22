@@ -74,7 +74,7 @@ def read_definitions(manager, content):
             manifest, files = lab_pack.read_pack(raw)
             name = manifest['name']
             key = ('lab', name.casefold())
-            identity = digest([manifest, files])
+            identity = lab_pack.definition_digest(manifest, files)
             value = (manifest, files, raw)
         else:
             raise ValueError('Unknown portable item type.')
@@ -91,7 +91,8 @@ def plan(con, manager, server_id, definitions):
     for pack in records(con, manager, 'lab-packs'):
         if pack['server_id'] == server_id:
             key = ('lab', pack['manifest']['name'].casefold())
-            names.setdefault(key, set()).add(digest([pack['manifest'], pack['scripts']]))
+            identity = lab_pack.definition_digest(pack['manifest'], pack['scripts'], stored_order=pack.get('order'))
+            names.setdefault(key, set()).add(identity)
     items, pending = [], {}
     seen = set()
     for index, (kind, name, key, identity, value) in enumerate(definitions):

@@ -3,6 +3,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 from requests import RequestException
@@ -13,6 +15,22 @@ from vm_config import config_identity, machine_identity, safe_guest_config, vm_p
 
 ISO_KINDS = ('ubuntu-iso', 'debian-iso', 'rocky-iso')
 CLONE_KINDS = ('ubuntu-clone', 'debian-clone', 'rocky-clone')
+
+
+@dataclass(frozen=True)
+class ReviewedISO:
+    """Media choices shared by the batch. Each VM gets answers bound to its own disk and keys."""
+    profile: str
+    edition: str
+    identity: str
+    answer_key: str
+    render_answer: Callable[..., str]
+    settings: dict = field(default_factory=dict)
+
+    def freeze_answers(self, config):
+        config.update(self.settings)
+        config[self.answer_key] = self.render_answer(config)
+        config['reusable_' + self.answer_key] = self.render_answer(config, reusable=True)
 
 
 def boot_disc(path, node, source, kernel_initrd, grub_config, files, label):

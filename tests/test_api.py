@@ -1,6 +1,7 @@
 import importlib
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -130,14 +131,27 @@ def test_failed_task_not_success():
         p.wait('pve', 'UPID:test', lambda x: None)
 
 
-def test_restart_never_replays_jobs(service):
+def test_only_worker_startup_reconciles_jobs_and_overdue_schedules(service):
     app, client = service
     auth = {'Authorization': 'Bearer ' + app.API_TOKEN}
     first = client.post('/api/jobs', json={'action': 'start', 'vmid': 9000, 'node': 'pve'}, headers=auth)
+    overdue = dict(id='overdue', next_run=1, interval_minutes=15, window_start=0, window_end=24)
+    for kind in ('schedules', 'backup-policies'):
+        app.manager.put(kind, overdue)
     importlib.reload(app)
-    status = app.app.test_client().get(first.json['url'], headers=auth).json
+    reopened = app.app.test_client()
+    assert reopened.get(first.json['url'], headers=auth).json['status'] == 'queued'
+    for kind in ('schedules', 'backup-policies'):
+        assert app.manager.get(kind, 'overdue') == overdue
+
+    app.recover_worker_state()
+    status = reopened.get(first.json['url'], headers=auth).json
     assert status['status'] == 'interrupted'
     assert 'Inspect Proxmox' in status['log']
+    for kind in ('schedules', 'backup-policies'):
+        record = app.manager.get(kind, 'overdue')
+        assert record['next_run'] > time.time()
+        assert 'restart' in record['last_report']
 
 
 def test_job_response_omits_inventory_credentials(service):

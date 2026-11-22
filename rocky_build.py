@@ -11,6 +11,7 @@ import media
 
 
 LABEL = 'Rocky Linux 10'
+DEFAULT_PROFILE = 'rocky-10'
 ISO_NAME = re.compile(r'Rocky-(10(?:\.\d+)*)(?:-latest|-\d{8}\.\d+)?-x86_64-(dvd1?|minimal|boot)\.iso', re.I)
 BOOT_FILES = ('/images/pxeboot/vmlinuz', '/images/pxeboot/initrd.img')
 PACKAGES = [('jq','jq'), ('git','Git'), ('tmux','tmux'), ('rsync','rsync'), ('wget','wget')]
@@ -96,6 +97,13 @@ def inspect(source, node):
         raise ValueError(media.ssh_error(exc)) from None
     except (configparser.Error, UnicodeError, pycdlib.pycdlibexception.PyCdlibException, OSError):
         raise ValueError(invalid) from None
+
+
+def review_iso(source, node, draft):
+    media_info = inspect(source, node)
+    settings = dict(dvd_label=media_info['label'], media_kind=media_info['kind'], rocky_version=media_info['version'])
+    return linux_install.ReviewedISO(profile=DEFAULT_PROFILE, edition=media_info['release'], identity=media_info['identity'],
+                                     answer_key='kickstart', render_answer=kickstart, settings=settings)
 
 
 def kickstart(cfg, *, reusable=False):

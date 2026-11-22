@@ -5,6 +5,7 @@ import uuid
 from flask import jsonify, request
 
 import diagnostics
+import guest_review
 import lab_pack
 import management
 import operations
@@ -79,11 +80,7 @@ class LabRuns:
         if 'credential' in login:
             fields(login['credential'], ('platform','username','password','private_key','become_password','ca_pem'),
                    'guest credential')
-        discovered=self.simple.discover_connections([target],selections,login,lab=True)
-        plan=self.manager.review_operation(dict(operation='tasks',targets=[target]),selections=selections,
-                                           discovered=discovered,lab_existing=True)
-        records=[(kind,r) for (kind,_),r in discovered.items()]
-        return plan,self.manager.summary(plan),records
+        return guest_review.prepare(self.manager, [target], selections, login, lab_existing=True)
 
     def review(self, data):
         fields(data, ('pack_id', 'bindings', 'secrets'), 'lab review')
@@ -109,11 +106,12 @@ class LabRuns:
                 after = machine.get('after', [])
                 if machine['source']['kind']=='existing':
                     mode='existing'
-                    plan,summary,records=self.existing_operation(key,binding,login,selections)
-                    target,=plan['targets']
+                    work=self.existing_operation(key,binding,login,selections)
+                    summary=self.manager.summary(work['operation'])
+                    target,=work['operation']['targets']
                     if target['vmid'] in existing_ids: raise ValueError('Map each existing machine to a different VM ID.')
                     existing_ids.add(target['vmid'])
-                    reviews.append(dict(key=key, after=after, mode=mode, operation=plan, discoveries=records))
+                    reviews.append(dict(key=key, after=after, mode=mode, **work))
                 else:
                     mode='create'
                     draft = machine_draft(key, machine, binding, login)
@@ -165,8 +163,7 @@ class LabRuns:
                 key = row['key']
                 mode = row.get('mode','create')
                 if mode=='existing':
-                    self.manager.save_discoveries(con,row['discoveries'])
-                    job=self.manager.queue_operation(con,row['operation'],uuid.uuid4().hex,server_id,lab_run_id=ident)
+                    job=guest_review.queue_lab_role(con,self.manager,row,server_id,ident)
                     cfg, = row['operation']['targets']
                 else:
                     build=row['build']

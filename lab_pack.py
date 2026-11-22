@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import io
+import json
 import re
 import stat
 import zipfile
@@ -124,6 +125,13 @@ def ordered_vms(manifest):
             raise ValueError('The machines have a dependency cycle. Check after.')
         done.append(ready)
     return done
+
+
+def definition_digest(manifest, scripts, *, stored_order=None):
+    """Identify a deployable definition across archive encodings and dashboard storage."""
+    # SQLite records sort mapping keys, so use the saved deployment order when available.
+    content = [manifest, scripts, stored_order or ordered_vms(manifest)]
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def validate_machine_settings(machine, version=1):
