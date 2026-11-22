@@ -1,8 +1,19 @@
 # Proxmate
 
-A self-hosted LAN dashboard and HTTP API for Proxmox. Once installed, it uses a local administrator login.
+Proxmate is a self-hosted dashboard for the jobs you repeat in a Proxmox VE homelab. Say you need a fresh Windows web server for the weekend. Pick a Server ISO, choose IIS and 7-Zip, review the build, and save it. Next weekend you can build another one from those saved settings. The dashboard can live in an LXC on the same Proxmox node it manages.
 
-See [project status](STATUS.md) for the deployed revision, live checks and remaining acceptance tests.
+[Install on Proxmox](#quickstart-run-proxmate-on-your-proxmox-server) · [See the dashboard](#dashboard-tour) · [Run from source](#run-from-source)
+
+![Create machine showing Windows Server, Ubuntu, Debian and Rocky Linux, two saved builds and two templates ready to clone.](docs/screenshots/create-machine.png)
+
+### What you can do
+
+- **Build a machine the way you like it.** Run an unattended Windows Server install with Chocolatey packages and WinRM, or bring up Ubuntu Server LTS, Debian or Rocky Linux with packages and SSH ready. When you have a base worth keeping, prepare a reusable template and clone it.
+- **Look after the machines you already have.** Inventory discovers guests across your nodes. Select one or several, pick an Ansible task, PowerShell script or shell script for their platform, and fill in its inputs. Proxmate uses saved guest logins and tracks each run in Activity.
+- **Rebuild an entire test lab.** Define a domain controller and an application server, choose which one starts first, and give each its own setup steps. Export the lab and its custom scripts together. On another cluster, choose local media, placement and credentials before deploying.
+- **Keep the work you put into the dashboard.** A passphrase-encrypted backup can recover scripts, labs, credentials and job history. A portable export lets you take selected definitions to a different cluster. [Backup and restore guide](docs/dashboard-backups.md)
+
+Proxmate runs on your LAN with a local administrator login. If you prefer to automate from a terminal or coding agent, the HTTP API lets you discover available media, review a build and follow its job through completion. [API examples](#api) · [Provisioning guide for agents](static/llms.txt)
 
 ## Quickstart: run Proxmate on your Proxmox server
 
@@ -28,11 +39,27 @@ You need a root shell on an amd64 Proxmox VE node with Debian 13 template suppor
 
 For a read-only preview, add `--plan` to the installer command. For a different bridge or storage, a static address, or installation on an existing Docker host, see the [LXC installation guide](docs/install-proxmox-lxc.md). Keep the dashboard on a trusted LAN or behind a protected HTTPS proxy.
 
-Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management and values shared between machines.
+See [project status](STATUS.md) for live checks and remaining acceptance tests. Maintainers can [publish a version](docs/releases.md). The [project roadmap](PLAN.md#future-features) tracks deployed-lab management and values shared between machines.
+
+## Dashboard tour
+
+These screenshots show the current source build with example homelab data.
+
+**Inventory.** Here, the DNS and monitoring VMs are selected for the same script run. You can see their host nodes, power state and allocated resources before you act.
+
+![Inventory showing six VMs on two nodes, with home-dns and monitoring selected and the Run script button showing two targets.](docs/screenshots/inventory.png)
+
+**Script library.** This Windows Ansible task creates a folder. Expand its source to see exactly what it runs and the default folder name, then run it on a guest, use it in a lab, or save your own copy.
+
+![Script library in dark mode showing the Windows tools-folder task, its LabTools default, the Ansible source and a PowerShell starter script.](docs/screenshots/script-library.png)
+
+**Lab designer.** In this Windows lab, `apps01` starts after `dc01`. Its saved process enables IIS, installs Chocolatey, then installs 7-Zip. Edit a copy to try a different setup while keeping the original lab available.
+
+![Lab designer showing dc01 and apps01, the dependency between them and three ordered Windows setup steps with editable inputs.](docs/screenshots/lab-process.png)
 
 ## Back up or move a dashboard
 
-Open **Resources → Backup & restore**. **Complete dashboard** protects application data, credentials and history in one passphrase-encrypted file. **Portable configuration** moves selected scripts, labs and reusable builds to a different cluster. Preview the file on the destination before applying it. See the [backup and restore guide](docs/dashboard-backups.md) for recovery scope, exclusions and verification.
+Dashboard backup and restore was added after the v0.6.0 release. Open **Resources → Backup & restore**. **Complete dashboard** protects application data, credentials and history in one passphrase-encrypted file. **Portable configuration** moves selected scripts, labs and reusable builds to a different cluster. Preview the file on the destination before applying it. See the [backup and restore guide](docs/dashboard-backups.md) for recovery scope, exclusions and verification.
 
 ## Run from source
 
